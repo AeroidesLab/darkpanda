@@ -30,7 +30,8 @@ than a claim of full Blink, GPU, process-isolation, or WPT parity.
 
 ## 核心特性 / Features
 
-- Windows x64 与 Linux x64 原生构建；Windows 构建不经过 WSL。
+- Windows x64、Linux x64、macOS x64 与 macOS arm64 原生预构建；Windows
+  构建不经过 WSL。
 - V8 `14.9.207.35`，对应项目的 Chrome 149 兼容性配置。
 - 标准 CDP 服务与不启动子进程的进程内 Python API。
 - `wreq` 是唯一 HTTP/TLS 后端；运行时不包含 libcurl。
@@ -44,16 +45,57 @@ than a claim of full Blink, GPU, process-isolation, or WPT parity.
 
 一次构建只有在下面的文件来自同一个 manifest 且相邻部署时才有效：
 
-| Role | Windows | Linux |
-| --- | --- | --- |
-| Browser / CDP | `darkpanda.exe` | `darkpanda` |
-| C/Python FFI | `darkpanda.dll` | `libdarkpanda.so` |
-| HTTP/TLS | `wreq.dll` | `libwreq.so` |
-| CPU Canvas | `darkpanda_canvas_backend.dll` | `libdarkpanda_canvas_backend.so` |
-| HTML parser | `darkpanda_html5ever.dll` | `libdarkpanda_html5ever.so` |
+| Role | Windows | Linux | macOS |
+| --- | --- | --- | --- |
+| Browser / CDP | `darkpanda.exe` | `darkpanda` | `darkpanda` |
+| C/Python FFI | `darkpanda.dll` | `libdarkpanda.so` | `libdarkpanda.dylib` |
+| HTTP/TLS | `wreq.dll` | `libwreq.so` | `libwreq.dylib` |
+| CPU Canvas | `darkpanda_canvas_backend.dll` | `libdarkpanda_canvas_backend.so` | `libdarkpanda_canvas_backend.dylib` |
+| HTML parser | `darkpanda_html5ever.dll` | `libdarkpanda_html5ever.so` | `libdarkpanda_html5ever.dylib` |
 
 主库相对自己的模块目录加载 wreq、Canvas 和 HTML parser，而不是相对
 `python.exe` 或宿主程序目录加载。部署或打包时不要单独复制其中一个文件。
+
+## GitHub Actions 预构建 / Prebuilt releases
+
+[`prebuilt-binaries.yml`](.github/workflows/prebuilt-binaries.yml) 在四个原生 runner
+上构建可移植运行时：
+
+- `windows-2022`：`x86_64-windows-msvc`
+- `ubuntu-22.04`：`x86_64-linux-gnu`（降低 Rust/系统库所需的最低 glibc 版本）
+- `macos-15-intel`：`x86_64-macos`
+- `macos-15`：`aarch64-macos`
+
+工作流只在 `v*` tag 或手动 `workflow_dispatch` 时运行，避免每次提交都重新编译
+V8。tag 自动发布 GitHub Release；手动运行默认只生成 Actions artifact，只有同时
+启用 `publish_release` 并填写 `release_tag` 才会发布 Release。
+
+组织策略禁用了跨仓库 deploy key，因此工作流不使用个人的广域 `repo` token。
+两个小型 Zig build wrapper 按固定提交导出为源码 archive，存放在本仓库的
+`build-dependencies-v1` GitHub Release；workflow 使用本次运行自己的
+`GITHUB_TOKEN` 下载。archive 文件名、源码提交和 SHA-256 都固定在 workflow 中，
+解压前会校验哈希并拒绝绝对路径、`..`、链接和设备文件。该依赖 Release 不包含
+DarkPanda 浏览器二进制。
+
+V8 是唯一允许跨运行缓存的编译产物。缓存 manifest 固定平台、target、V8 版本、
+V8 revision、zig-v8 源码提交、Zig 版本、archive 大小与 SHA-256；缓存中不包含
+DarkPanda EXE/DLL/SO/dylib。更改手动输入 `dependency_cache_generation` 可以显式
+废弃整组 V8 缓存。
+
+每轮 DarkPanda 构建都使用包含 run ID/attempt 的空 install、Zig cache 和 Cargo
+target 目录。发布配置为 Zig `ReleaseFast`，Rust `opt-level=3`、fat LTO、单
+codegen unit、无增量编译，同时保留 `panic=unwind`，因为三个 Rust FFI 边界都用
+`catch_unwind` 隔离 panic。公共 x64 包使用可移植 CPU baseline，不使用 runner
+专属的 `native` 指令集；macOS 构建固定 deployment target 13.0，避免无意绑定
+runner 当前的 macOS 15。
+
+每个平台在上传前都会运行 CLI version、Python FFI 和真实 rust-skia 像素 smoke。
+归档中包含浏览器、FFI、wreq、Canvas、html5ever 全部运行时库；Windows 包还包含
+VS runner 官方 Redistributable 目录中的 `msvcp140.dll`、`vcruntime140.dll` 和
+`vcruntime140_1.dll`。同时包含 C headers、Python 包装层、README、许可证、三个
+Cargo lockfile、动态依赖报告、`BUILD-INFO.json` 和包内 `SHA256SUMS`。外层另附
+`<archive>.sha256`；聚合 job 再验证四个平台并生成
+总 `SHA256SUMS`。Unix 使用 `.tar.gz` 以保留执行位，Windows 使用 `.zip`。
 
 ## Python API
 

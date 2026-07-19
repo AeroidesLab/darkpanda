@@ -18,7 +18,8 @@ crate-type = ["cdylib"]
 skia-safe = { version = "=0.99.0", default-features = false, features = ["binary-cache", "embed-freetype"] }
 
 [profile.release]
-lto = "thin"
+lto = "fat"
 codegen-units = 1
+opt-level = 3
 strip = "debuginfo"
 panic = "unwind"

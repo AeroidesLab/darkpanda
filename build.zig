@@ -50,6 +50,7 @@ pub fn build(b: *Build) !void {
         .{};
     const target = b.standardTargetOptions(.{ .default_target = default_target });
     const optimize = b.standardOptimizeOption(.{});
+    const strip_release = optimize != .Debug;
     const cargo_path = b.option(
         []const u8,
         "cargo_path",
@@ -132,6 +133,7 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("src/darkpanda.zig"),
             .target = target,
             .optimize = optimize,
+            .strip = strip_release,
             .link_libc = true,
             // The Windows c_v8.lib is built against MSVC's static STL (/MT).
             // Linking Zig's libc++/libc++abi into that MSVC ABI boundary would
@@ -205,6 +207,7 @@ pub fn build(b: *Build) !void {
                 .root_source_file = b.path("src/main.zig"),
                 .target = target,
                 .optimize = optimize,
+                .strip = strip_release,
                 .sanitize_c = enable_csan,
                 .sanitize_thread = enable_tsan,
                 .imports = &.{
@@ -212,10 +215,20 @@ pub fn build(b: *Build) !void {
                 },
             }),
         });
-        if (target.result.os.tag == .linux) {
-            // The html parser is installed beside the executable. Make the
-            // installed artifact self-contained without LD_LIBRARY_PATH.
-            exe.root_module.addRPathSpecial("$ORIGIN");
+        switch (target.result.os.tag) {
+            .linux => {
+                // The html parser is installed beside the executable. Make
+                // the installed artifact self-contained without
+                // LD_LIBRARY_PATH.
+                exe.root_module.addRPathSpecial("$ORIGIN");
+            },
+            .macos => {
+                // Portable archives keep every dylib next to the executable.
+                // Resolve the Rust html5ever boundary from that directory
+                // instead of retaining the CI runner's temporary path.
+                exe.root_module.addRPathSpecial("@loader_path");
+            },
+            else => {},
         }
         // html5ever is isolated in a shared library so its Cargo Rust runtime
         // never collides with Chromium's. Keep Zig compiler-rt enabled: the
@@ -262,16 +275,25 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("src/ffi.zig"),
             .target = target,
             .optimize = optimize,
+            .strip = strip_release,
             .sanitize_c = enable_csan,
             .sanitize_thread = enable_tsan,
             .imports = &.{
                 .{ .name = "darkpanda", .module = darkpanda_module },
             },
         });
-        if (target.result.os.tag == .linux) {
-            // Python loads libdarkpanda.so by absolute path. Its implicit
-            // html5ever dependency must resolve from that same directory.
-            ffi_module.addRPathSpecial("$ORIGIN");
+        switch (target.result.os.tag) {
+            .linux => {
+                // Python loads libdarkpanda.so by absolute path. Its implicit
+                // html5ever dependency must resolve from that same directory.
+                ffi_module.addRPathSpecial("$ORIGIN");
+            },
+            .macos => {
+                // Python loads libdarkpanda.dylib by absolute path. Resolve
+                // its sibling html5ever dylib from the portable bundle.
+                ffi_module.addRPathSpecial("@loader_path");
+            },
+            else => {},
         }
         const ffi_lib = b.addLibrary(.{
             .name = "darkpanda",
@@ -675,9 +697,10 @@ fn linkHtml5Ever(b: *Build, mod: *Build.Module, cargo_path: []const u8) !?Html5E
         null;
 
     const exec_cargo = b.addSystemCommand(&.{
-        cargo_path,        "build",
-        "--profile",       profile.name,
-        "--manifest-path", "src/html5ever/Cargo.toml",
+        cargo_path,                 "build",
+        "--locked",                 "--profile",
+        profile.name,               "--manifest-path",
+        "src/html5ever/Cargo.toml",
     });
     if (rust_target) |triple| {
         exec_cargo.addArgs(&.{ "--target", triple });

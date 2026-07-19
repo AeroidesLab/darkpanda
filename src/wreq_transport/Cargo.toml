@@ -35,6 +35,10 @@ schannel = "=0.1.29"
 tokio-tungstenite = { version = "=0.29.0", default-features = false, features = ["handshake"] }
 
 [profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+strip = "debuginfo"
 panic = "unwind"
 
 [patch.crates-io]

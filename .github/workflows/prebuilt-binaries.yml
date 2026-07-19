@@ -1,0 +1,635 @@
+name: Prebuilt binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      dependency_cache_generation:
+        description: Change this value to invalidate immutable V8 caches
+        required: true
+        default: v1
+        type: string
+      publish_release:
+        description: Publish the archives to a GitHub Release
+        required: true
+        default: false
+        type: boolean
+      release_tag:
+        description: Release tag for a manual publish (for example v1.0.0-ci.1)
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prebuilt-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ZIG_VERSION: 0.15.2
+  RUST_VERSION: 1.88.0
+  V8_VERSION: 14.9.207.35
+  V8_REVISION: 933ce636c562cd54d68e7f7c93ab5cdffd685fca
+  ZIG_V8_SOURCE_REVISION: 006a8eb392b9f37a53fa43bcc97684fbed6dcf6e
+  BORINGSSL_SOURCE_REVISION: 391764c3c0224eaa64d3bfbfe05cb8121bd41151
+  DEPENDENCY_SOURCE_RELEASE: build-dependencies-v1
+  ZIG_V8_SOURCE_ARCHIVE_SHA256: a5a7b3589cd8a5b18a31db1c720e2590803b45a5d1a0e28d7d16e687395a10a7
+  BORINGSSL_SOURCE_ARCHIVE_SHA256: e9e1d9a342699b0eb0c28556377b4258b722ce8f61ecc98f5029646256cd5a1a
+  CACHE_GENERATION: ${{ inputs.dependency_cache_generation || 'v1' }}
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: "5"
+  GIT_TERMINAL_PROMPT: "0"
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+jobs:
+  build:
+    name: ${{ matrix.id }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x86_64
+            runner: windows-2022
+            platform: windows
+            zig_arch: x86_64
+            zig_target: x86_64-windows-msvc
+            rust_target: x86_64-pc-windows-msvc
+            zig_sha256: 3a0ed1e8799a2f8ce2a6e6290a9ff22e6906f8227865911fb7ddedc3cc14cb0c
+            v8_archive: c_v8_standalone.lib
+            python_cmd: python
+            jobs: 4
+          - id: linux-x86_64
+            runner: ubuntu-22.04
+            platform: linux
+            zig_arch: x86_64
+            zig_target: x86_64-linux-gnu
+            rust_target: x86_64-unknown-linux-gnu
+            zig_sha256: 02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239
+            v8_archive: libc_v8_standalone.a
+            python_cmd: python3
+            jobs: 2
+          - id: macos-x86_64
+            runner: macos-15-intel
+            platform: macos
+            zig_arch: x86_64
+            zig_target: x86_64-macos
+            rust_target: x86_64-apple-darwin
+            zig_sha256: 375b6909fc1495d16fc2c7db9538f707456bfc3373b14ee83fdd3e22b3d43f7f
+            v8_archive: libc_v8.a
+            python_cmd: python3
+            jobs: 3
+          - id: macos-aarch64
+            runner: macos-15
+            platform: macos
+            zig_arch: aarch64
+            zig_target: aarch64-macos
+            rust_target: aarch64-apple-darwin
+            zig_sha256: 3cc2bab367e185cdfb27501c4b30b1b0653c28d9f73df8dc91488e66ece5fa6b
+            v8_archive: libc_v8.a
+            python_cmd: python3
+            jobs: 3
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out DarkPanda
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          path: browser
+          persist-credentials: false
+
+      - name: Download and verify pinned dependency sources
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          asset_dir="$RUNNER_TEMP/darkpanda-dependency-sources"
+          rm -rf -- "$asset_dir"
+          mkdir -p -- "$asset_dir"
+          zig_v8_archive="zig-v8-fork-${ZIG_V8_SOURCE_REVISION}.tar.gz"
+          boringssl_archive="boringssl-zig-fork-${BORINGSSL_SOURCE_REVISION}.tar.gz"
+          gh release download "$DEPENDENCY_SOURCE_RELEASE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$zig_v8_archive" \
+            --pattern "$boringssl_archive" \
+            --dir "$asset_dir"
+          '${{ matrix.python_cmd }}' browser/tools/ci/extract_dependency_sources.py \
+            --asset-dir "$asset_dir" \
+            --workspace . \
+            --zig-v8-archive "$zig_v8_archive" \
+            --zig-v8-sha256 "$ZIG_V8_SOURCE_ARCHIVE_SHA256" \
+            --boringssl-archive "$boringssl_archive" \
+            --boringssl-sha256 "$BORINGSSL_SOURCE_ARCHIVE_SHA256"
+
+      - name: Verify source identities and derive version
+        shell: bash
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          source_revision=$(git -C browser rev-parse HEAD)
+          source_epoch=$(git -C browser show -s --format=%ct HEAD)
+          [[ -f zig-v8-fork/build.zig && -f boringssl-zig-fork/build.zig ]]
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            version=${GITHUB_REF_NAME#v}
+          elif [[ -n "$RELEASE_TAG_INPUT" ]]; then
+            version=${RELEASE_TAG_INPUT#v}
+          else
+            version="1.0.0-ci.${GITHUB_RUN_NUMBER}+${source_revision:0:12}"
+          fi
+          [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)*$ ]] || {
+            echo "Release tag does not map to a semantic version: $version" >&2
+            exit 1
+          }
+          {
+            echo "SOURCE_REVISION=$source_revision"
+            echo "SOURCE_DATE_EPOCH=$source_epoch"
+            echo "DARKPANDA_BUILD_VERSION=$version"
+          } >> "$GITHUB_ENV"
+
+      - name: Install Linux build prerequisites
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            cmake libfontconfig1-dev ninja-build pkg-config rsync xz-utils
+
+      - name: Select full Xcode installation
+        if: runner.os == 'macOS'
+        shell: bash
+        run: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+
+      - name: Install Zig on Windows
+        if: runner.os == 'Windows'
+        id: zig-windows
+        shell: pwsh
+        run: |
+          ./browser/tools/ci/Install-Zig.ps1 `
+            -Version $env:ZIG_VERSION `
+            -Architecture '${{ matrix.zig_arch }}' `
+            -Sha256 '${{ matrix.zig_sha256 }}' `
+            -InstallRoot "$env:RUNNER_TOOL_CACHE/darkpanda-zig/$env:ZIG_VERSION/${{ matrix.zig_arch }}"
+
+      - name: Install Zig on Unix
+        if: runner.os != 'Windows'
+        id: zig-unix
+        shell: bash
+        run: |
+          browser/tools/ci/install-zig.sh \
+            "$ZIG_VERSION" \
+            '${{ matrix.zig_arch }}' \
+            '${{ matrix.zig_sha256 }}' \
+            "$RUNNER_TOOL_CACHE/darkpanda-zig/$ZIG_VERSION/${{ matrix.zig_arch }}"
+
+      - name: Select pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup set profile minimal
+          rustup toolchain install "$RUST_VERSION" --no-self-update
+          rustup default "$RUST_VERSION"
+          rustup target add '${{ matrix.rust_target }}' --toolchain "$RUST_VERSION"
+          zig version
+          rustc --version --verbose
+          cargo --version --verbose
+
+      - name: Restore immutable V8 dependency bundle
+        id: v8-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: dependency-cache/${{ matrix.id }}/v8
+          key: darkpanda-v8-${{ matrix.id }}-zig-${{ env.ZIG_VERSION }}-v8-${{ env.V8_VERSION }}-${{ env.ZIG_V8_SOURCE_REVISION }}-macos-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ env.CACHE_GENERATION }}
+          enableCrossOsArchive: false
+
+      - name: Restore Cargo source downloads
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: darkpanda-cargo-${{ matrix.id }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('browser/src/**/Cargo.lock') }}
+          enableCrossOsArchive: false
+
+      - name: Build V8 dependency bundle on Windows
+        if: runner.os == 'Windows' && steps.v8-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sourceRoot = Join-Path $env:RUNNER_TEMP 'darkpanda-v8-source'
+          $localCache = Join-Path $env:RUNNER_TEMP 'darkpanda-v8-zig-cache'
+          $globalCache = Join-Path $env:RUNNER_TEMP 'darkpanda-v8-zig-global-cache'
+          $bundleRoot = Join-Path $env:GITHUB_WORKSPACE 'dependency-cache/${{ matrix.id }}/v8'
+          Remove-Item -LiteralPath $sourceRoot,$localCache,$globalCache,$bundleRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $sourceRoot,$localCache,$globalCache,$bundleRoot -Force | Out-Null
+          Push-Location zig-v8-fork
+          try {
+            zig build build-v8 `
+              -j${{ matrix.jobs }} `
+              -Dtarget=${{ matrix.zig_target }} `
+              -Doptimize=ReleaseFast `
+              -Dsymbol_level=0 `
+              -Dcache_root=$sourceRoot `
+              --cache-dir $localCache `
+              --global-cache-dir $globalCache `
+              --summary all
+          } finally {
+            Pop-Location
+          }
+          $candidates = @(Get-ChildItem -LiteralPath $localCache -Recurse -File -Filter 'c_v8_standalone.lib')
+          if ($candidates.Count -ne 1) {
+            throw "Expected exactly one standalone V8 archive, found $($candidates.Count)"
+          }
+          $archive = Join-Path $bundleRoot '${{ matrix.v8_archive }}'
+          Copy-Item -LiteralPath $candidates[0].FullName -Destination $archive
+          python browser/tools/ci/v8_bundle.py create `
+            --archive $archive `
+            --manifest (Join-Path $bundleRoot 'manifest.json') `
+            --platform '${{ matrix.id }}' `
+            --target '${{ matrix.zig_target }}' `
+            --v8-version $env:V8_VERSION `
+            --v8-revision $env:V8_REVISION `
+            --zig-v8-source-revision $env:ZIG_V8_SOURCE_REVISION `
+            --zig-version $env:ZIG_VERSION
+
+      - name: Build V8 dependency bundle on Unix
+        if: runner.os != 'Windows' && steps.v8-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_root="$RUNNER_TEMP/darkpanda-v8-source"
+          local_cache="$RUNNER_TEMP/darkpanda-v8-zig-cache"
+          global_cache="$RUNNER_TEMP/darkpanda-v8-zig-global-cache"
+          bundle_root="$GITHUB_WORKSPACE/dependency-cache/${{ matrix.id }}/v8"
+          rm -rf -- "$source_root" "$local_cache" "$global_cache" "$bundle_root"
+          mkdir -p -- "$source_root" "$local_cache" "$global_cache" "$bundle_root"
+          (
+            cd zig-v8-fork
+            zig build build-v8 \
+              '-j${{ matrix.jobs }}' \
+              -Dtarget='${{ matrix.zig_target }}' \
+              -Doptimize=ReleaseFast \
+              -Dsymbol_level=0 \
+              -Dcache_root="$source_root" \
+              --cache-dir "$local_cache" \
+              --global-cache-dir "$global_cache" \
+              --summary all
+          )
+          if [[ '${{ matrix.platform }}' == linux ]]; then
+            candidates=$(find "$source_root" -type f -name 'libc_v8_standalone.a')
+          else
+            candidates=$(find "$source_root" -type f -path '*/out/macos/release_*/obj/zig/libc_v8.a')
+          fi
+          candidate_count=$(printf '%s\n' "$candidates" | sed '/^$/d' | wc -l | tr -d ' ')
+          [[ $candidate_count -eq 1 ]] || {
+            echo "Expected exactly one V8 archive, found $candidate_count" >&2
+            printf '%s\n' "$candidates" >&2
+            exit 1
+          }
+          archive="$bundle_root/${{ matrix.v8_archive }}"
+          cp -- "$candidates" "$archive"
+          python3 browser/tools/ci/v8_bundle.py create \
+            --archive "$archive" \
+            --manifest "$bundle_root/manifest.json" \
+            --platform '${{ matrix.id }}' \
+            --target '${{ matrix.zig_target }}' \
+            --v8-version "$V8_VERSION" \
+            --v8-revision "$V8_REVISION" \
+            --zig-v8-source-revision "$ZIG_V8_SOURCE_REVISION" \
+            --zig-version "$ZIG_VERSION"
+
+      - name: Verify V8 cache contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=$('${{ matrix.python_cmd }}' browser/tools/ci/v8_bundle.py verify \
+            --manifest "dependency-cache/${{ matrix.id }}/v8/manifest.json" \
+            --platform '${{ matrix.id }}' \
+            --target '${{ matrix.zig_target }}' \
+            --v8-version "$V8_VERSION" \
+            --v8-revision "$V8_REVISION" \
+            --zig-v8-source-revision "$ZIG_V8_SOURCE_REVISION" \
+            --zig-version "$ZIG_VERSION")
+          [[ $archive == *'${{ matrix.v8_archive }}' ]]
+          v8_sha=$('${{ matrix.python_cmd }}' -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["archive"]["sha256"])' \
+            "dependency-cache/${{ matrix.id }}/v8/manifest.json")
+          {
+            echo "V8_ARCHIVE=$archive"
+            echo "V8_ARCHIVE_SHA256=$v8_sha"
+          } >> "$GITHUB_ENV"
+
+      - name: Save verified V8 dependency bundle
+        if: steps.v8-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: dependency-cache/${{ matrix.id }}/v8
+          key: ${{ steps.v8-cache.outputs.cache-primary-key }}
+
+      - name: Build fresh BoringSSL archives on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $install = Join-Path $env:RUNNER_TEMP "darkpanda-boringssl-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $localCache = Join-Path $env:RUNNER_TEMP "darkpanda-boringssl-zig-cache-$env:GITHUB_RUN_ATTEMPT"
+          $globalCache = Join-Path $env:RUNNER_TEMP "darkpanda-boringssl-zig-global-$env:GITHUB_RUN_ATTEMPT"
+          Remove-Item -LiteralPath $install,$localCache,$globalCache -Recurse -Force -ErrorAction SilentlyContinue
+          Push-Location boringssl-zig-fork
+          try {
+            zig build install `
+              -j${{ matrix.jobs }} `
+              -Dtarget=${{ matrix.zig_target }} `
+              -Doptimize=ReleaseFast `
+              -Dforce_pic=true `
+              -p $install `
+              --cache-dir $localCache `
+              --global-cache-dir $globalCache `
+              --summary all
+          } finally {
+            Pop-Location
+          }
+          foreach ($name in @('crypto.lib','fipsmodule.lib')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $install "lib/$name") -PathType Leaf)) {
+              throw "Missing BoringSSL archive: $name"
+            }
+          }
+          "BORINGSSL_LIBRARY_DIR=$(Join-Path $install 'lib')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build fresh DarkPanda runtime on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $install = Join-Path $env:RUNNER_TEMP "darkpanda-install-${{ matrix.id }}-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $localCache = Join-Path $env:RUNNER_TEMP "darkpanda-zig-cache-${{ matrix.id }}-$env:GITHUB_RUN_ATTEMPT"
+          $globalCache = Join-Path $env:RUNNER_TEMP "darkpanda-zig-global-${{ matrix.id }}-$env:GITHUB_RUN_ATTEMPT"
+          $wreqTarget = Join-Path $env:RUNNER_TEMP "darkpanda-wreq-${{ matrix.id }}-$env:GITHUB_RUN_ATTEMPT"
+          $canvasTarget = Join-Path $env:RUNNER_TEMP "darkpanda-canvas-${{ matrix.id }}-$env:GITHUB_RUN_ATTEMPT"
+          Remove-Item -LiteralPath $install,$localCache,$globalCache,$wreqTarget,$canvasTarget -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $install -Force | Out-Null
+          $cargo = (Get-Command cargo -CommandType Application).Source
+          Push-Location browser
+          try {
+            zig build install canvas-backend `
+              -j${{ matrix.jobs }} `
+              -Dtarget=${{ matrix.zig_target }} `
+              -Doptimize=ReleaseFast `
+              -Dprebuilt_v8_path=$env:V8_ARCHIVE `
+              -Dprebuilt_boringssl_dir=$env:BORINGSSL_LIBRARY_DIR `
+              -Dwreq_transport_target_dir=$wreqTarget `
+              -Dcanvas_backend_target_dir=$canvasTarget `
+              -Dcargo_path=$cargo `
+              -Dversion=$env:DARKPANDA_BUILD_VERSION `
+              -p $install `
+              --cache-dir $localCache `
+              --global-cache-dir $globalCache `
+              --summary all
+          } finally {
+            Pop-Location
+          }
+          "DARKPANDA_INSTALL_ROOT=$install" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Bundle the Windows Visual C++ runtime closure
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $visualStudio = (& $vswhere `
+            -latest `
+            -products '*' `
+            -requires Microsoft.VisualStudio.Component.VC.Redist.14.Latest `
+            -property installationPath).Trim()
+          if ([string]::IsNullOrWhiteSpace($visualStudio)) {
+            throw 'Visual Studio VC Redistributable installation was not found'
+          }
+          $redistVersions = @(Get-ChildItem -LiteralPath (Join-Path $visualStudio 'VC/Redist/MSVC') -Directory | Sort-Object Name -Descending)
+          if ($redistVersions.Count -eq 0) {
+            throw 'Visual Studio VC Redistributable version directory was not found'
+          }
+          $x64Redist = Join-Path $redistVersions[0].FullName 'x64'
+          $crtDirectories = @(Get-ChildItem -LiteralPath $x64Redist -Directory | Where-Object {
+            $_.Name -match '^Microsoft\.VC[0-9]+\.CRT$'
+          })
+          if ($crtDirectories.Count -ne 1) {
+            throw "Expected one x64 VC runtime directory, found $($crtDirectories.Count)"
+          }
+          $bin = Join-Path $env:DARKPANDA_INSTALL_ROOT 'bin'
+          foreach ($name in @('msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll')) {
+            $source = Join-Path $crtDirectories[0].FullName $name
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "Missing VC runtime library: $source"
+            }
+            Copy-Item -LiteralPath $source -Destination (Join-Path $bin $name)
+          }
+
+      - name: Build fresh DarkPanda runtime on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          SKIA_USE_SYSTEM_LIBRARIES: "0"
+        run: |
+          set -euo pipefail
+          install="$RUNNER_TEMP/darkpanda-install-${{ matrix.id }}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          local_cache="$RUNNER_TEMP/darkpanda-zig-cache-${{ matrix.id }}-$GITHUB_RUN_ATTEMPT"
+          global_cache="$RUNNER_TEMP/darkpanda-zig-global-${{ matrix.id }}-$GITHUB_RUN_ATTEMPT"
+          wreq_target="$RUNNER_TEMP/darkpanda-wreq-${{ matrix.id }}-$GITHUB_RUN_ATTEMPT"
+          canvas_target="$RUNNER_TEMP/darkpanda-canvas-${{ matrix.id }}-$GITHUB_RUN_ATTEMPT"
+          rm -rf -- "$install" "$local_cache" "$global_cache" "$wreq_target" "$canvas_target"
+          mkdir -p -- "$install"
+          cargo=$(command -v cargo)
+          (
+            cd browser
+            zig build install canvas-backend \
+              '-j${{ matrix.jobs }}' \
+              -Dtarget='${{ matrix.zig_target }}' \
+              -Doptimize=ReleaseFast \
+              -Dprebuilt_v8_path="$V8_ARCHIVE" \
+              -Dwreq_transport_target_dir="$wreq_target" \
+              -Dcanvas_backend_target_dir="$canvas_target" \
+              -Dcargo_path="$cargo" \
+              -Dversion="$DARKPANDA_BUILD_VERSION" \
+              -p "$install" \
+              --cache-dir "$local_cache" \
+              --global-cache-dir "$global_cache" \
+              --summary all
+          )
+          echo "DARKPANDA_INSTALL_ROOT=$install" >> "$GITHUB_ENV"
+
+      - name: Normalize macOS install names and ad-hoc signatures
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$DARKPANDA_INSTALL_ROOT/bin"
+          for library in \
+            libdarkpanda.dylib \
+            libwreq.dylib \
+            libdarkpanda_canvas_backend.dylib \
+            libdarkpanda_html5ever.dylib; do
+            install_name_tool -id "@rpath/$library" "$bin/$library"
+          done
+          for consumer in darkpanda libdarkpanda.dylib; do
+            old=$(otool -L "$bin/$consumer" | awk '/libdarkpanda_html5ever\.dylib/{print $1; exit}')
+            if [[ -n $old && $old != '@rpath/libdarkpanda_html5ever.dylib' ]]; then
+              install_name_tool -change "$old" '@rpath/libdarkpanda_html5ever.dylib' "$bin/$consumer"
+            fi
+          done
+          for binary in "$bin"/darkpanda "$bin"/*.dylib; do
+            codesign --force --sign - --timestamp=none "$binary"
+          done
+
+      - name: Verify CLI, FFI and real Skia backend on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bin = Join-Path $env:DARKPANDA_INSTALL_ROOT 'bin'
+          $env:PATH = "$bin;$env:PATH"
+          & (Join-Path $bin 'darkpanda.exe') version
+          python browser/tools/runtime_artifact_attestation.py `
+            --python-root browser/python `
+            --library (Join-Path $bin 'darkpanda.dll') `
+            --wreq (Join-Path $bin 'wreq.dll') `
+            --canvas (Join-Path $bin 'darkpanda_canvas_backend.dll')
+
+      - name: Verify CLI, FFI and real Skia backend on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$DARKPANDA_INSTALL_ROOT/bin"
+          if [[ '${{ matrix.platform }}' == linux ]]; then
+            export LD_LIBRARY_PATH="$bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            ffi=libdarkpanda.so
+            wreq=libwreq.so
+            canvas=libdarkpanda_canvas_backend.so
+          else
+            export DYLD_LIBRARY_PATH="$bin${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+            ffi=libdarkpanda.dylib
+            wreq=libwreq.dylib
+            canvas=libdarkpanda_canvas_backend.dylib
+          fi
+          "$bin/darkpanda" version
+          python3 browser/tools/runtime_artifact_attestation.py \
+            --python-root browser/python \
+            --library "$bin/$ffi" \
+            --wreq "$bin/$wreq" \
+            --canvas "$bin/$canvas"
+
+      - name: Package deterministic runtime archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$GITHUB_WORKSPACE/prebuilt/${{ matrix.id }}"
+          rm -rf -- "$output"
+          mkdir -p -- "$output"
+          '${{ matrix.python_cmd }}' browser/tools/ci/package_prebuilt.py \
+            --repo browser \
+            --install-root "$DARKPANDA_INSTALL_ROOT" \
+            --output-dir "$output" \
+            --platform '${{ matrix.platform }}' \
+            --target '${{ matrix.zig_target }}' \
+            --version "$DARKPANDA_BUILD_VERSION" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-revision "$SOURCE_REVISION" \
+            --source-date-epoch "$SOURCE_DATE_EPOCH" \
+            --v8-version "$V8_VERSION" \
+            --v8-revision "$V8_REVISION" \
+            --v8-archive-sha256 "$V8_ARCHIVE_SHA256" \
+            --zig-v8-source-revision "$ZIG_V8_SOURCE_REVISION" \
+            --boringssl-source-revision "$BORINGSSL_SOURCE_REVISION" \
+            --zig-version "$ZIG_VERSION" \
+            --rust-version "$(rustc --version)" \
+            --runner-image "${ImageOS:-unknown}/${ImageVersion:-unknown}"
+          rm -rf -- "$output"/darkpanda-*/
+
+      - name: Upload platform archive
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: darkpanda-${{ matrix.id }}
+          path: prebuilt/${{ matrix.id }}/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  aggregate:
+    name: Verify and aggregate archives
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download platform archives
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: darkpanda-*
+          path: downloaded
+
+      - name: Flatten and verify all checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find downloaded -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.sha256' \) -exec cp -- {} release/ \;
+          mapfile -t checksum_files < <(find release -maxdepth 1 -type f -name '*.sha256' | sort)
+          [[ ${#checksum_files[@]} -eq 4 ]] || {
+            echo "Expected four platform checksum files, found ${#checksum_files[@]}" >&2
+            exit 1
+          }
+          (
+            cd release
+            for checksum in *.sha256; do sha256sum --check "$checksum"; done
+            sha256sum *.zip *.tar.gz 2>/dev/null | sort -k2 > SHA256SUMS
+          )
+
+      - name: Upload complete prebuilt set
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: darkpanda-prebuilt-all
+          path: release/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+
+      - name: Resolve release tag
+        id: release
+        if: github.ref_type == 'tag' || inputs.publish_release == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            tag=$GITHUB_REF_NAME
+          else
+            tag='${{ inputs.release_tag }}'
+            [[ -n $tag ]] || {
+              echo "release_tag is required when publish_release is enabled" >&2
+              exit 1
+            }
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        if: steps.release.outputs.tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" release/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "DarkPanda $RELEASE_TAG" \
+              --generate-notes
+          fi
