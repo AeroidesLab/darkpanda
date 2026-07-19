@@ -27,8 +27,11 @@ if (Test-Path -LiteralPath $extract) {
     Remove-Item -LiteralPath $extract -Recurse -Force
 }
 Expand-Archive -LiteralPath $archive -DestinationPath $extract
-$root = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -Single
-Get-ChildItem -LiteralPath $root.FullName -Force | ForEach-Object {
+$roots = @(Get-ChildItem -LiteralPath $extract -Directory)
+if ($roots.Count -ne 1) {
+    throw "Expected one Zig archive root, found $($roots.Count)"
+}
+Get-ChildItem -LiteralPath $roots[0].FullName -Force | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination $install -Recurse -Force
 }
 $zig = Join-Path $install "zig.exe"
