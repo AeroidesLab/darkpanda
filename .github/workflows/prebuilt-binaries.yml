@@ -183,7 +183,7 @@ jobs:
         id: zig-unix
         shell: bash
         run: |
-          browser/tools/ci/install-zig.sh \
+          bash browser/tools/ci/install-zig.sh \
             "$ZIG_VERSION" \
             '${{ matrix.zig_arch }}' \
             '${{ matrix.zig_sha256 }}' \
