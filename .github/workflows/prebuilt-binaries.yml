@@ -338,6 +338,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $install = Join-Path $env:RUNNER_TEMP "darkpanda-boringssl-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           $localCache = Join-Path $env:RUNNER_TEMP "darkpanda-boringssl-zig-cache-$env:GITHUB_RUN_ATTEMPT"
           $globalCache = Join-Path $env:RUNNER_TEMP "darkpanda-boringssl-zig-global-$env:GITHUB_RUN_ATTEMPT"
@@ -368,6 +369,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $install = Join-Path $env:RUNNER_TEMP "darkpanda-install-${{ matrix.id }}-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           $localCache = Join-Path $env:RUNNER_TEMP "darkpanda-zig-cache-${{ matrix.id }}-$env:GITHUB_RUN_ATTEMPT"
           $globalCache = Join-Path $env:RUNNER_TEMP "darkpanda-zig-global-${{ matrix.id }}-$env:GITHUB_RUN_ATTEMPT"
@@ -382,12 +384,12 @@ jobs:
               -j${{ matrix.jobs }} `
               -Dtarget=${{ matrix.zig_target }} `
               -Doptimize=ReleaseFast `
-              -Dprebuilt_v8_path=$env:V8_ARCHIVE `
-              -Dprebuilt_boringssl_dir=$env:BORINGSSL_LIBRARY_DIR `
-              -Dwreq_transport_target_dir=$wreqTarget `
-              -Dcanvas_backend_target_dir=$canvasTarget `
-              -Dcargo_path=$cargo `
-              -Dversion=$env:DARKPANDA_BUILD_VERSION `
+              "-Dprebuilt_v8_path=$env:V8_ARCHIVE" `
+              "-Dprebuilt_boringssl_dir=$env:BORINGSSL_LIBRARY_DIR" `
+              "-Dwreq_transport_target_dir=$wreqTarget" `
+              "-Dcanvas_backend_target_dir=$canvasTarget" `
+              "-Dcargo_path=$cargo" `
+              "-Dversion=$env:DARKPANDA_BUILD_VERSION" `
               -p $install `
               --cache-dir $localCache `
               --global-cache-dir $globalCache `
@@ -492,6 +494,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $bin = Join-Path $env:DARKPANDA_INSTALL_ROOT 'bin'
           $env:PATH = "$bin;$env:PATH"
           & (Join-Path $bin 'darkpanda.exe') version
