@@ -86,7 +86,8 @@ DarkPanda EXE/DLL/SO/dylib。更改手动输入 `dependency_cache_generation` �
 target 目录。发布配置为 Zig `ReleaseFast`，Rust `opt-level=3`、fat LTO、单
 codegen unit、无增量编译，同时保留 `panic=unwind`，因为三个 Rust FFI 边界都用
 `catch_unwind` 隔离 panic。公共 x64 包使用可移植 CPU baseline，不使用 runner
-专属的 `native` 指令集；macOS 构建固定 deployment target 13.0，避免无意绑定
+专属的 `native` 指令集；macOS 构建固定 deployment target 12.0，与 Chromium/V8
+的链接目标保持一致，并避免无意绑定
 runner 当前的 macOS 15。
 
 每个平台在上传前都会运行 CLI version、Python FFI 和真实 rust-skia 像素 smoke。
