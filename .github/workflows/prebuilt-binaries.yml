@@ -33,10 +33,10 @@ env:
   RUST_VERSION: 1.88.0
   V8_VERSION: 14.9.207.35
   V8_REVISION: 933ce636c562cd54d68e7f7c93ab5cdffd685fca
-  ZIG_V8_SOURCE_REVISION: 006a8eb392b9f37a53fa43bcc97684fbed6dcf6e
+  ZIG_V8_SOURCE_REVISION: 88b51c8f58652501b7076b36ef4d9e16a44aca38
   BORINGSSL_SOURCE_REVISION: 391764c3c0224eaa64d3bfbfe05cb8121bd41151
   DEPENDENCY_SOURCE_RELEASE: build-dependencies-v1
-  ZIG_V8_SOURCE_ARCHIVE_SHA256: a5a7b3589cd8a5b18a31db1c720e2590803b45a5d1a0e28d7d16e687395a10a7
+  ZIG_V8_SOURCE_ARCHIVE_SHA256: a62265bad6e94bf391edc8a99e35bbba78644be7202f87d9ac1eb6f767c1556b
   BORINGSSL_SOURCE_ARCHIVE_SHA256: e9e1d9a342699b0eb0c28556377b4258b722ce8f61ecc98f5029646256cd5a1a
   CACHE_GENERATION: ${{ inputs.dependency_cache_generation || 'v1' }}
   CARGO_INCREMENTAL: "0"
@@ -80,7 +80,7 @@ jobs:
             zig_target: x86_64-macos
             rust_target: x86_64-apple-darwin
             zig_sha256: 375b6909fc1495d16fc2c7db9538f707456bfc3373b14ee83fdd3e22b3d43f7f
-            v8_archive: libc_v8.a
+            v8_archive: libc_v8_standalone.a
             python_cmd: python3
             jobs: 3
           - id: macos-aarch64
@@ -90,7 +90,7 @@ jobs:
             zig_target: aarch64-macos
             rust_target: aarch64-apple-darwin
             zig_sha256: 3cc2bab367e185cdfb27501c4b30b1b0653c28d9f73df8dc91488e66ece5fa6b
-            v8_archive: libc_v8.a
+            v8_archive: libc_v8_standalone.a
             python_cmd: python3
             jobs: 3
     runs-on: ${{ matrix.runner }}
@@ -283,11 +283,7 @@ jobs:
               --global-cache-dir "$global_cache" \
               --summary all
           )
-          if [[ '${{ matrix.platform }}' == linux ]]; then
-            candidates=$(find "$source_root" -type f -name 'libc_v8_standalone.a')
-          else
-            candidates=$(find "$source_root" -type f -path '*/out/macos/release_*/obj/zig/libc_v8.a')
-          fi
+          candidates=$(find "$source_root" -type f -name '${{ matrix.v8_archive }}')
           candidate_count=$(printf '%s\n' "$candidates" | sed '/^$/d' | wc -l | tr -d ' ')
           [[ $candidate_count -eq 1 ]] || {
             echo "Expected exactly one V8 archive, found $candidate_count" >&2
