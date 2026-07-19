@@ -206,7 +206,7 @@ jobs:
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: dependency-cache/${{ matrix.id }}/v8
-          key: darkpanda-v8-${{ matrix.id }}-zig-${{ env.ZIG_VERSION }}-v8-${{ env.V8_VERSION }}-${{ env.ZIG_V8_SOURCE_REVISION }}-macos-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ env.CACHE_GENERATION }}
+          key: darkpanda-v8-${{ matrix.id }}-zig-${{ env.ZIG_VERSION }}-v8-${{ env.V8_VERSION }}-${{ env.ZIG_V8_SOURCE_REVISION }}-target-${{ matrix.zig_target }}-deployment-${{ matrix.platform == 'macos' && env.MACOSX_DEPLOYMENT_TARGET || 'na' }}-${{ env.CACHE_GENERATION }}
           enableCrossOsArchive: false
 
       - name: Restore Cargo source downloads
