@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<head>
+  <title>Chrome WebIDL descriptor parity</title>
+  <script src="../testing.js"></script>
+</head>
+
+<body></body>
+
+<script id="chrome_149_webidl_descriptor_parity">
+  // Chrome 149 baseline:
+  // chromium/src@48860e577c01de4a313192cc79596c46b52efb3a
+  // third_party/blink/renderer/bindings/core/v8/generated_code_helper.cc
+  // SetupIDLInterfaceTemplate installs @@toStringTag on the prototype with
+  // ReadOnly | DontEnum (that is, configurable remains true).
+  const own = (object, key) =>
+    Object.prototype.hasOwnProperty.call(object, key);
+
+  const containsPrototype = (value, expected) => {
+    for (let current = value; current; current = Object.getPrototypeOf(current)) {
+      if (current === expected) return true;
+    }
+    return false;
+  };
+
+  const isConstructor = fn => {
+    try {
+      Reflect.construct(function () {}, [], fn);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const assertFunctionMetadata = (fn, name, length) => {
+    const nameDescriptor = Object.getOwnPropertyDescriptor(fn, 'name');
+    testing.expectEqual(name, nameDescriptor.value);
+    testing.expectFalse(nameDescriptor.writable);
+    testing.expectFalse(nameDescriptor.enumerable);
+    testing.expectTrue(nameDescriptor.configurable);
+
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(fn, 'length');
+    testing.expectEqual(length, lengthDescriptor.value);
+    testing.expectFalse(lengthDescriptor.writable);
+    testing.expectFalse(lengthDescriptor.enumerable);
+    testing.expectTrue(lengthDescriptor.configurable);
+  };
+
+  const assertMethod = (prototype, name, length) => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    testing.expectEqual('function', typeof descriptor.value);
+    testing.expectTrue(descriptor.writable);
+    testing.expectTrue(descriptor.enumerable);
+    testing.expectTrue(descriptor.configurable);
+    assertFunctionMetadata(descriptor.value, name, length);
+    testing.expectFalse(own(descriptor.value, 'prototype'));
+    testing.expectFalse(isConstructor(descriptor.value));
+    testing.expectEqual(
+      `function ${name}() { [native code] }`,
+      Function.prototype.toString.call(descriptor.value),
+    );
+  };
+
+  const assertReadonlyAccessor = (prototype, name) => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    testing.expectEqual('function', typeof descriptor.get);
+    testing.expectEqual(undefined, descriptor.set);
+    testing.expectTrue(descriptor.enumerable);
+    testing.expectTrue(descriptor.configurable);
+    assertFunctionMetadata(descriptor.get, `get ${name}`, 0);
+    testing.expectFalse(own(descriptor.get, 'prototype'));
+    testing.expectFalse(isConstructor(descriptor.get));
+    testing.expectEqual(
+      `function get ${name}() { [native code] }`,
+      Function.prototype.toString.call(descriptor.get),
+    );
+  };
+
+  const assertGetterOnlyAssignment = (
+    target,
+    prototype,
+    name,
+    expectedMessage,
+  ) => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    testing.expectEqual('function', typeof descriptor.get);
+    testing.expectEqual(undefined, descriptor.set);
+    testing.expectTrue(descriptor.enumerable);
+    testing.expectTrue(descriptor.configurable);
+
+    testing.expectFalse(own(target, name));
+    let strictError;
+    try {
+      (function (object, property) {
+        'use strict';
+        object[property] = 1;
+      })(target, name);
+    } catch (error) {
+      strictError = error;
+    }
+    testing.expectEqual('TypeError', strictError?.name);
+    testing.expectEqual(expectedMessage, strictError?.message);
+    testing.expectFalse(own(target, name));
+
+    // Web IDL getter-only attributes are ordinary accessor properties with an
+    // absent setter. A sloppy assignment is ignored; it must not create a
+    // shadowing own data property on the receiver.
+    Function('object', 'property', 'object[property] = 1;')(target, name);
+    testing.expectFalse(own(target, name));
+    testing.expectFalse(Reflect.set(target, name, 1));
+    testing.expectFalse(own(target, name));
+  };
+
+  const cases = [
+    { name: 'Window', sample: window, tag: '[object Window]' },
+    {
+      name: 'Document',
+      sample: document,
+      // The concrete document wrapper is HTMLDocument, whose own prototype
+      // tag takes precedence over Document.prototype's tag.
+      tag: '[object HTMLDocument]',
+      accessor: ['URL'],
+      method: ['createElement', 1],
+    },
+    {
+      name: 'Navigator',
+      sample: navigator,
+      tag: '[object Navigator]',
+      accessor: ['userAgent'],
+      method: ['sendBeacon', 1],
+    },
+    {
+      name: 'Blob',
+      sample: new Blob(),
+      tag: '[object Blob]',
+      accessor: ['size'],
+      method: ['slice', 0],
+    },
+    {
+      name: 'ReadableStream',
+      sample: new ReadableStream(),
+      tag: '[object ReadableStream]',
+      accessor: ['locked'],
+      method: ['getReader', 0],
+    },
+    {
+      name: 'Performance',
+      sample: performance,
+      tag: '[object Performance]',
+      accessor: ['timeOrigin'],
+      method: ['mark', 1],
+    },
+  ];
+
+  for (const entry of cases) {
+    const Interface = globalThis[entry.name];
+    const prototype = Interface.prototype;
+
+    testing.expectTrue(containsPrototype(entry.sample, prototype));
+    testing.expectFalse(own(entry.sample, Symbol.toStringTag));
+    testing.expectTrue(own(prototype, Symbol.toStringTag));
+
+    const tagDescriptor = Object.getOwnPropertyDescriptor(
+      prototype,
+      Symbol.toStringTag,
+    );
+    testing.expectEqual(entry.name, tagDescriptor.value);
+    testing.expectFalse(tagDescriptor.writable);
+    testing.expectFalse(tagDescriptor.enumerable);
+    testing.expectTrue(tagDescriptor.configurable);
+
+    const ownKeys = Reflect.ownKeys(prototype);
+    testing.expectTrue(ownKeys.includes('constructor'));
+    testing.expectTrue(ownKeys.includes(Symbol.toStringTag));
+    // Blink installs @@toStringTag before IDL operations. It must therefore
+    // precede any later well-known symbol in Reflect.ownKeys order.
+    testing.expectEqual(
+      Symbol.toStringTag,
+      ownKeys.filter(key => typeof key === 'symbol')[0],
+    );
+
+    const constructorDescriptor = Object.getOwnPropertyDescriptor(
+      prototype,
+      'constructor',
+    );
+    testing.expectEqual(Interface, constructorDescriptor.value);
+    testing.expectTrue(constructorDescriptor.writable);
+    testing.expectFalse(constructorDescriptor.enumerable);
+    testing.expectTrue(constructorDescriptor.configurable);
+
+    const prototypeDescriptor = Object.getOwnPropertyDescriptor(
+      Interface,
+      'prototype',
+    );
+    testing.expectEqual(prototype, prototypeDescriptor.value);
+    testing.expectFalse(prototypeDescriptor.writable);
+    testing.expectFalse(prototypeDescriptor.enumerable);
+    testing.expectFalse(prototypeDescriptor.configurable);
+
+    const globalDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      entry.name,
+    );
+    testing.expectEqual(Interface, globalDescriptor.value);
+    testing.expectTrue(globalDescriptor.writable);
+    testing.expectFalse(globalDescriptor.enumerable);
+    testing.expectTrue(globalDescriptor.configurable);
+
+    assertFunctionMetadata(Interface, entry.name, 0);
+    testing.expectTrue(isConstructor(Interface));
+    testing.expectEqual(
+      `function ${entry.name}() { [native code] }`,
+      Function.prototype.toString.call(Interface),
+    );
+
+    testing.expectEqual(
+      `[object ${entry.name}]`,
+      Object.prototype.toString.call(prototype),
+    );
+    testing.expectEqual(
+      entry.tag,
+      Object.prototype.toString.call(entry.sample),
+    );
+
+    if (entry.accessor) {
+      assertReadonlyAccessor(prototype, entry.accessor[0]);
+    }
+    if (entry.method) {
+      assertMethod(prototype, entry.method[0], entry.method[1]);
+    }
+  }
+
+  assertGetterOnlyAssignment(
+    navigator,
+    Navigator.prototype,
+    'userAgent',
+    'Cannot set property userAgent of #<Navigator> which has only a getter',
+  );
+</script>

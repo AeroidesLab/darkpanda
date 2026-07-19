@@ -1,0 +1,153 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+const std = @import("std");
+
+const js = @import("../js/js.zig");
+
+const Frame = @import("../Frame.zig");
+const Parser = @import("../parser/Parser.zig");
+
+const HTMLDocument = @import("HTMLDocument.zig");
+const XMLDocument = @import("XMLDocument.zig");
+const Document = @import("Document.zig");
+const TrustedTypes = @import("TrustedTypes.zig");
+
+const DOMParser = @This();
+
+// DOMParser is an ExecutionContextClient in Blink.  Retaining its construction
+// frame makes cross-realm calls consult the parser owner's CSP/default policy.
+_frame: ?*Frame = null,
+
+pub fn init(frame: *Frame) DOMParser {
+    return .{ ._frame = frame };
+}
+
+pub fn parseFromString(
+    self: *const DOMParser,
+    value: js.Value,
+    mime_type: []const u8,
+    caller_frame: *Frame,
+) !*Document {
+    const frame = self._frame orelse caller_frame;
+    const compliant = try TrustedTypes.getCompliantString(
+        value,
+        frame.js,
+        frame.window.getTrustedTypes(),
+        .html,
+        "DOMParser",
+        "parseFromString",
+        .{ .operation = .{ .interface = "DOMParser", .name = "parseFromString" } },
+        .dom_string,
+        &caller_frame.js.execution,
+    );
+    const html = try compliant.toSlice();
+    const target_mime = std.meta.stringToEnum(enum {
+        @"text/html",
+        @"text/xml",
+        @"application/xml",
+        @"application/xhtml+xml",
+        @"image/svg+xml",
+    }, mime_type) orelse return error.NotSupported;
+
+    const arena = try frame.getArena(.medium, "DOMParser.parseFromString");
+    defer frame.releaseArena(arena);
+
+    // DOMParser builds a detached Document. Borrow the same fragment
+    // parse-mode that `parseHtmlAsChildren` uses so frame-side hooks
+    // triggered from `Build.created` / `nodeIsReady` (external stylesheet
+    // fetches, script execution, mutation-observer fan-out, default-script
+    // injection) treat the parsed nodes as detached and skip
+    // side effects on the live document. The frame's `_parse_mode` is
+    // restored on exit.
+    const previous_parse_mode = frame._parse_mode;
+    frame._parse_mode = .fragment;
+    defer frame._parse_mode = previous_parse_mode;
+
+    return switch (target_mime) {
+        .@"text/html" => {
+            // Create a new HTMLDocument
+            const doc = try frame._factory.document(HTMLDocument{
+                ._proto = undefined,
+            });
+
+            var normalized = std.mem.trim(u8, html, &std.ascii.whitespace);
+            if (normalized.len == 0) {
+                normalized = "<html></html>";
+            }
+
+            // Parse HTML into the document
+            var parser = Parser.init(arena, doc.asNode(), frame, .{});
+            parser.parse(normalized);
+
+            if (parser.err) |pe| {
+                return pe.err;
+            }
+
+            return doc.asDocument();
+        },
+        else => {
+            // Create a new XMLDocument.
+            const doc = try frame._factory.document(XMLDocument{
+                ._proto = undefined,
+            });
+
+            // Parse XML into XMLDocument.
+            const doc_node = doc.asNode();
+            var parser = Parser.init(arena, doc_node, frame, .{});
+            parser.parseXML(html);
+
+            if (parser.err != null or doc_node.firstChild() == null) {
+                // Return a document with a <parsererror> element per spec.
+                const err_doc = try frame._factory.document(XMLDocument{ ._proto = undefined });
+                var err_parser = Parser.init(arena, err_doc.asNode(), frame, .{});
+                err_parser.parseXML("<parsererror xmlns=\"http://www.mozilla.org/newlayout/xml/parsererror.xml\">error</parsererror>");
+                return err_doc.asDocument();
+            }
+
+            const first_child = doc_node.firstChild().?;
+
+            // If first node is a `ProcessingInstruction`, skip it.
+            if (first_child.getNodeType() == 7) {
+                // We're sure that firstChild exist, this cannot fail.
+                _ = try doc_node.removeChild(first_child, frame);
+            }
+
+            return doc.asDocument();
+        },
+    };
+}
+
+pub const JsApi = struct {
+    pub const bridge = js.Bridge(DOMParser);
+
+    pub const Meta = struct {
+        pub const name = "DOMParser";
+        pub const prototype_chain = bridge.prototypeChain();
+        pub var class_id: bridge.ClassId = undefined;
+        pub const empty_with_no_proto = true;
+    };
+
+    pub const constructor = bridge.constructor(DOMParser.init, .{});
+    pub const parseFromString = bridge.function(DOMParser.parseFromString, .{ .ce_reactions = true });
+};
+
+const testing = @import("../../testing.zig");
+test "WebApi: DOMParser" {
+    try testing.htmlRunner("domparser.html", .{});
+}

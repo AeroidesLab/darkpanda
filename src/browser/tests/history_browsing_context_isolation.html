@@ -1,0 +1,37 @@
+<!doctype html>
+<script src="testing.js"></script>
+
+<script id=browsing_context_history_isolation>
+  const rootURL = location.href;
+
+  testing.onload(() => {
+    const childWindow = child.contentWindow;
+
+    testing.expectTrue(window.__historyChildReady);
+    testing.expectFalse(history === childWindow.history);
+    testing.expectFalse(navigation === childWindow.navigation);
+    testing.expectEqual(rootURL, location.href);
+    testing.expectEqual(1, history.length);
+    testing.expectEqual(1, navigation.entries().length);
+    testing.expectEqual(rootURL, navigation.currentEntry.url);
+    testing.expectEqual(1, childWindow.history.length);
+    testing.expectEqual(1, childWindow.navigation.entries().length);
+    testing.expectTrue(childWindow.navigation.currentEntry.url.includes('child-replaced'));
+
+    // A Location object belongs to its target Window, not to the incumbent
+    // caller. A same-origin parent mutating child.location must not navigate
+    // or rewrite the parent browsing context.
+    childWindow.location.hash = '#owned-by-child';
+    testing.expectEqual(rootURL, location.href);
+    testing.expectEqual('#owned-by-child', childWindow.location.hash);
+
+    // history.go(0) must target the owning child browsing context.  The call
+    // can enqueue a child reload, but it must never synchronously replace the
+    // root URL from a session-global history entry.
+    childWindow.history.go(0);
+    testing.expectEqual(rootURL, location.href);
+    testing.expectEqual(rootURL, navigation.currentEntry.url);
+  });
+</script>
+
+<iframe id=child src="support/history_browsing_context_child.html"></iframe>

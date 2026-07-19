@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+<body>
+<div id="target"></div>
+<script id="trusted-types-report-only">
+testing.onload(() => {
+  const target = document.getElementById('target');
+
+  // A missing default policy reports but does not block an ordinary sink.
+  target.innerHTML = '<b>original</b>';
+  testing.expectEqual('<b>original</b>', target.innerHTML);
+
+  // Report-only trusted-types restrictions do not reject names or duplicates.
+  trustedTypes.createPolicy('beta', {createHTML: input => input});
+  trustedTypes.createPolicy('beta', {createHTML: input => input});
+
+  const sentinel = new RangeError('report-only default sentinel');
+  const calls = [];
+  trustedTypes.createPolicy('default', {
+    createHTML(input, type, sink) {
+      calls.push([input, type, sink]);
+      if (input === 'nullish') return null;
+      if (input === 'throw') throw sentinel;
+      return `<mark>${input}</mark>`;
+    },
+  });
+
+  target.innerHTML = 'changed';
+  testing.expectEqual('<mark>changed</mark>', target.innerHTML);
+
+  target.innerHTML = 'nullish';
+  testing.expectEqual('nullish', target.innerHTML);
+
+  let thrown = null;
+  try { target.innerHTML = 'throw'; } catch (error) { thrown = error; }
+  testing.expectEqual(sentinel, thrown);
+  testing.expectEqual('nullish', target.innerHTML);
+  testing.expectEqual(
+    [
+      ['changed', 'TrustedHTML', 'Element innerHTML'],
+      ['nullish', 'TrustedHTML', 'Element innerHTML'],
+      ['throw', 'TrustedHTML', 'Element innerHTML'],
+    ],
+    calls,
+  );
+});
+</script>
+</body>

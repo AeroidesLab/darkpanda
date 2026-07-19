@@ -1,0 +1,249 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="shadowroot_illegal_constructor_chrome149">
+{
+    testing.withError(error => {
+        testing.expectEqual('TypeError', error.name);
+        testing.expectEqual("Failed to construct 'ShadowRoot': Illegal constructor", error.message);
+        testing.expectEqual('TypeError: Illegal constructor', String(error.stack).split('\n')[0]);
+        testing.expectEqual(false, error instanceof DOMException);
+        testing.expectEqual(['stack', 'message'], Reflect.ownKeys(error));
+    }, () => new ShadowRoot());
+}
+</script>
+
+<script id="shadowroot_accessor_webidl_errors_chrome149">
+{
+    const host = document.createElement('div');
+    const root = host.attachShadow({ mode: 'open' });
+    const descriptor = Object.getOwnPropertyDescriptor(ShadowRoot.prototype, 'innerHTML');
+
+    testing.expectEqual('get innerHTML', descriptor.get.name);
+    testing.expectEqual(0, descriptor.get.length);
+    testing.expectEqual('set innerHTML', descriptor.set.name);
+    testing.expectEqual(1, descriptor.set.length);
+
+    function expectSymbolConversion(fn) {
+        testing.withError(error => {
+            const reason = 'Cannot convert a Symbol value to a string';
+            testing.expectEqual('TypeError', error.name);
+            testing.expectEqual(
+                "Failed to set the 'innerHTML' property on 'ShadowRoot': " + reason,
+                error.message,
+            );
+            testing.expectEqual(`TypeError: ${reason}`, String(error.stack).split('\n')[0]);
+            testing.expectEqual(
+                { writable: true, enumerable: true, configurable: true },
+                (() => {
+                    const d = Object.getOwnPropertyDescriptor(error, 'message');
+                    return { writable: d.writable, enumerable: d.enumerable, configurable: d.configurable };
+                })(),
+            );
+        }, fn);
+    }
+
+    expectSymbolConversion(() => { root.innerHTML = Symbol('html'); });
+    expectSymbolConversion(() => descriptor.set.call(root, {
+        [Symbol.toPrimitive]() { return Symbol('html'); },
+    }));
+
+    root.innerHTML = null;
+    testing.expectEqual('', root.innerHTML);
+
+    function expectIllegalInvocation(fn) {
+        testing.withError(error => {
+            testing.expectEqual('TypeError', error.name);
+            testing.expectEqual('Illegal invocation', error.message);
+            testing.expectEqual('TypeError: Illegal invocation', String(error.stack).split('\n')[0]);
+        }, fn);
+    }
+    expectIllegalInvocation(() => descriptor.get.call({}));
+    expectIllegalInvocation(() => descriptor.set.call({}, 'html'));
+}
+</script>
+
+<script id="attach_shadow_webidl_errors_chrome149">
+{
+    const host = document.createElement('div');
+
+    function expectTypeError(message, stackMessage, fn) {
+        testing.withError(error => {
+            testing.expectEqual('TypeError', error.name);
+            testing.expectEqual(message, error.message);
+            testing.expectEqual(`TypeError: ${stackMessage}`, String(error.stack).split('\n')[0]);
+            testing.expectEqual(false, error instanceof DOMException);
+        }, fn);
+    }
+
+    expectTypeError(
+        "Failed to execute 'attachShadow' on 'Element': 1 argument required, but only 0 present.",
+        '1 argument required, but only 0 present.',
+        () => host.attachShadow(),
+    );
+    expectTypeError(
+        "Failed to execute 'attachShadow' on 'Element': The provided value is not of type 'ShadowRootInit'.",
+        "The provided value is not of type 'ShadowRootInit'.",
+        () => host.attachShadow(null),
+    );
+    expectTypeError(
+        "Failed to execute 'attachShadow' on 'Element': The provided value is not of type 'ShadowRootInit'.",
+        "The provided value is not of type 'ShadowRootInit'.",
+        () => host.attachShadow(undefined),
+    );
+    expectTypeError(
+        "Failed to execute 'attachShadow' on 'Element': Failed to read the 'mode' property from 'ShadowRootInit': Required member is undefined.",
+        'Required member is undefined.',
+        () => host.attachShadow({}),
+    );
+    expectTypeError(
+        "Failed to execute 'attachShadow' on 'Element': Failed to read the 'mode' property from 'ShadowRootInit': The provided value 'invalid' is not a valid enum value of type ShadowRootMode.",
+        "The provided value 'invalid' is not a valid enum value of type ShadowRootMode.",
+        () => host.attachShadow({ mode: 'invalid' }),
+    );
+    expectTypeError(
+        "Failed to execute 'attachShadow' on 'Element': Failed to read the 'slotAssignment' property from 'ShadowRootInit': The provided value 'invalid' is not a valid enum value of type SlotAssignmentMode.",
+        "The provided value 'invalid' is not a valid enum value of type SlotAssignmentMode.",
+        () => host.attachShadow({ mode: 'open', slotAssignment: 'invalid' }),
+    );
+
+    testing.withError(error => {
+        testing.expectEqual('TypeError', error.name);
+        testing.expectEqual('Illegal invocation', error.message);
+        testing.expectEqual('TypeError: Illegal invocation', String(error.stack).split('\n')[0]);
+    }, () => Element.prototype.attachShadow.call({}, { mode: 'open' }));
+}
+</script>
+
+<script id="attach_shadow_dictionary_observation_order_chrome149">
+{
+    testing.expectEqual(1, Element.prototype.attachShadow.length);
+    const reads = [];
+    const init = new Proxy({ mode: 'open' }, {
+        get(target, key, receiver) {
+            reads.push(String(key));
+            return Reflect.get(target, key, receiver);
+        },
+    });
+    document.createElement('div').attachShadow(init);
+    testing.expectEqual(
+        ['clonable', 'customElementRegistry', 'delegatesFocus', 'mode', 'serializable', 'slotAssignment'],
+        reads,
+    );
+}
+</script>
+
+<script id="attach_shadow_dom_exceptions_chrome149">
+{
+    function expectNotSupported(message, fn) {
+        testing.withError(error => {
+            testing.expectEqual('NotSupportedError', error.name);
+            testing.expectEqual(9, error.code);
+            testing.expectEqual(true, error instanceof DOMException);
+            testing.expectEqual(message, error.message);
+            testing.expectEqual(`NotSupportedError: ${message}`, String(error.stack).split('\n')[0]);
+            testing.expectEqual(['stack'], Reflect.ownKeys(error));
+        }, fn);
+    }
+
+    expectNotSupported(
+        "Failed to execute 'attachShadow' on 'Element': This element does not support attachShadow",
+        () => document.createElement('a').attachShadow({ mode: 'open' }),
+    );
+
+    const host = document.createElement('div');
+    host.attachShadow({ mode: 'open' });
+    expectNotSupported(
+        "Failed to execute 'attachShadow' on 'Element': Shadow root cannot be created on a host which already hosts a shadow tree.",
+        () => host.attachShadow({ mode: 'open' }),
+    );
+}
+</script>
+
+<script id="shadowroot_prototype_surface_chrome149">
+{
+    const expected = [
+        'mode', 'host', 'onslotchange', 'innerHTML', 'delegatesFocus',
+        'slotAssignment', 'serializable', 'clonable', 'activeElement',
+        'styleSheets', 'pointerLockElement', 'fullscreenElement',
+        'adoptedStyleSheets', 'pictureInPictureElement', 'elementFromPoint',
+        'elementsFromPoint', 'getAnimations', 'getHTML', 'getSelection',
+        'setHTMLUnsafe', 'customElementRegistry', 'setHTML', 'constructor',
+        Symbol.toStringTag,
+    ];
+    testing.expectEqual(expected, Reflect.ownKeys(ShadowRoot.prototype));
+
+    for (const name of expected.slice(0, -2)) {
+        const descriptor = Object.getOwnPropertyDescriptor(ShadowRoot.prototype, name);
+        testing.expectEqual(true, descriptor.enumerable);
+        testing.expectEqual(true, descriptor.configurable);
+    }
+    const tag = Object.getOwnPropertyDescriptor(ShadowRoot.prototype, Symbol.toStringTag);
+    testing.expectEqual('ShadowRoot', tag.value);
+    testing.expectEqual(false, tag.writable);
+    testing.expectEqual(false, tag.enumerable);
+    testing.expectEqual(true, tag.configurable);
+
+    const host = document.createElement('div');
+    const root = host.attachShadow({ mode: 'open' });
+    testing.expectEqual('[object ShadowRoot]', Object.prototype.toString.call(root));
+    testing.expectEqual(true, root instanceof ShadowRoot);
+    testing.expectEqual(true, root instanceof DocumentFragment);
+    testing.expectEqual(true, root instanceof Node);
+    testing.expectEqual(true, root instanceof EventTarget);
+    testing.expectEqual(ShadowRoot.prototype, Object.getPrototypeOf(root));
+    testing.expectEqual(DocumentFragment.prototype, Object.getPrototypeOf(ShadowRoot.prototype));
+    testing.expectEqual(false, 'innerHTML' in document.createDocumentFragment());
+    testing.expectEqual('[object StyleSheetList]', Object.prototype.toString.call(root.styleSheets));
+    testing.expectEqual(root.styleSheets, root.styleSheets);
+    testing.expectEqual(0, root.styleSheets.length);
+    testing.expectEqual(null, root.pointerLockElement);
+    testing.expectEqual(null, root.fullscreenElement);
+    testing.expectEqual(null, root.pictureInPictureElement);
+    testing.expectEqual('[object Array]', Object.prototype.toString.call(root.getAnimations()));
+    testing.expectEqual(0, root.getAnimations().length);
+    testing.expectEqual('[object Selection]', Object.prototype.toString.call(root.getSelection()));
+    testing.expectEqual(customElements, root.customElementRegistry);
+}
+</script>
+
+<script id="shadowroot_open_closed_visibility_and_retargeting_chrome149">
+{
+    const openHost = document.createElement('div');
+    const openRoot = openHost.attachShadow({ mode: 'open' });
+    testing.expectEqual(openRoot, openHost.shadowRoot);
+
+    const closedHost = document.createElement('div');
+    const closedRoot = closedHost.attachShadow({ mode: 'closed' });
+    const button = document.createElement('button');
+    closedRoot.appendChild(button);
+    document.body.appendChild(closedHost);
+    testing.expectEqual(null, closedHost.shadowRoot);
+    testing.expectEqual('closed', closedRoot.mode);
+    testing.expectEqual(closedHost, closedRoot.host);
+
+    let outsideTarget = null;
+    let outsidePath = null;
+    let insideTarget = null;
+    let insidePath = null;
+    button.addEventListener('shadow-parity', event => {
+        insideTarget = event.target;
+        insidePath = event.composedPath();
+    });
+    closedHost.addEventListener('shadow-parity', event => {
+        outsideTarget = event.target;
+        outsidePath = event.composedPath();
+    });
+    button.dispatchEvent(new Event('shadow-parity', { bubbles: true, composed: true }));
+
+    testing.expectEqual(button, insideTarget);
+    testing.expectEqual(button, insidePath[0]);
+    testing.expectEqual(closedRoot, insidePath[1]);
+    testing.expectEqual(closedHost, outsideTarget);
+    testing.expectEqual(closedHost, outsidePath[0]);
+    testing.expectEqual(false, outsidePath.includes(button));
+    testing.expectEqual(false, outsidePath.includes(closedRoot));
+    closedHost.remove();
+}
+</script>

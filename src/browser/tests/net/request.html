@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id=basic>
+{
+  const req = new Request('https://example.com/api');
+  testing.expectEqual('https://example.com/api', req.url);
+  testing.expectEqual('GET', req.method);
+}
+
+{
+  const req = new Request('https://example.com/api', { method: 'POST' });
+  testing.expectEqual('https://example.com/api', req.url);
+  testing.expectEqual('POST', req.method);
+}
+
+{
+  const req = new Request('https://example.com/api', { method: 'post' });
+  testing.expectEqual('POST', req.method);
+}
+
+{
+  const req = new Request('/path');
+  testing.expectEqual(true, req.url.includes('/path'));
+}
+
+  const req = new Request('https://example.com/api/hello world');
+  testing.expectEqual('https://example.com/api/hello%20world', req.url);
+</script>
+
+<script id=invalid_url_webidl_message>
+{
+  let observed = null;
+  try {
+    new Request('http://[');
+  } catch (error) {
+    observed = {name: error.name, message: error.message};
+  }
+  testing.expectEqual('TypeError', observed?.name);
+  testing.expectEqual(
+    "Failed to construct 'Request': Failed to parse URL from http://[",
+    observed?.message,
+  );
+}
+</script>
+
+<script id=headers>
+{
+  const req = new Request('https://example.com/api');
+  const headers = req.headers;
+  testing.expectEqual('object', typeof headers);
+
+  headers.set('Content-Type', 'application/json');
+  testing.expectEqual('application/json', headers.get('Content-Type'));
+
+  const headers2 = req.headers;
+  testing.expectEqual(true, headers === headers2);
+  testing.expectEqual('application/json', headers2.get('Content-Type'));
+}
+
+{
+  const headers = new Headers();
+  headers.set('X-Custom', 'value');
+
+  const req = new Request('https://example.com/api', { headers });
+  testing.expectEqual('value', req.headers.get('X-Custom'));
+}
+
+{
+  const req = new Request('https://example.com/api', {headers: {over: '9000!'}});
+  testing.expectEqual('9000!', req.headers.get('over'));
+}
+</script>
+
+<script id=request_input>
+{
+  const req1 = new Request('https://example.com/api', { method: 'POST' });
+  const req2 = new Request(req1);
+
+  testing.expectEqual('https://example.com/api', req2.url);
+  testing.expectEqual('POST', req2.method);
+}
+
+{
+  const req1 = new Request('https://example.com/api', { method: 'POST' });
+  const req2 = new Request(req1, { method: 'GET' });
+
+  testing.expectEqual('https://example.com/api', req2.url);
+  testing.expectEqual('GET', req2.method);
+}
+
+{
+  const headers = new Headers();
+  headers.set('X-Original', 'value1');
+  const req1 = new Request('https://example.com/api', { headers });
+
+  const newHeaders = new Headers();
+  newHeaders.set('X-New', 'value2');
+  const req2 = new Request(req1, { headers: newHeaders });
+
+  testing.expectEqual(null, req2.headers.get('X-Original'));
+  testing.expectEqual('value2', req2.headers.get('X-New'));
+}
+</script>
+
+<script id=request_headers_are_independent_copies type=module>
+  const state = await testing.async();
+
+  // Fetch-created response headers are immutable. Passing them as HeadersInit
+  // creates a mutable request-owned copy and still lets body extraction consult
+  // the inherited Content-Type.
+  const response = await fetch('http://127.0.0.1:9582/xhr');
+  const responseContentType = response.headers.get('content-type');
+  const fromResponse = new Request('http://127.0.0.1:9582/xhr', {
+    method: 'POST',
+    body: 'payload',
+    headers: response.headers,
+  });
+  fromResponse.headers.set('content-type', 'application/request-copy');
+  fromResponse.headers.set('x-request-copy', 'yes');
+
+  const original = new Request('https://example.com/original', {
+    headers: {'x-original': 'one'},
+  });
+  const fromConstructor = new Request(original);
+  const fromClone = original.clone();
+  fromConstructor.headers.set('x-original', 'constructor');
+  fromClone.headers.set('x-original', 'clone');
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('text/html; charset=utf-8', responseContentType);
+    testing.expectEqual(responseContentType, response.headers.get('content-type'));
+    testing.expectEqual(null, response.headers.get('x-request-copy'));
+    testing.expectEqual('application/request-copy', fromResponse.headers.get('content-type'));
+    testing.expectEqual('yes', fromResponse.headers.get('x-request-copy'));
+
+    testing.expectEqual('one', original.headers.get('x-original'));
+    testing.expectEqual('constructor', fromConstructor.headers.get('x-original'));
+    testing.expectEqual('clone', fromClone.headers.get('x-original'));
+  });
+</script>
+
+<script id=stringifier>
+{
+  const url = new URL('https://example.com/api');
+  const req = new Request(url);
+  testing.expectEqual('https://example.com/api', req.url);
+}
+
+{
+  const anchor = document.createElement('a');
+  anchor.href = 'https://example.com/test';
+  const req = new Request(anchor);
+  testing.expectEqual('https://example.com/test', req.url);
+}
+
+{
+  const obj = {
+    toString() {
+      return 'https://example.com/custom';
+    }
+  };
+  const req = new Request(obj);
+  testing.expectEqual('https://example.com/custom', req.url);
+}
+</script>
+
+<script id=legacy>
+  {
+    let request = new Request("flower.png");
+    testing.expectEqual(testing.BASE_URL + 'net/flower.png', request.url);
+    testing.expectEqual("GET", request.method);
+
+    let request2 = new Request("https://google.com", {
+      method: "POST",
+      body: "Hello, World",
+      cache: "reload",
+      credentials: "omit",
+      headers: { "Sender": "me", "Target": "you" }
+      }
+    );
+    testing.expectEqual("https://google.com/", request2.url);
+    testing.expectEqual("POST", request2.method);
+    testing.expectEqual("omit", request2.credentials);
+    testing.expectEqual("reload", request2.cache);
+    testing.expectEqual("me", request2.headers.get("SeNdEr"));
+    testing.expectEqual("you", request2.headers.get("target"));
+  }
+</script>
+
+<script id=propfind>
+  {
+    const req = new Request('https://example.com/api', { method: 'propfind' });
+    testing.expectEqual('PROPFIND', req.method);
+  }
+</script>
+
+<script id=body_methods type=module>
+  const state = await testing.async();
+
+  const req1 = new Request('https://example.com/api', {
+    method: 'POST',
+    body: 'Hello, World!',
+    headers: { 'Content-Type': 'text/plain' }
+  });
+  const text1 = await req1.text();
+
+  const req2 = new Request('https://example.com/api', {
+    method: 'POST',
+    body: '{"name": "test"}',
+    headers: { 'Content-Type': 'application/json' }
+  });
+  const json2 = await req2.json();
+
+  const req3 = new Request('https://example.com/api', {
+    method: 'POST',
+    body: 'binary data',
+    headers: { 'Content-Type': 'application/octet-stream' }
+  });
+  const buffer3 = await req3.arrayBuffer();
+
+  const req4 = new Request('https://example.com/api', {
+    method: 'POST',
+    body: 'blob content',
+    headers: { 'Content-Type': 'text/plain' }
+  });
+  const blob4 = await req4.blob();
+
+  const req5 = new Request('https://example.com/api', {
+    method: 'POST',
+    body: 'bytes'
+  });
+  const bytes5 = await req5.bytes();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('Hello, World!', text1);
+
+    testing.expectEqual('test', json2.name);
+
+    testing.expectEqual(true, buffer3 instanceof ArrayBuffer);
+    testing.expectEqual(11, buffer3.byteLength);
+
+    testing.expectEqual(true, blob4 instanceof Blob);
+    testing.expectEqual(12, blob4.size);
+    testing.expectEqual('text/plain', blob4.type);
+
+    testing.expectEqual(true, bytes5 instanceof Uint8Array);
+    testing.expectEqual(5, bytes5.length);
+  });
+</script>
+
+<script id=clone>
+  {
+    const req1 = new Request('https://example.com/api', {
+      method: 'POST',
+      body: 'test body',
+      headers: { 'X-Custom': 'value' }
+    });
+
+    const req2 = req1.clone();
+
+    testing.expectEqual(req1.url, req2.url);
+    testing.expectEqual(req1.method, req2.method);
+    testing.expectEqual('value', req2.headers.get('X-Custom'));
+  }
+</script>
+
+<script id=body_used type=module>
+  const state = await testing.async();
+
+  const req1 = new Request('https://example.com', { method: 'POST', body: 'hi' });
+  const usedBefore1 = req1.bodyUsed;
+  await req1.text();
+  const usedAfter1 = req1.bodyUsed;
+
+  // Re-consuming a used body rejects.
+  let rejected1 = false;
+  try { await req1.text(); } catch (e) { rejected1 = true; }
+
+  // A request with no body is never "used".
+  const req2 = new Request('https://example.com');
+  const usedBefore2 = req2.bodyUsed;
+  await req2.text();
+  const usedAfter2 = req2.bodyUsed;
+
+  // text() decodes as UTF-8, stripping a leading BOM.
+  const req3 = new Request('https://example.com', { method: 'POST', body: '﻿hi' });
+  const text3 = await req3.text();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectFalse(usedBefore1);
+    testing.expectTrue(usedAfter1);
+    testing.expectTrue(rejected1);
+
+    testing.expectFalse(usedBefore2);
+    testing.expectFalse(usedAfter2);
+
+    testing.expectEqual('hi', text3);
+  });
+</script>
+
+<script id=content_type_from_body>
+  {
+    const req = new Request('https://example.com', { method: 'POST', body: 'x' });
+    testing.expectEqual('text/plain;charset=UTF-8', req.headers.get('content-type'));
+  }
+  {
+    // Buffer sources carry no default Content-Type.
+    const req = new Request('https://example.com', { method: 'POST', body: new Uint8Array([1, 2, 3]) });
+    testing.expectTrue(req.headers.get('content-type') === null);
+  }
+</script>
+
+<script id=priority>
+  {
+    new Request('https://example.com', { priority: 'high' });
+    new Request('https://example.com', { priority: 'low' });
+    new Request('https://example.com', { priority: 'auto' });
+    testing.expectTrue(true);
+  }
+  testing.expectError('TypeError', () => new Request('https://example.com', { priority: 'bogus' }));
+</script>

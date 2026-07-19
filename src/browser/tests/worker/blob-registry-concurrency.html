@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+
+<script id="blob_registry_cross_agent_concurrency" type="module">
+  const state = await testing.async();
+  const worker = new Worker('./blob-registry-concurrency-worker.js');
+  const expectedWindowValue = 'window-owned-cross-global-value';
+  const windowUrl = URL.createObjectURL(
+    new Blob([expectedWindowValue], { type: 'text/plain' }),
+  );
+  const completed = {
+    windowStress: false,
+    workerStress: false,
+    workerUrl: false,
+    windowUrl: false,
+  };
+  let settled = false;
+
+  const finish = result => {
+    if (settled) return;
+    settled = true;
+    state.resolve(result);
+  };
+  const maybeFinish = () => {
+    if (Object.values(completed).every(Boolean)) finish({ ok: true });
+  };
+
+  worker.onerror = event => finish({
+    ok: false,
+    error: event.message || 'worker error',
+  });
+  worker.onmessage = async event => {
+    const message = event.data;
+    try {
+      switch (message.type) {
+        case 'worker-url': {
+          const request = fetch(message.url);
+          const workerResult = new Promise((resolve, reject) => {
+            const consumer = new Worker(message.url);
+            consumer.onerror = event => {
+              consumer.terminate();
+              reject(new Error(event.message || 'cross-global consumer error'));
+            };
+            consumer.onmessage = messageEvent => {
+              consumer.terminate();
+              resolve(messageEvent.data);
+            };
+          });
+          URL.revokeObjectURL(message.url);
+          const [source, workerMessage] = await Promise.all([
+            request.then(response => response.text()),
+            workerResult,
+          ]);
+          if (source !== "postMessage('cross-global-blob-worker')") {
+            throw new Error(`worker URL mismatch: ${source}`);
+          }
+          if (workerMessage !== 'cross-global-blob-worker') {
+            throw new Error(`cross-global Worker mismatch: ${workerMessage}`);
+          }
+          completed.workerUrl = true;
+          maybeFinish();
+          break;
+        }
+        case 'window-fetch-started':
+          URL.revokeObjectURL(windowUrl);
+          break;
+        case 'window-url-done':
+          completed.windowUrl = true;
+          maybeFinish();
+          break;
+        case 'worker-stress-done':
+          completed.workerStress = true;
+          maybeFinish();
+          break;
+        case 'error':
+          throw new Error(message.error);
+      }
+    } catch (error) {
+      finish({ ok: false, error: String(error) });
+    }
+  };
+
+  worker.postMessage({
+    type: 'window-url',
+    url: windowUrl,
+    expected: expectedWindowValue,
+  });
+
+  (async () => {
+    for (let batch = 0; batch < 12; batch++) {
+      const pending = [];
+      for (let index = 0; index < 8; index++) {
+        const expected = `window-${batch}-${index}`;
+        const url = URL.createObjectURL(new Blob([expected], { type: 'text/plain' }));
+        const request = fetch(url).then(response => response.text());
+        URL.revokeObjectURL(url);
+        pending.push(request.then(actual => {
+          if (actual !== expected) throw new Error(`Window own mismatch: ${actual}`);
+        }));
+      }
+      await Promise.all(pending);
+    }
+    completed.windowStress = true;
+    maybeFinish();
+  })().catch(error => finish({ ok: false, error: String(error) }));
+
+  const timeout = setTimeout(
+    () => finish({ ok: false, error: 'timeout' }),
+    12000,
+  );
+
+  await state.done(result => {
+    testing.expectTrue(result.ok, result.error || 'blob registry concurrency failed');
+    testing.expectTrue(completed.windowStress);
+    testing.expectTrue(completed.workerStress);
+    testing.expectTrue(completed.workerUrl);
+    testing.expectTrue(completed.windowUrl);
+  });
+
+  clearTimeout(timeout);
+  URL.revokeObjectURL(windowUrl);
+  worker.terminate();
+</script>

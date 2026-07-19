@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<head>
+  <title>Chromium V8 embedder parity</title>
+  <script src="../testing.js"></script>
+</head>
+
+<body></body>
+
+<script id="temporal_is_enabled">
+  // Temporal ships in Chromium 149 and must be compiled into the V8 build.
+  testing.expectEqual('object', typeof Temporal);
+  testing.expectEqual('function', typeof Temporal.Instant);
+</script>
+
+<script id="shared_array_buffer_is_hidden_without_isolation">
+  // The test server sends no COOP/COEP headers, so this is an ordinary,
+  // non-cross-origin-isolated page. Chromium does not expose the constructor.
+  testing.expectEqual('undefined', typeof globalThis.SharedArrayBuffer);
+  testing.expectFalse('SharedArrayBuffer' in globalThis);
+</script>
+
+<script id="atomics_wait_is_disallowed_on_the_window_thread">
+  // A shared Wasm memory remains a valid way to obtain a shared typed array
+  // even while the SharedArrayBuffer global constructor is hidden. This
+  // ensures the TypeError below tests the Window-thread blocking policy rather
+  // than Atomics.wait's separate non-shared-typed-array validation.
+  const memory = new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true });
+  const cells = new Int32Array(memory.buffer);
+  testing.expectEqual('[object SharedArrayBuffer]', Object.prototype.toString.call(memory.buffer));
+  let waitError = null;
+  try {
+    Atomics.wait(cells, 0, 0, 0);
+  } catch (error) {
+    waitError = error;
+  }
+  testing.expectEqual('TypeError', waitError?.name);
+</script>
+
+<script id="dom_exception_is_a_native_error">
+  // Chromium asks the embedder whether an API wrapper is a native Error.
+  testing.expectEqual('function', typeof Error.isError);
+  testing.expectTrue(Error.isError(new DOMException('test', 'AbortError')));
+</script>
+
+<script id="promise_rejection_chromium_timing" type="module">
+  const state = await testing.async();
+
+  // A real unhandled rejection is reported from a later DOM task, after the
+  // current script and its microtasks have completed.
+  const order = ['script'];
+  let firstPromise;
+  const firstEvent = new Promise(resolve => {
+    const listener = event => {
+      if (event.promise !== firstPromise) return;
+      window.removeEventListener('unhandledrejection', listener);
+      order.push('unhandledrejection');
+      resolve({
+        promise: event.promise,
+        reason: event.reason,
+        cancelable: event.cancelable,
+        isTrusted: event.isTrusted,
+      });
+    };
+    window.addEventListener('unhandledrejection', listener);
+  });
+  firstPromise = Promise.reject('async rejection');
+  testing.expectEqual(['script'], order);
+  queueMicrotask(() => order.push('microtask'));
+  const first = await firstEvent;
+  testing.expectEqual('async rejection', first.reason);
+  testing.expectTrue(first.cancelable);
+  testing.expectTrue(first.isTrusted);
+  testing.expectEqual(['script', 'microtask', 'unhandledrejection'], order);
+
+  // Installing a handler in the same turn removes the pending report before
+  // the rejection task is allowed to dispatch.
+  let sameTurnEvents = 0;
+  let sameTurnPromise;
+  const sameTurnListener = event => {
+    if (event.promise === sameTurnPromise) sameTurnEvents++;
+  };
+  window.addEventListener('unhandledrejection', sameTurnListener);
+  sameTurnPromise = Promise.reject('handled in same turn');
+  sameTurnPromise.catch(() => {});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  window.removeEventListener('unhandledrejection', sameTurnListener);
+  testing.expectEqual(0, sameTurnEvents);
+
+  // Once unhandledrejection has been reported, a later handler queues a
+  // separate rejectionhandled task for the same promise and reason.
+  const lateOrder = [];
+  let latePromise;
+  const lateUnhandled = new Promise(resolve => {
+    const listener = event => {
+      if (event.promise !== latePromise) return;
+      window.removeEventListener('unhandledrejection', listener);
+      lateOrder.push('unhandledrejection');
+      resolve({
+        promise: event.promise,
+        reason: event.reason,
+        cancelable: event.cancelable,
+        isTrusted: event.isTrusted,
+      });
+    };
+    window.addEventListener('unhandledrejection', listener);
+  });
+  const lateHandled = new Promise(resolve => {
+    const listener = event => {
+      if (event.promise !== latePromise) return;
+      window.removeEventListener('rejectionhandled', listener);
+      lateOrder.push('rejectionhandled');
+      resolve({
+        promise: event.promise,
+        reason: event.reason,
+        cancelable: event.cancelable,
+        isTrusted: event.isTrusted,
+      });
+    };
+    window.addEventListener('rejectionhandled', listener);
+  });
+  latePromise = Promise.reject({ late: true });
+  const unhandledEvent = await lateUnhandled;
+  // Move handler installation to a subsequent task. This is observably after
+  // the unhandled report, rather than a microtask resumed by its listener.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  lateOrder.push('attach-handler');
+  latePromise.catch(() => {});
+  const handledEvent = await lateHandled;
+  testing.expectEqual(unhandledEvent.promise, handledEvent.promise);
+  testing.expectEqual(unhandledEvent.reason, handledEvent.reason);
+  testing.expectTrue(unhandledEvent.cancelable);
+  testing.expectFalse(handledEvent.cancelable);
+  testing.expectTrue(unhandledEvent.isTrusted);
+  testing.expectTrue(handledEvent.isTrusted);
+  testing.expectEqual(
+    ['unhandledrejection', 'attach-handler', 'rejectionhandled'],
+    lateOrder,
+  );
+
+  state.resolve();
+  await state.done(() => testing.expectTrue(true));
+</script>
+
+<!--
+  TODO(v8-worker-parity): DedicatedWorker must use an agent/isolate on which
+  Atomics.wait is allowed. Lightpanda workers currently share the page Env and
+  therefore inherit the Window's allow_atomics_wait=false setting. Keep that
+  known gap explicit and unasserted until workers have independent V8 agents;
+  asserting only that a worker throws would incorrectly bless the divergence.
+-->

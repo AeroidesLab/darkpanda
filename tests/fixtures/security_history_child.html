@@ -1,0 +1,10 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>cross-origin history child</title>
+<script>
+  history.replaceState(null, "", "/tests/fixtures/security-history-replaced.html#child");
+  parent.postMessage({
+    source: "security-history-child",
+    href: location.href,
+  }, "*");
+</script>

@@ -1,0 +1,63 @@
+<!doctype html>
+<script src="testing.js"></script>
+
+<script id="storage_popup_clone_and_named_reuse">
+  localStorage.clear();
+  sessionStorage.clear();
+  localStorage.setItem('popup-local', 'local-before-popup');
+  sessionStorage.setItem('popup-session', 'session-before-popup');
+
+  const popup = open('', 'storage-popup');
+  testing.expectEqual('session-before-popup', popup.sessionStorage.getItem('popup-session'));
+  testing.expectEqual('local-before-popup', popup.localStorage.getItem('popup-local'));
+
+  sessionStorage.setItem('popup-session', 'parent-after-popup');
+  testing.expectEqual('session-before-popup', popup.sessionStorage.getItem('popup-session'));
+  popup.sessionStorage.setItem('popup-session', 'popup-after-popup');
+  testing.expectEqual('parent-after-popup', sessionStorage.getItem('popup-session'));
+
+  const reused = open('', 'storage-popup');
+  testing.expectEqual(true, reused === popup);
+  testing.expectEqual('popup-after-popup', reused.sessionStorage.getItem('popup-session'));
+
+  localStorage.setItem('popup-local', 'local-after-popup');
+  testing.expectEqual('local-after-popup', popup.localStorage.getItem('popup-local'));
+  popup.close();
+</script>
+
+<script type="module" id="storage_popup_noopener">
+  const state = await testing.async();
+  sessionStorage.setItem('opener-secret', 'must-not-be-cloned');
+  localStorage.setItem('noopener-shared', 'must-still-be-shared');
+
+  const resultEvent = new Promise((resolve) => {
+    const onStorage = (event) => {
+      if (event.key !== 'noopener-result') return;
+      removeEventListener('storage', onStorage);
+      resolve(event);
+    };
+    addEventListener('storage', onStorage);
+  });
+
+  const url = new URL('storage_noopener_fixture.html', location.href);
+  url.search = location.search;
+  const returned = open(url.href, '_blank', 'noopener');
+  const event = await resultEvent;
+  state.resolve({
+    returnedIsNull: returned === null,
+    payload: JSON.parse(event.newValue),
+    storageAreaMatches: event.storageArea === localStorage,
+  });
+
+  state.done((result) => {
+    testing.expectEqual(true, result.returnedIsNull);
+    testing.expectEqual({
+      openerIsNull: true,
+      sessionValue: null,
+      localValue: 'must-still-be-shared',
+    }, result.payload);
+    testing.expectEqual(true, result.storageAreaMatches);
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+</script>

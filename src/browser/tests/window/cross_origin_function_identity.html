@@ -1,0 +1,514 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Cross-origin Window function identity and realm</title>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="chrome149_cross_origin_function_identity">
+(async () => {
+  // Chrome 149's GetCrossOriginFunction caches a FunctionTemplate by
+  // (world, callback), then calls GetFunction(current_context).  Observable
+  // identity is therefore per caller realm and callback: it is independent
+  // of the target Window and survives navigation of that target.
+  const state = await testing.async();
+  window.__crossOriginFunctionIdentityProbe = state.promise;
+
+  const dataDocument = title =>
+    'data:text/html,' + encodeURIComponent(
+      `<!doctype html><meta charset=utf-8><title>${title}</title>`
+    );
+
+  const helper = document.createElement('iframe');
+  helper.src = 'support/cross_origin_function_identity_same.html';
+  const target = document.createElement('iframe');
+  target.src = dataDocument('cross-origin target 1');
+  const otherTarget = document.createElement('iframe');
+  otherTarget.src = dataDocument('cross-origin target 2');
+
+  const appendAndWait = frame => new Promise((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error(`initial iframe load timeout: ${frame.src}`)),
+      5000
+    );
+    frame.onload = () => {
+      clearTimeout(timeout);
+      resolve();
+    };
+    document.body.appendChild(frame);
+  });
+
+  const navigateAndWait = (frame, url) => new Promise((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error(`iframe navigation timeout: ${url}`)),
+      5000
+    );
+    frame.onload = () => {
+      clearTimeout(timeout);
+      resolve();
+    };
+    frame.src = url;
+  });
+
+  const errorShape = operation => {
+    try {
+      operation();
+      return null;
+    } catch (error) {
+      return {
+        name: error.name,
+        message: error.message,
+        string: String(error),
+        typeErrorInCallerRealm: error instanceof TypeError,
+        prototypeInCallerRealm:
+          Object.getPrototypeOf(error) === TypeError.prototype,
+      };
+    }
+  };
+
+  const functionShape = (func, expectedName, expectedLength) => ({
+    name: func.name,
+    length: func.length,
+    expectedName,
+    expectedLength,
+    callerFunctionPrototype:
+      Object.getPrototypeOf(func) === Function.prototype,
+    callerConstructor: func.constructor === Function,
+    callerInstanceof: func instanceof Function,
+    source: Function.prototype.toString.call(func),
+    ownKeys: Reflect.ownKeys(func).map(String),
+    nameDescriptor: Object.getOwnPropertyDescriptor(func, 'name'),
+    lengthDescriptor: Object.getOwnPropertyDescriptor(func, 'length'),
+    hasOwnPrototype:
+      Object.prototype.hasOwnProperty.call(func, 'prototype'),
+  });
+
+  try {
+    await Promise.all([
+      appendAndWait(helper),
+      appendAndWait(target),
+      appendAndWait(otherTarget),
+    ]);
+    window.__crossOriginFunctionIdentityFrames = {helper, target, otherTarget};
+
+    const helperWindow = helper.contentWindow;
+    const windowProxy = target.contentWindow;
+    const otherWindowProxy = otherTarget.contentWindow;
+
+    const method = windowProxy.postMessage;
+    const methodDescriptor =
+      Object.getOwnPropertyDescriptor(windowProxy, 'postMessage');
+    const windowDescriptor =
+      Object.getOwnPropertyDescriptor(windowProxy, 'window');
+    const locationDescriptor =
+      Object.getOwnPropertyDescriptor(windowProxy, 'location');
+    const replace = windowProxy.location.replace;
+    const replaceDescriptor =
+      Object.getOwnPropertyDescriptor(windowProxy.location, 'replace');
+    const hrefDescriptor =
+      Object.getOwnPropertyDescriptor(windowProxy.location, 'href');
+    // Location's IDL members are [LegacyUnforgeable] own properties in
+    // Chrome. The prototype fallback keeps this identity-focused fixture able
+    // to report callback differences while the ordinary Location own-property
+    // topology is tracked by the dedicated WebIDL descriptor fixture.
+    const ordinaryHrefDescriptor =
+      Object.getOwnPropertyDescriptor(location, 'href') ??
+      Object.getOwnPropertyDescriptor(Location.prototype, 'href');
+    const helperCapture =
+      helperWindow.captureCrossOriginSurface(windowProxy);
+
+    const initial = {
+      stableWindowProxy: windowProxy === target.contentWindow,
+
+      methodRepeated: method === windowProxy.postMessage,
+      methodIsDescriptorValue: method === methodDescriptor.value,
+      descriptorValueRepeated:
+        method === Object.getOwnPropertyDescriptor(
+          windowProxy,
+          'postMessage'
+        ).value,
+      methodSharedAcrossTargets:
+        method === otherWindowProxy.postMessage,
+      descriptorValueSharedAcrossTargets:
+        method === Object.getOwnPropertyDescriptor(
+          otherWindowProxy,
+          'postMessage'
+        ).value,
+      differsFromOrdinaryCallerMethod: method !== window.postMessage,
+
+      windowGetterRepeated:
+        windowDescriptor.get === Object.getOwnPropertyDescriptor(
+          windowProxy,
+          'window'
+        ).get,
+      windowGetterSharedAcrossTargets:
+        windowDescriptor.get === Object.getOwnPropertyDescriptor(
+          otherWindowProxy,
+          'window'
+        ).get,
+      locationGetterRepeated:
+        locationDescriptor.get === Object.getOwnPropertyDescriptor(
+          windowProxy,
+          'location'
+        ).get,
+      locationGetterSharedAcrossTargets:
+        locationDescriptor.get === Object.getOwnPropertyDescriptor(
+          otherWindowProxy,
+          'location'
+        ).get,
+      locationSetterRepeated:
+        locationDescriptor.set === Object.getOwnPropertyDescriptor(
+          windowProxy,
+          'location'
+        ).set,
+      locationSetterSharedAcrossTargets:
+        locationDescriptor.set === Object.getOwnPropertyDescriptor(
+          otherWindowProxy,
+          'location'
+        ).set,
+
+      replaceRepeated: replace === windowProxy.location.replace,
+      replaceIsDescriptorValue: replace === replaceDescriptor.value,
+      replaceSharedAcrossTargets:
+        replace === otherWindowProxy.location.replace,
+      replaceDiffersFromOrdinaryCallerMethod:
+        replace !== location.replace,
+      hrefSetterRepeated:
+        hrefDescriptor.set === Object.getOwnPropertyDescriptor(
+          windowProxy.location,
+          'href'
+        ).set,
+      hrefSetterSharedAcrossTargets:
+        hrefDescriptor.set === Object.getOwnPropertyDescriptor(
+          otherWindowProxy.location,
+          'href'
+        ).set,
+      hrefSetterDiffersFromOrdinaryCallerSetter:
+        hrefDescriptor.set !== ordinaryHrefDescriptor.set,
+
+      methodShape: functionShape(method, 'postMessage', 1),
+      windowGetterShape:
+        functionShape(windowDescriptor.get, 'get window', 0),
+      locationSetterShape:
+        functionShape(locationDescriptor.set, 'set location', 1),
+      replaceShape: functionShape(replace, 'replace', 1),
+      hrefSetterShape:
+        functionShape(hrefDescriptor.set, 'set href', 1),
+
+      correctTargetReceiver:
+        errorShape(() => method.call(windowProxy, {probe: 1}, '*')),
+      otherWindowReceiver:
+        errorShape(() => method.call(otherWindowProxy, {probe: 2}, '*')),
+      callerWindowReceiver:
+        errorShape(() => method.call(window, {probe: 3}, '*')),
+      directNoArguments: errorShape(() => method()),
+      nullReceiverNoArguments: errorShape(() => method.call(null)),
+      objectReceiverCall:
+        errorShape(() => method.call({}, {probe: 4}, '*')),
+      objectReceiverCallNoArguments:
+        errorShape(() => method.call({})),
+      objectReceiverApply:
+        errorShape(() => method.apply({}, [{probe: 5}, '*'])),
+      objectReceiverReflectApply:
+        errorShape(() => Reflect.apply(method, {}, [{probe: 6}, '*'])),
+      getterObjectReceiver:
+        errorShape(() => windowDescriptor.get.call({})),
+      getterNullResultIsCallerWindow:
+        windowDescriptor.get.call(null) === window,
+      replaceCorrectReceiverNoArguments:
+        errorShape(() => replace.call(windowProxy.location)),
+      replaceObjectReceiverNoArguments:
+        errorShape(() => replace.call({})),
+      replaceNullReceiverNoArguments:
+        errorShape(() => replace.call(null)),
+
+      helperMethodDistinct: helperCapture.method !== method,
+      helperDescriptorValueDistinct:
+        helperCapture.methodDescriptor.value !== methodDescriptor.value,
+      helperDescriptorMatchesHelperMethod:
+        helperCapture.methodDescriptor.value === helperCapture.method,
+      helperMethodPrototype:
+        Object.getPrototypeOf(helperCapture.method) ===
+          helperWindow.Function.prototype,
+      helperMethodNotCallerPrototype:
+        Object.getPrototypeOf(helperCapture.method) !== Function.prototype,
+      helperMethodConstructor:
+        helperCapture.method.constructor === helperWindow.Function,
+      helperMethodInstanceof:
+        helperCapture.method instanceof helperWindow.Function,
+      helperMethodNotCallerInstanceof:
+        !(helperCapture.method instanceof Function),
+      helperGetterPrototype:
+        Object.getPrototypeOf(helperCapture.windowDescriptor.get) ===
+          helperWindow.Function.prototype,
+      helperSetterPrototype:
+        Object.getPrototypeOf(helperCapture.locationDescriptor.set) ===
+          helperWindow.Function.prototype,
+      helperReplacePrototype:
+        Object.getPrototypeOf(helperCapture.locationReplace) ===
+          helperWindow.Function.prototype,
+      helperHrefSetterPrototype:
+        Object.getPrototypeOf(helperCapture.locationHrefDescriptor.set) ===
+          helperWindow.Function.prototype,
+      helperDescriptorObjectPrototype:
+        Object.getPrototypeOf(helperCapture.methodDescriptor) ===
+          helperWindow.Object.prototype,
+    };
+
+    await navigateAndWait(
+      target,
+      dataDocument('cross-origin target after navigation')
+    );
+    const crossToCross = {
+      stableWindowProxy: windowProxy === target.contentWindow,
+      methodStable: method === windowProxy.postMessage,
+      descriptorValueStable:
+        method === Object.getOwnPropertyDescriptor(
+          windowProxy,
+          'postMessage'
+        ).value,
+      windowGetterStable:
+        windowDescriptor.get === Object.getOwnPropertyDescriptor(
+          windowProxy,
+          'window'
+        ).get,
+      locationGetterStable:
+        locationDescriptor.get === Object.getOwnPropertyDescriptor(
+          windowProxy,
+          'location'
+        ).get,
+      locationSetterStable:
+        locationDescriptor.set === Object.getOwnPropertyDescriptor(
+          windowProxy,
+          'location'
+        ).set,
+      replaceStable: replace === windowProxy.location.replace,
+      hrefSetterStable:
+        hrefDescriptor.set === Object.getOwnPropertyDescriptor(
+          windowProxy.location,
+          'href'
+        ).set,
+      helperMethodStable:
+        helperCapture.method ===
+          helperWindow.captureCrossOriginSurface(windowProxy).method,
+    };
+
+    const sameOriginURL = new URL(
+      'support/cross_origin_function_identity_same.html',
+      location.href
+    ).href;
+    await navigateAndWait(target, sameOriginURL);
+    const sameOriginMethod = windowProxy.postMessage;
+    const sameOrigin = {
+      stableWindowProxy: windowProxy === target.contentWindow,
+      documentAccessible:
+        windowProxy.document.title ===
+          'same-origin WindowProxy function-identity target',
+      ordinaryMethodDiffers: sameOriginMethod !== method,
+      ordinaryMethodUsesTargetRealm:
+        Object.getPrototypeOf(sameOriginMethod) ===
+          windowProxy.Function.prototype,
+      ordinaryMethodDoesNotUseCallerRealm:
+        Object.getPrototypeOf(sameOriginMethod) !== Function.prototype,
+      name: sameOriginMethod.name,
+      length: sameOriginMethod.length,
+    };
+
+    await navigateAndWait(
+      target,
+      dataDocument('cross-origin target restored')
+    );
+    const crossRestored = {
+      stableWindowProxy: windowProxy === target.contentWindow,
+      methodRestored: method === windowProxy.postMessage,
+      descriptorValueRestored:
+        method === Object.getOwnPropertyDescriptor(
+          windowProxy,
+          'postMessage'
+        ).value,
+      windowGetterRestored:
+        windowDescriptor.get === Object.getOwnPropertyDescriptor(
+          windowProxy,
+          'window'
+        ).get,
+      locationGetterRestored:
+        locationDescriptor.get === Object.getOwnPropertyDescriptor(
+          windowProxy,
+          'location'
+        ).get,
+      locationSetterRestored:
+        locationDescriptor.set === Object.getOwnPropertyDescriptor(
+          windowProxy,
+          'location'
+        ).set,
+      replaceRestored: replace === windowProxy.location.replace,
+      hrefSetterRestored:
+        hrefDescriptor.set === Object.getOwnPropertyDescriptor(
+          windowProxy.location,
+          'href'
+        ).set,
+      helperMethodRestored:
+        helperCapture.method ===
+          helperWindow.captureCrossOriginSurface(windowProxy).method,
+    };
+
+    state.resolve({
+      setupError: null,
+      initial,
+      crossToCross,
+      sameOrigin,
+      crossRestored,
+    });
+  } catch (error) {
+    state.resolve({
+      setupError: `${error.name}: ${error.message}\n${error.stack}`,
+    });
+  }
+
+  await state.done(result => {
+    testing.expectEqual(null, result.setupError);
+
+    const initial = result.initial;
+    for (const key of [
+      'stableWindowProxy',
+      'methodRepeated',
+      'methodIsDescriptorValue',
+      'descriptorValueRepeated',
+      'methodSharedAcrossTargets',
+      'descriptorValueSharedAcrossTargets',
+      'differsFromOrdinaryCallerMethod',
+      'windowGetterRepeated',
+      'windowGetterSharedAcrossTargets',
+      'locationGetterRepeated',
+      'locationGetterSharedAcrossTargets',
+      'locationSetterRepeated',
+      'locationSetterSharedAcrossTargets',
+      'replaceRepeated',
+      'replaceIsDescriptorValue',
+      'replaceSharedAcrossTargets',
+      'replaceDiffersFromOrdinaryCallerMethod',
+      'hrefSetterRepeated',
+      'hrefSetterSharedAcrossTargets',
+      'hrefSetterDiffersFromOrdinaryCallerSetter',
+      'getterNullResultIsCallerWindow',
+      'helperMethodDistinct',
+      'helperDescriptorValueDistinct',
+      'helperDescriptorMatchesHelperMethod',
+      'helperMethodPrototype',
+      'helperMethodNotCallerPrototype',
+      'helperMethodConstructor',
+      'helperMethodInstanceof',
+      'helperMethodNotCallerInstanceof',
+      'helperGetterPrototype',
+      'helperSetterPrototype',
+      'helperReplacePrototype',
+      'helperHrefSetterPrototype',
+      'helperDescriptorObjectPrototype',
+    ]) {
+      testing.expectTrue(initial[key]);
+    }
+
+    const assertNativeFunctionShape = shape => {
+      testing.expectEqual(shape.expectedName, shape.name);
+      testing.expectEqual(shape.expectedLength, shape.length);
+      testing.expectTrue(shape.callerFunctionPrototype);
+      testing.expectTrue(shape.callerConstructor);
+      testing.expectTrue(shape.callerInstanceof);
+      testing.expectEqual(
+        `function ${shape.expectedName}() { [native code] }`,
+        shape.source
+      );
+      testing.expectEqual(['length', 'name'], shape.ownKeys);
+      testing.expectEqual({
+        value: shape.expectedName,
+        writable: false,
+        enumerable: false,
+        configurable: true,
+      }, shape.nameDescriptor);
+      testing.expectEqual({
+        value: shape.expectedLength,
+        writable: false,
+        enumerable: false,
+        configurable: true,
+      }, shape.lengthDescriptor);
+      testing.expectFalse(shape.hasOwnPrototype);
+    };
+    assertNativeFunctionShape(initial.methodShape);
+    assertNativeFunctionShape(initial.windowGetterShape);
+    assertNativeFunctionShape(initial.locationSetterShape);
+    assertNativeFunctionShape(initial.replaceShape);
+    assertNativeFunctionShape(initial.hrefSetterShape);
+
+    testing.expectEqual(null, initial.correctTargetReceiver);
+    testing.expectEqual(null, initial.otherWindowReceiver);
+    testing.expectEqual(null, initial.callerWindowReceiver);
+
+    const requiredArgumentMessage =
+      "Failed to execute 'postMessage' on 'Window': " +
+      '1 argument required, but only 0 present.';
+    for (const error of [
+      initial.directNoArguments,
+      initial.nullReceiverNoArguments,
+    ]) {
+      testing.expectEqual('TypeError', error.name);
+      testing.expectEqual(requiredArgumentMessage, error.message);
+      testing.expectEqual(`TypeError: ${requiredArgumentMessage}`, error.string);
+      testing.expectTrue(error.typeErrorInCallerRealm);
+      testing.expectTrue(error.prototypeInCallerRealm);
+    }
+
+    for (const error of [
+      initial.objectReceiverCall,
+      initial.objectReceiverCallNoArguments,
+      initial.objectReceiverApply,
+      initial.objectReceiverReflectApply,
+      initial.getterObjectReceiver,
+      initial.replaceObjectReceiverNoArguments,
+      initial.replaceNullReceiverNoArguments,
+    ]) {
+      testing.expectEqual('TypeError', error.name);
+      testing.expectEqual('Illegal invocation', error.message);
+      testing.expectEqual('TypeError: Illegal invocation', error.string);
+      testing.expectTrue(error.typeErrorInCallerRealm);
+      testing.expectTrue(error.prototypeInCallerRealm);
+    }
+
+    const replaceArgumentMessage =
+      "Failed to execute 'replace' on 'Location': " +
+      '1 argument required, but only 0 present.';
+    testing.expectEqual(
+      'TypeError',
+      initial.replaceCorrectReceiverNoArguments.name
+    );
+    testing.expectEqual(
+      replaceArgumentMessage,
+      initial.replaceCorrectReceiverNoArguments.message
+    );
+    testing.expectEqual(
+      `TypeError: ${replaceArgumentMessage}`,
+      initial.replaceCorrectReceiverNoArguments.string
+    );
+    testing.expectTrue(
+      initial.replaceCorrectReceiverNoArguments.typeErrorInCallerRealm
+    );
+    testing.expectTrue(
+      initial.replaceCorrectReceiverNoArguments.prototypeInCallerRealm
+    );
+
+    for (const value of Object.values(result.crossToCross)) {
+      testing.expectTrue(value);
+    }
+    testing.expectTrue(result.sameOrigin.stableWindowProxy);
+    testing.expectTrue(result.sameOrigin.documentAccessible);
+    testing.expectTrue(result.sameOrigin.ordinaryMethodDiffers);
+    testing.expectTrue(result.sameOrigin.ordinaryMethodUsesTargetRealm);
+    testing.expectTrue(
+      result.sameOrigin.ordinaryMethodDoesNotUseCallerRealm
+    );
+    testing.expectEqual('postMessage', result.sameOrigin.name);
+    testing.expectEqual(1, result.sameOrigin.length);
+    for (const value of Object.values(result.crossRestored)) {
+      testing.expectTrue(value);
+    }
+  });
+})().catch(error => testing.fail(`${error.name}: ${error.message}`));
+</script>

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=CanvasRenderingContext2D>
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+  testing.expectEqual(true, ctx instanceof CanvasRenderingContext2D);
+  // We can't really test this but let's try to call it at least.
+  ctx.fillRect(0, 0, 0, 0);
+}
+</script>
+
+<script id=CanvasRenderingContext2D#fillStyle>
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+
+  // Black by default.
+  testing.expectEqual(ctx.fillStyle, "#000000");
+  ctx.fillStyle = "red";
+  testing.expectEqual(ctx.fillStyle, "#ff0000");
+  ctx.fillStyle = "rebeccapurple";
+  testing.expectEqual(ctx.fillStyle, "#663399");
+  // No changes made if color is invalid.
+  ctx.fillStyle = "invalid-color";
+  testing.expectEqual(ctx.fillStyle, "#663399");
+  ctx.fillStyle = "#fc0";
+  testing.expectEqual(ctx.fillStyle, "#ffcc00");
+  ctx.fillStyle = "#ff0000";
+  testing.expectEqual(ctx.fillStyle, "#ff0000");
+  ctx.fillStyle = "#fF00000F";
+  testing.expectEqual(ctx.fillStyle, "rgba(255, 0, 0, 0.06)");
+}
+</script>
+
+<script id="CanvasRenderingContext2D#createImageData(width, height)">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+
+  const imageData = ctx.createImageData(100, 200);
+  testing.expectEqual(true, imageData instanceof ImageData);
+  testing.expectEqual(imageData.width, 100);
+  testing.expectEqual(imageData.height, 200);
+  testing.expectEqual(imageData.data.length, 100 * 200 * 4);
+  testing.expectEqual(true, imageData.data instanceof Uint8ClampedArray);
+
+  // All pixels should be initialized to 0.
+  testing.expectEqual(imageData.data[0], 0);
+  testing.expectEqual(imageData.data[1], 0);
+  testing.expectEqual(imageData.data[2], 0);
+  testing.expectEqual(imageData.data[3], 0);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#createImageData(imageData)">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+
+  const source = ctx.createImageData(50, 75);
+  const imageData = ctx.createImageData(source);
+  testing.expectEqual(true, imageData instanceof ImageData);
+  testing.expectEqual(imageData.width, 50);
+  testing.expectEqual(imageData.height, 75);
+  testing.expectEqual(imageData.data.length, 50 * 75 * 4);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#putImageData">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+
+  const imageData = ctx.createImageData(10, 10);
+  testing.expectEqual(true, imageData instanceof ImageData);
+  // Modify some pixel data.
+  imageData.data[0] = 255;
+  imageData.data[1] = 0;
+  imageData.data[2] = 0;
+  imageData.data[3] = 255;
+
+  // putImageData should not throw.
+  ctx.putImageData(imageData, 0, 0);
+  ctx.putImageData(imageData, 10, 20);
+  // With dirty rect parameters.
+  ctx.putImageData(imageData, 0, 0, 0, 0, 5, 5);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#getImageData">
+{
+  const element = document.createElement("canvas");
+  element.width = 100;
+  element.height = 50;
+  const ctx = element.getContext("2d");
+
+  const imageData = ctx.getImageData(0, 0, 10, 20);
+  testing.expectEqual(true, imageData instanceof ImageData);
+  testing.expectEqual(imageData.width, 10);
+  testing.expectEqual(imageData.height, 20);
+  testing.expectEqual(imageData.data.length, 10 * 20 * 4);
+  testing.expectEqual(true, imageData.data instanceof Uint8ClampedArray);
+
+  // Undrawn canvas should return transparent black pixels.
+  testing.expectEqual(imageData.data[0], 0);
+  testing.expectEqual(imageData.data[1], 0);
+  testing.expectEqual(imageData.data[2], 0);
+  testing.expectEqual(imageData.data[3], 0);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#getImageData invalid">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+
+  // Chrome throws only for a zero source dimension. Negative dimensions are
+  // normalized by moving the origin and taking the absolute value.
+  testing.expectError('Index or size', () => ctx.getImageData(0, 0, 0, 10));
+  testing.expectError('Index or size', () => ctx.getImageData(0, 0, 10, 0));
+  const normalized = ctx.getImageData(5, 10, -5, -10);
+  testing.expectEqual(5, normalized.width);
+  testing.expectEqual(10, normalized.height);
+  const created = ctx.createImageData(-5, -10);
+  testing.expectEqual(5, created.width);
+  testing.expectEqual(10, created.height);
+}
+</script>
+
+<script id="CanvasRenderingContext2D bitmap roundtrip">
+{
+  const canvas = document.createElement("canvas");
+  canvas.width = 2;
+  canvas.height = 1;
+  const ctx = canvas.getContext("2d");
+
+  ctx.fillStyle = "rgba(255, 0, 0, 0.5)";
+  ctx.fillRect(0, 0, 1, 1);
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = "blue";
+  ctx.fillRect(1, 0, 1, 1);
+  testing.expectEqual(
+    [255, 0, 0, 128, 0, 0, 255, 128],
+    Array.from(ctx.getImageData(0, 0, 2, 1).data),
+  );
+
+  ctx.clearRect(0, 0, 1, 1);
+  testing.expectEqual(
+    [0, 0, 0, 0, 0, 0, 255, 128],
+    Array.from(ctx.getImageData(0, 0, 2, 1).data),
+  );
+
+  const source = ctx.createImageData(2, 1);
+  source.data.set([1, 2, 3, 4, 5, 6, 7, 8]);
+  ctx.putImageData(source, -1, 0);
+  testing.expectEqual(
+    // Chrome stores Canvas pixels premultiplied. Low-alpha RGB therefore
+    // quantizes at the put/get ImageData boundary instead of round-tripping
+    // the original straight bytes.
+    [0, 0, 0, 8, 0, 0, 255, 128],
+    Array.from(ctx.getImageData(0, 0, 2, 1).data),
+  );
+}
+</script>
+
+<script id="CanvasRenderingContext2D resize reset">
+{
+  const canvas = document.createElement("canvas");
+  canvas.width = 2;
+  canvas.height = 1;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "red";
+  ctx.globalAlpha = 0.25;
+  ctx.lineWidth = 7;
+  ctx.lineCap = "round";
+  ctx.textAlign = "center";
+  ctx.fillRect(0, 0, 2, 1);
+
+  canvas.width = canvas.width;
+  testing.expectTrue(ctx === canvas.getContext("2d"));
+  testing.expectEqual("#000000", ctx.fillStyle);
+  testing.expectEqual(1, ctx.globalAlpha);
+  testing.expectEqual(1, ctx.lineWidth);
+  testing.expectEqual("butt", ctx.lineCap);
+  testing.expectEqual("start", ctx.textAlign);
+  testing.expectEqual(
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    Array.from(ctx.getImageData(0, 0, 2, 1).data),
+  );
+
+  for (const name of [
+    "font", "globalAlpha", "globalCompositeOperation", "strokeStyle",
+    "lineWidth", "lineCap", "lineJoin", "miterLimit", "textAlign", "textBaseline",
+  ]) {
+    const descriptor = Object.getOwnPropertyDescriptor(CanvasRenderingContext2D.prototype, name);
+    testing.expectEqual("function", typeof descriptor.get);
+    testing.expectEqual("function", typeof descriptor.set);
+    testing.expectEqual(true, descriptor.enumerable);
+    testing.expectEqual(true, descriptor.configurable);
+  }
+}
+</script>
+
+
+<script id="CanvasRenderingContext2D#canvas">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+  testing.expectEqual(ctx.canvas, element);
+  // Setting dimensions via ctx.canvas should update the element.
+  ctx.canvas.width = 40;
+  ctx.canvas.height = 25;
+  testing.expectEqual(element.width, 40);
+  testing.expectEqual(element.height, 25);
+}
+</script>
+
+<script id="getter">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+  testing.expectEqual('10px sans-serif', ctx.font);
+  ctx.font = 'bold 48px serif'
+  testing.expectEqual('bold 48px serif', ctx.font);
+
+}
+</script>
+
+<script id=identity>
+{
+  const element = document.createElement('canvas');
+  const ctx = element.getContext('2d');
+
+  testing.expectTrue(ctx === element.getContext('2d'));
+  testing.expectEqual(null, element.getContext('webgl'));
+}
+</script>
+
+<script id="CanvasRenderingContext2D state stack and attributes">
+{
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+
+  testing.expectEqual({
+    alpha: true,
+    colorSpace: 'srgb',
+    colorType: 'unorm8',
+    desynchronized: false,
+    toneMapping: {mode: 'standard'},
+    willReadFrequently: false,
+  }, ctx.getContextAttributes());
+  testing.expectFalse(ctx.isContextLost());
+
+  testing.expectEqual('ltr', ctx.direction);
+  testing.expectEqual('auto', ctx.fontKerning);
+  testing.expectEqual('normal', ctx.fontStretch);
+  testing.expectEqual('normal', ctx.fontVariantCaps);
+  testing.expectEqual('auto', ctx.textRendering);
+  testing.expectEqual('low', ctx.imageSmoothingQuality);
+  testing.expectEqual('rgba(0, 0, 0, 0)', ctx.shadowColor);
+  testing.expectTrue(ctx.imageSmoothingEnabled);
+  testing.expectEqual(0, ctx.shadowOffsetX);
+  testing.expectEqual(0, ctx.shadowOffsetY);
+  testing.expectEqual(0, ctx.shadowBlur);
+  testing.expectEqual(0, ctx.lineDashOffset);
+
+  ctx.direction = 'rtl';
+  ctx.fontKerning = 'none';
+  ctx.fontStretch = 'condensed';
+  ctx.fontVariantCaps = 'small-caps';
+  ctx.textRendering = 'optimizeLegibility';
+  ctx.imageSmoothingQuality = 'high';
+  ctx.shadowColor = 'red';
+  ctx.imageSmoothingEnabled = false;
+  ctx.shadowOffsetX = -2;
+  ctx.shadowOffsetY = 4;
+  ctx.shadowBlur = 3;
+  ctx.lineDashOffset = 1.5;
+  ctx.setLineDash([1, 2, 3]);
+  testing.expectEqual([1, 2, 3, 1, 2, 3], ctx.getLineDash());
+
+  ctx.fillStyle = 'red';
+  ctx.globalAlpha = 0.25;
+  ctx.lineWidth = 7;
+  ctx.save();
+  ctx.fillStyle = 'blue';
+  ctx.globalAlpha = 0.75;
+  ctx.lineWidth = 11;
+  ctx.shadowBlur = 9;
+  ctx.setLineDash([9, 8]);
+  ctx.restore();
+  testing.expectEqual('#ff0000', ctx.fillStyle);
+  testing.expectEqual(0.25, ctx.globalAlpha);
+  testing.expectEqual(7, ctx.lineWidth);
+  testing.expectEqual(3, ctx.shadowBlur);
+  testing.expectEqual([1, 2, 3, 1, 2, 3], ctx.getLineDash());
+
+  // Invalid enum/numeric/dash assignments are ignored as a whole.
+  ctx.direction = 'invalid';
+  ctx.shadowBlur = -1;
+  ctx.setLineDash([-1]);
+  testing.expectEqual('rtl', ctx.direction);
+  testing.expectEqual(3, ctx.shadowBlur);
+  testing.expectEqual([1, 2, 3, 1, 2, 3], ctx.getLineDash());
+
+  ctx.fillRect(0, 0, 1, 1);
+  ctx.reset();
+  testing.expectEqual('#000000', ctx.fillStyle);
+  testing.expectEqual(1, ctx.globalAlpha);
+  testing.expectEqual([], ctx.getLineDash());
+  testing.expectEqual(
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    Array.from(ctx.getImageData(0, 0, 2, 1).data),
+  );
+}
+</script>
+
+<script id="CanvasRenderingContext2D#drawImage">
+{
+  const ctx = document.createElement('canvas').getContext('2d');
+  const img = new Image();
+  const src = document.createElement('canvas');
+  // No-op, but must accept the (image, dx, dy), (image, dx, dy, dw, dh) and
+  // 9-arg overloads without throwing.
+  ctx.drawImage(img, 0, 0);
+  ctx.drawImage(src, 0, 0, 10, 10);
+  testing.expectEqual(undefined, ctx.drawImage(src, 0, 0, 10, 10, 0, 0, 10, 10));
+}
+</script>

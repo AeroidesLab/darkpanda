@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=visual_viewport>
+  const vp = window.visualViewport;
+  testing.expectEqual(vp, window.visualViewport);
+  testing.expectEqual(0, vp.offsetLeft);
+  testing.expectEqual(0, vp.offsetTop);
+  testing.expectEqual(0, vp.pageLeft);
+  testing.expectEqual(0, vp.pageTop);
+  const chrome149 = navigator.userAgentData.brands.some(
+    (entry) => entry.brand === 'Google Chrome',
+  );
+  testing.expectEqual(chrome149 ? 1280 : 1920, vp.width);
+  testing.expectEqual(chrome149 ? 720 : 1080, vp.height);
+  testing.expectEqual(innerWidth, vp.width);
+  testing.expectEqual(innerHeight, vp.height);
+  testing.expectEqual(1.0, vp.scale);
+</script>

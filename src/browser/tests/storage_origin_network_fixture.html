@@ -1,0 +1,14 @@
+<!doctype html>
+<script>
+  parent.postMessage({
+    kind: 'storage-origin-network-ready',
+    localValue: localStorage.getItem('domain-local'),
+    sessionValue: sessionStorage.getItem('domain-session'),
+  }, '*');
+
+  addEventListener('message', (message) => {
+    if (message.data?.command !== 'mutate-storage-origin') return;
+    localStorage.setItem('network-local', 'from-network-child');
+    sessionStorage.setItem('network-session', 'from-network-child');
+  });
+</script>

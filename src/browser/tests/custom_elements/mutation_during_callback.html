@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<body>
+<script src="../testing.js"></script>
+
+<!-- Custom-element reactions queue during outerHTML's algorithm and fire
+     at the boundary, not mid-loop. By the time connectedCallback runs,
+     insertAllChildrenBefore has already inserted every fragment child
+     and setOuterHTML has detached the original `target`, so the callback
+     sees the post-state — its check observes target already detached and
+     leaves the DOM untouched. -->
+<script id="outerHTML_callback_observes_post_state">
+{
+    let targetParentAtCallback = undefined;
+    class DetachTarget extends HTMLElement {
+        connectedCallback() {
+            const target = document.getElementById('outer_target');
+            targetParentAtCallback = target && target.parentNode;
+        }
+    }
+    customElements.define('detach-target-1', DetachTarget);
+
+    const wrap = document.createElement('div');
+    document.body.appendChild(wrap);
+
+    const target = document.createElement('span');
+    target.id = 'outer_target';
+    wrap.appendChild(target);
+
+    target.outerHTML = '<detach-target-1></detach-target-1><b id="second">x</b>';
+
+    // Both replacement children landed; the original target was removed
+    // before the queued connectedCallback ran.
+    testing.expectTrue(wrap.querySelector('detach-target-1') !== null);
+    testing.expectTrue(wrap.querySelector('#second') !== null);
+    testing.expectEqual(null, targetParentAtCallback);
+}
+</script>
+
+<!-- innerHTML removes existing children, then parses and inserts the
+     new content. With queued reactions, the disconnectedCallbacks for
+     the removed elements fire after the whole algorithm completes — so
+     they observe `host` already populated with the new content. -->
+<script id="innerHTML_disconnected_observes_post_state">
+{
+    let host;
+    let lastSeenChildCount = -1;
+    let lastSeenFirstTag = null;
+    class SiblingObserver extends HTMLElement {
+        disconnectedCallback() {
+            lastSeenChildCount = host.children.length;
+            lastSeenFirstTag = host.children.length > 0 ? host.children[0].tagName : null;
+        }
+    }
+    customElements.define('sibling-zapper-2', SiblingObserver);
+
+    host = document.createElement('div');
+    document.body.appendChild(host);
+
+    host.appendChild(document.createElement('sibling-zapper-2'));
+    host.appendChild(document.createElement('sibling-zapper-2'));
+    host.appendChild(document.createElement('span'));
+
+    host.innerHTML = '<i>after</i>';
+
+    // The disconnectedCallback fires after innerHTML completes; by then
+    // the new <i> is already in place.
+    testing.expectEqual(1, host.children.length);
+    testing.expectEqual('I', host.children[0].tagName);
+    testing.expectEqual(1, lastSeenChildCount);
+    testing.expectEqual('I', lastSeenFirstTag);
+}
+</script>
+</body>
+</html>

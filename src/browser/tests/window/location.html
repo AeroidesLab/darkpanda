@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=location>
+  const locationTestBase = testing.BASE_URL + 'window/location.html' + location.search;
+  testing.expectEqual(locationTestBase, window.location.href);
+  testing.expectEqual(document.location, window.location);
+</script>
+
+<script id=location_hash>
+  const initialLocation = location;
+  location.hash = "#abcdef";
+  testing.expectEqual(initialLocation, location);
+  testing.expectEqual("#abcdef", location.hash);
+  testing.expectEqual(locationTestBase + '#abcdef', location.href);
+
+  location.hash = "";
+  testing.expectEqual("", location.hash);
+  testing.expectEqual(locationTestBase + '#', location.href);
+
+  location.hash = "xyzxyz";
+  testing.expectEqual("#xyzxyz", location.hash);
+  testing.expectEqual(locationTestBase + '#xyzxyz', location.href);
+
+  // Blink canonicalizes and compares the fragment before navigating. Setting
+  // the already-current fragment is a complete no-op (and must not reload this
+  // test document on the next event-loop turn).
+  const sameFragmentHref = location.href;
+  location.hash = "#xyzxyz";
+  testing.expectEqual(sameFragmentHref, location.href);
+
+  location.hash = "";
+  testing.expectEqual("", location.hash);
+  testing.expectEqual(locationTestBase + '#', location.href);
+
+  location.hash = "#";
+  testing.expectEqual(locationTestBase + '#', location.href);
+</script>
+
+<script id=location_pathname_setter>
+  testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(location, 'pathname').set);
+</script>
+
+<script id=location_search_setter>
+  testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(location, 'search').set);
+</script>
+
+<div id="sec1"></div>
+<div id="sec2"></div>
+
+<script id=location_target>
+  // :target must reflect the current Location URL while same-document
+  // fragment navigation preserves the Location platform-object identity.
+  const sec1 = document.getElementById('sec1');
+  const sec2 = document.getElementById('sec2');
+
+  location.hash = "#sec1";
+  testing.expectEqual(true, sec1.matches(':target'));
+  testing.expectEqual(false, sec2.matches(':target'));
+
+  // Navigate to a new fragment: :target must follow the new location.
+  location.hash = "#sec2";
+  testing.expectEqual(false, sec1.matches(':target'));
+  testing.expectEqual(true, sec2.matches(':target'));
+
+  // No fragment -> nothing is :target.
+  location.hash = "";
+  testing.expectEqual(false, sec1.matches(':target'));
+  testing.expectEqual(false, sec2.matches(':target'));
+</script>
+
+<script id=location_fragment_churn>
+  // Hammer same-document fragment navigation. The stable Location object must
+  // track the current URL throughout.
+  const stableLocation = location;
+  for (let i = 0; i < 50; i++) {
+    location.hash = "#h" + i;
+    testing.expectEqual(stableLocation, location);
+    testing.expectEqual("#h" + i, location.hash);
+  }
+  location.hash = "";
+  testing.expectEqual("", location.hash);
+</script>

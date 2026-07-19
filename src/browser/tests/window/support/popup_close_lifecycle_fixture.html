@@ -1,0 +1,85 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Popup close lifecycle fixture</title>
+<script>
+  window.addEventListener('load', () => {
+    // Run in a task after load so this is a fully active popup Document, not
+    // the initial empty Document created synchronously by window.open().
+    setTimeout(() => {
+      const state = window.opener.__popupCloseLifecycleState;
+      const popupDocument = document;
+      const storageKey = 'darkpanda-popup-close-lifecycle-probe';
+
+      const record = label => event => {
+        state.events.push(label);
+        const timerId = setTimeout(
+          () => state.events.push(`discarded-timer:${label}`),
+          0,
+        );
+        queueMicrotask(() => state.events.push(`micro:${label}`));
+
+        let storage = 'available';
+        if (label === 'visibility-property') {
+          localStorage.setItem(storageKey, 'ok');
+          storage = localStorage.getItem(storageKey);
+          localStorage.removeItem(storageKey);
+        } else {
+          // Access, not the current length, is the lifecycle assertion.
+          void localStorage.length;
+        }
+
+        state.snapshots.push({
+          label,
+          type: event.type,
+          trusted: event.isTrusted,
+          persisted: event.persisted,
+          target: event.target === popupDocument,
+          currentTarget:
+            event.currentTarget === window ? 'window' :
+            event.currentTarget === popupDocument ? 'document' : 'other',
+          phase: event.eventPhase,
+          bubbles: event.bubbles,
+          cancelable: event.cancelable,
+          composed: event.composed,
+          closed: window.closed,
+          parent: window.parent === window,
+          top: window.top === window,
+          opener: window.opener !== null,
+          frameElement: window.frameElement === null,
+          defaultView: popupDocument.defaultView === window,
+          hidden: popupDocument.hidden,
+          visibilityState: popupDocument.visibilityState,
+          storage,
+          timerId,
+        });
+      };
+
+      // Property handlers establish their listener-list positions before the
+      // corresponding addEventListener registrations.
+      popupDocument.onvisibilitychange = record('visibility-property');
+      popupDocument.addEventListener(
+        'visibilitychange',
+        record('visibility-listener'),
+      );
+      window.addEventListener(
+        'visibilitychange',
+        record('visibility-window-capture'),
+        true,
+      );
+      window.onpagehide = record('pagehide-property');
+      window.addEventListener('pagehide', record('pagehide-listener'));
+      window.onunload = record('unload-property');
+      window.addEventListener('unload', record('unload-listener'));
+
+      window.close();
+      state.events.push('after-close');
+      state.afterClose = {
+        closed: window.closed,
+        hidden: popupDocument.hidden,
+        visibilityState: popupDocument.visibilityState,
+        defaultView: popupDocument.defaultView,
+      };
+      state.done = true;
+    }, 0);
+  }, { once: true });
+</script>

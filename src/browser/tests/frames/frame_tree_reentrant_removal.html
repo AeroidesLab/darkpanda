@@ -1,0 +1,78 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="subtree_removal_reentrant_descendant_iframe_context_chrome149" type="module">
+{
+  const state = await testing.async();
+  const events = [];
+  const wrapper = document.createElement('div');
+  const slow = document.createElement('iframe');
+  // Keep the parent Document's load event waiting on this first browsing
+  // context. Removing it completes parent load synchronously from inside
+  // ChildFrameDisconnector, before the wrapper itself is unlinked.
+  slow.src = '../runner/runner1.html?delay_ms=500';
+  const victim = document.createElement('iframe');
+  wrapper.append(slow, victim);
+  document.body.appendChild(wrapper);
+
+  const slowWindow = slow.contentWindow;
+  const oldVictimWindow = victim.contentWindow;
+  events.push(`installed|frames=${window.length}|wrapper=${wrapper.isConnected}`);
+  window.addEventListener('load', () => {
+    events.push(
+      `window-load|wrapper=${wrapper.isConnected}` +
+      `|victimParent=${victim.parentNode === wrapper}` +
+      `|oldClosed=${oldVictimWindow.closed}` +
+      `|same=${oldVictimWindow === victim.contentWindow}` +
+      `|slowNull=${slow.contentWindow === null}` +
+      `|slowClosed=${slowWindow.closed}` +
+      `|slowSame=${slowWindow === slow.contentWindow}` +
+      `|frames=${window.length}`
+    );
+    if (victim.parentNode === wrapper) {
+      events.push('move-begin');
+      document.body.appendChild(victim);
+      events.push(
+        `move-end|wrapper=${wrapper.isConnected}` +
+        `|connected=${victim.isConnected}` +
+        `|oldClosed=${oldVictimWindow.closed}` +
+        `|same=${oldVictimWindow === victim.contentWindow}` +
+        `|slowNull=${slow.contentWindow === null}` +
+        `|slowClosed=${slowWindow.closed}` +
+        `|slowSame=${slowWindow === slow.contentWindow}` +
+        `|frames=${window.length}`
+      );
+    }
+  }, {once: true});
+
+  setTimeout(() => {
+    events.push(`remove-begin|frames=${window.length}`);
+    wrapper.remove();
+    events.push(
+      `remove-end|victimParent=${victim.parentNode === wrapper}` +
+      `|connected=${victim.isConnected}` +
+      `|oldClosed=${oldVictimWindow.closed}` +
+      `|same=${oldVictimWindow === victim.contentWindow}` +
+      `|slowNull=${slow.contentWindow === null}` +
+      `|slowClosed=${slowWindow.closed}` +
+      `|slowSame=${slowWindow === slow.contentWindow}` +
+      `|frames=${window.length}`
+    );
+    state.resolve(events);
+  }, 10);
+
+  await state.done(actual => {
+    testing.expectEqual([
+      'installed|frames=2|wrapper=true',
+      'remove-begin|frames=2',
+      'window-load|wrapper=true|victimParent=true|oldClosed=false|same=true|slowNull=false|slowClosed=false|slowSame=true|frames=2',
+      'move-begin',
+      'move-end|wrapper=true|connected=true|oldClosed=true|same=false|slowNull=false|slowClosed=false|slowSame=true|frames=2',
+      'remove-end|victimParent=false|connected=true|oldClosed=true|same=false|slowNull=true|slowClosed=true|slowSame=false|frames=1',
+    ], actual);
+    victim.remove();
+  });
+}
+</script>

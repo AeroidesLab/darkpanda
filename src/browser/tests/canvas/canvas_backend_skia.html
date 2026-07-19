@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="Skia surface and Chrome149 ImageData boundary">
+{
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+
+  testing.expectEqual(
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    Array.from(ctx.getImageData(0, 0, 2, 1).data),
+  );
+
+  const cases = [
+    [[1, 2, 3, 0], [0, 0, 0, 0]],
+    [[255, 1, 128, 1], [255, 0, 255, 1]],
+    [[1, 128, 255, 2], [0, 128, 255, 2]],
+    [[127, 128, 129, 3], [85, 170, 170, 3]],
+    [[17, 99, 201, 7], [0, 109, 219, 7]],
+    [[254, 128, 1, 128], [253, 128, 2, 128]],
+    [[1, 127, 255, 254], [1, 128, 255, 254]],
+  ];
+  for (const [input, expected] of cases) {
+    const data = ctx.createImageData(1, 1);
+    data.data.set(input);
+    ctx.putImageData(data, 0, 0);
+    testing.expectEqual(
+      expected,
+      Array.from(ctx.getImageData(0, 0, 1, 1).data),
+    );
+  }
+
+  ctx.reset();
+  ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
+  ctx.fillRect(0, 0, 1, 1);
+  ctx.fillStyle = 'rgb(0, 0, 255)';
+  ctx.globalAlpha = 0.5;
+  ctx.fillRect(1, 0, 1, 1);
+  testing.expectEqual(
+    [255, 0, 0, 128, 0, 0, 255, 128],
+    Array.from(ctx.getImageData(0, 0, 2, 1).data),
+  );
+
+  // Chrome149 clearRect is not edge-antialiased: a quarter-pixel clear leaves
+  // the pixel untouched, while an edge at the pixel centre clears it.
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = 'rgb(17, 99, 201)';
+  ctx.fillRect(0, 0, 1, 1);
+  ctx.clearRect(0, 0, 0.25, 1);
+  testing.expectEqual(
+    [17, 99, 201, 255],
+    Array.from(ctx.getImageData(0, 0, 1, 1).data),
+  );
+  ctx.clearRect(0, 0, 0.5, 1);
+  testing.expectEqual(
+    [0, 0, 0, 0],
+    Array.from(ctx.getImageData(0, 0, 1, 1).data),
+  );
+}
+</script>

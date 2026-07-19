@@ -1,0 +1,56 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+<body>
+
+<script id="stylesheetlist_chrome149_prototype_and_item">
+{
+    const label = key => typeof key === 'symbol' ? key.toString() : key;
+    testing.expectEqual(
+        [
+            'length', 'item', 'constructor',
+            'Symbol(Symbol.toStringTag)', 'Symbol(Symbol.iterator)',
+        ],
+        Reflect.ownKeys(StyleSheetList.prototype).map(label),
+    );
+
+    const itemDescriptor = Object.getOwnPropertyDescriptor(StyleSheetList.prototype, 'item');
+    testing.expectEqual('function', typeof itemDescriptor.value);
+    testing.expectEqual(1, itemDescriptor.value.length);
+    testing.expectEqual(true, itemDescriptor.writable);
+    testing.expectEqual(true, itemDescriptor.enumerable);
+    testing.expectEqual(true, itemDescriptor.configurable);
+
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(StyleSheetList.prototype, 'length');
+    testing.expectEqual('function', typeof lengthDescriptor.get);
+    testing.expectEqual(undefined, lengthDescriptor.set);
+    testing.expectEqual(true, lengthDescriptor.enumerable);
+    testing.expectEqual(true, lengthDescriptor.configurable);
+
+    const iteratorDescriptor = Object.getOwnPropertyDescriptor(
+        StyleSheetList.prototype,
+        Symbol.iterator,
+    );
+    testing.expectEqual('function', typeof iteratorDescriptor.value);
+    testing.expectEqual('values', iteratorDescriptor.value.name);
+    testing.expectEqual(0, iteratorDescriptor.value.length);
+    testing.expectTrue(iteratorDescriptor.value === Array.prototype.values);
+    testing.expectEqual(true, iteratorDescriptor.writable);
+    testing.expectEqual(false, iteratorDescriptor.enumerable);
+    testing.expectEqual(true, iteratorDescriptor.configurable);
+
+    const host = document.createElement('div');
+    const root = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+    const style = document.createElement('style');
+    root.appendChild(style);
+    const sheets = root.styleSheets;
+    testing.expectTrue(sheets.item(0) === sheets[0]);
+    testing.expectEqual(null, sheets.item(1));
+    testing.expectEqual(undefined, sheets[1]);
+    testing.expectTrue(Array.from(sheets)[0] === sheets[0]);
+    host.remove();
+}
+</script>
+
+</body>

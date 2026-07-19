@@ -1,0 +1,39 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>V8 task and stack differential fixture</title>
+<script>
+  window.__v8TaskStackProbe = (() => {
+    function outerFrame() {
+      return innerFrame();
+    }
+
+    function innerFrame() {
+      return new Error('fixture').stack;
+    }
+
+    let syntaxError;
+    try {
+      eval('function {');
+    } catch (error) {
+      syntaxError = {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+      };
+    }
+
+    const order = [];
+    queueMicrotask(() => order.push('queueMicrotask'));
+    Promise.resolve().then(() => order.push('promise'));
+    order.push('script');
+
+    return new Promise(resolve => setTimeout(() => {
+      order.push('timeout');
+      resolve({
+        stack: outerFrame(),
+        syntaxError,
+        order,
+      });
+    }, 0));
+  })();
+</script>

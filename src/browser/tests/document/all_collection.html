@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test Page</title>
+</head>
+<body>
+  <div id="first">First</div>
+  <span name="second">Second</span>
+  <p id="third">Third</p>
+  <a href="#" name="link">Link</a>
+  <script src="../testing.js"></script>
+  <script id=all_collection>
+    testing.expectEqual('undefined', typeof document.all);
+    testing.expectEqual('HTMLAllCollection', document.all.constructor.name);
+    testing.expectEqual(true, document.all == null);
+    testing.expectEqual(true, document.all == undefined);
+    testing.expectEqual(false, document.all === undefined);
+    testing.expectEqual(true, !document.all);
+    testing.expectEqual(false, !!document.all);
+    testing.expectTrue(document.all === document.all);
+    testing.expectTrue(Object.hasOwn(Document.prototype, 'all'));
+    testing.expectFalse(Object.hasOwn(HTMLDocument.prototype, 'all'));
+
+    testing.expectEqual(10, document.all.length);
+
+    testing.expectEqual('HTML', document.all[0].tagName);
+    testing.expectEqual('HEAD', document.all[1].tagName);
+    testing.expectEqual('TITLE', document.all[2].tagName);
+    testing.expectEqual('BODY', document.all[3].tagName);
+    testing.expectEqual('DIV', document.all[4].tagName);
+
+    testing.expectEqual('DIV', document.all.first.tagName);
+    testing.expectEqual('First', document.all.first.textContent);
+    testing.expectEqual('P', document.all.third.tagName);
+    testing.expectEqual('Third', document.all.third.textContent);
+
+    // A span's name attribute is not in document.all's historical allow-list.
+    testing.expectEqual(undefined, document.all.second);
+    testing.expectEqual('A', document.all.link.tagName);
+
+    testing.expectEqual('SPAN', document.all.item(5).tagName);
+    testing.expectEqual(null, document.all.item(999));
+    testing.expectEqual(null, document.all.item(-1));
+
+    testing.expectEqual('DIV', document.all.namedItem('first').tagName);
+    testing.expectEqual(null, document.all.namedItem('second'));
+    testing.expectEqual(null, document.all.namedItem('nonexistent'));
+
+    // Test callable functionality: document.all(index) and document.all(name)
+    testing.expectEqual('HTML', document.all(0).tagName);
+    testing.expectEqual('HEAD', document.all(1).tagName);
+    testing.expectEqual('DIV', document.all(4).tagName);
+    testing.expectEqual('DIV', document.all('first').tagName);
+    testing.expectEqual('First', document.all('first').textContent);
+    testing.expectEqual(null, document.all('second'));
+    testing.expectEqual('P', document.all('third').tagName);
+    testing.expectEqual(null, document.all(999));
+    testing.expectEqual(null, document.all('nonexistent'));
+
+    // Chrome's indexed properties are enumerable readonly data descriptors;
+    // legacy named properties are readonly but deliberately unenumerable.
+    const indexDescriptor = Object.getOwnPropertyDescriptor(document.all, '0');
+    testing.expectEqual(false, indexDescriptor.writable);
+    testing.expectEqual(true, indexDescriptor.enumerable);
+    testing.expectEqual(true, indexDescriptor.configurable);
+    const namedDescriptor = Object.getOwnPropertyDescriptor(document.all, 'first');
+    testing.expectEqual(false, namedDescriptor.writable);
+    testing.expectEqual(false, namedDescriptor.enumerable);
+    testing.expectEqual(true, namedDescriptor.configurable);
+    testing.expectTrue(Object.getOwnPropertyNames(document.all).includes('first'));
+    testing.expectFalse(Object.keys(document.all).includes('first'));
+
+    // Legacy platform objects report configurable descriptors but reject
+    // deletion and do not support indexed/named setters or definers.
+    testing.expectFalse(delete document.all[0]);
+    testing.expectEqual('HTML', document.all[0].tagName);
+    testing.expectFalse(delete document.all.first);
+    testing.expectEqual('DIV', document.all.first.tagName);
+    document.all[0] = 123;
+    testing.expectEqual('HTML', document.all[0].tagName);
+    testing.expectError('property setter is not supported', () => {
+      Object.defineProperty(document.all, '0', { value: 123 });
+    });
+    testing.expectError('property setter is not supported', () => {
+      Object.defineProperty(document.all, 'first', { value: 123 });
+    });
+    testing.expectError('property setter is not supported', () => {
+      (function () { 'use strict'; document.all[0] = 123; })();
+    });
+
+    // V8 distinguishes silent-failure callers (sloppy assignment/Reflect)
+    // from throwing callers (strict assignment/Object.defineProperty).
+    testing.withError(error => {
+      testing.expectEqual(
+        "Failed to set an indexed property [0] on 'HTMLAllCollection': Indexed property setter is not supported.",
+        error.message,
+      );
+    }, () => (function () { 'use strict'; document.all[0] = 123; })());
+    testing.withError(error => {
+      testing.expectEqual(
+        "Failed to set a named property 'first' on 'HTMLAllCollection': Named property setter is not supported.",
+        error.message,
+      );
+    }, () => (function () { 'use strict'; document.all.first = 123; })());
+    testing.withError(error => {
+      testing.expectEqual(
+        "Failed to delete an indexed property [0] from 'HTMLAllCollection': Index property deleter is not supported.",
+        error.message,
+      );
+    }, () => (function () { 'use strict'; delete document.all[0]; })());
+    testing.withError(error => {
+      testing.expectEqual(
+        "Failed to delete a named property 'first' from 'HTMLAllCollection': Named property deleter is not supported.",
+        error.message,
+      );
+    }, () => (function () { 'use strict'; delete document.all.first; })());
+    testing.withError(error => {
+      testing.expectEqual(
+        "Failed to set an indexed property [0] on 'HTMLAllCollection': Accessor properties are not allowed.",
+        error.message,
+      );
+    }, () => Object.defineProperty(document.all, '0', { get() { return 123; } }));
+
+    testing.expectFalse(Reflect.deleteProperty(document.all, '0'));
+    testing.expectFalse(Reflect.deleteProperty(document.all, 'first'));
+    testing.expectTrue(Reflect.defineProperty(document.all, '0', { value: 123 }));
+    testing.expectEqual('HTML', document.all[0].tagName);
+    testing.expectTrue(Reflect.defineProperty(document.all, 'first', { value: 123 }));
+    testing.expectEqual('DIV', document.all.first.tagName);
+
+    // An indexed setter/definer intercepts even an unsupported index, while
+    // an unsupported named property follows the ordinary object algorithm.
+    document.all[999] = 123;
+    testing.expectEqual(undefined, document.all[999]);
+    testing.withError(error => {
+      testing.expectEqual(
+        "Failed to set an indexed property [999] on 'HTMLAllCollection': Indexed property setter is not supported.",
+        error.message,
+      );
+    }, () => (function () { 'use strict'; document.all[999] = 123; })());
+    document.all.ordinaryOwnProperty = 456;
+    testing.expectEqual(456, document.all.ordinaryOwnProperty);
+    testing.expectTrue(delete document.all.ordinaryOwnProperty);
+
+    testing.expectEqual(null, document.all());
+    testing.expectEqual(null, document.all.item());
+    testing.expectEqual(0, document.all.item.length);
+    testing.expectEqual(1, document.all.namedItem.length);
+    testing.withError(error => {
+      testing.expectEqual(
+        "Failed to execute 'namedItem' on 'HTMLAllCollection': Cannot convert a Symbol value to a string",
+        error.message,
+      );
+      testing.expectEqual(
+        'TypeError: Cannot convert a Symbol value to a string',
+        error.stack.split('\n')[0],
+      );
+      const descriptor = Object.getOwnPropertyDescriptor(error, 'message');
+      testing.expectTrue(descriptor.writable);
+      testing.expectTrue(descriptor.enumerable);
+      testing.expectTrue(descriptor.configurable);
+    }, () => document.all.namedItem(Symbol('name')));
+
+    const hiddenName = document.createElement('section');
+    hiddenName.setAttribute('name', 'notVisibleByName');
+    hiddenName.id = 'stillVisibleById';
+    document.body.append(hiddenName);
+    testing.expectEqual(null, document.all.namedItem('notVisibleByName'));
+    testing.expectEqual(hiddenName, document.all.namedItem('stillVisibleById'));
+
+    const duplicate = document.createElement('form');
+    duplicate.name = 'first';
+    document.body.append(duplicate);
+    testing.expectEqual('HTMLCollection', document.all.first.constructor.name);
+    testing.expectEqual(2, document.all.first.length);
+    testing.expectTrue(document.all.first === document.all.first);
+
+    let count = 0;
+    for (const el of document.all) {
+      count++;
+    }
+    testing.expectEqual(12, count);
+
+    const plainDoc = new Document();
+    testing.expectEqual('undefined', typeof plainDoc.all);
+    testing.expectTrue(plainDoc.all === plainDoc.all);
+    testing.expectEqual(0, plainDoc.all.length);
+  </script>
+</body>
+</html>

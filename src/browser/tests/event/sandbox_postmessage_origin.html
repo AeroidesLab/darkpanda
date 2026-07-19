@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="sandbox_postmessage_security_origin" type="module">
+{
+  const state = await testing.async();
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('sandbox', 'allow-scripts');
+  testing.expectTrue(iframe.sandbox instanceof DOMTokenList);
+  testing.expectTrue(iframe.sandbox.contains('allow-scripts'));
+
+  let readyEvent = null;
+  const echoes = [];
+  const onMessage = event => {
+    if (event.data?.kind === 'sandbox-ready') {
+      readyEvent = event;
+
+      // The child's Location URL still has this tuple, but its committed
+      // SecurityOrigin is opaque.  An explicit tuple target must not match.
+      iframe.contentWindow.postMessage(
+        {kind: 'sandbox-command', value: 'tuple-target'},
+        testing.ORIGIN,
+      );
+      iframe.contentWindow.postMessage(
+        {kind: 'sandbox-command', value: 'wildcard-target'},
+        '*',
+      );
+      return;
+    }
+
+    if (event.data?.kind !== 'sandbox-echo') return;
+    echoes.push(event.data.value);
+    if (event.data.value === 'wildcard-target') {
+      window.removeEventListener('message', onMessage);
+      state.resolve();
+    }
+  };
+  window.addEventListener('message', onMessage);
+
+  iframe.src = testing.BASE_URL + 'event/support/sandbox_postmessage_sender.html';
+  document.documentElement.appendChild(iframe);
+
+  await state.done(() => {
+    testing.expectFalse(readyEvent === null);
+    testing.expectEqual('null', readyEvent.origin);
+    testing.expectTrue(readyEvent.source === iframe.contentWindow);
+    testing.expectEqual('null', readyEvent.data.windowOrigin);
+    testing.expectEqual(testing.ORIGIN, readyEvent.data.locationOrigin);
+    testing.expectTrue(readyEvent.data.blobURL.startsWith('blob:null/'));
+    testing.expectEqual('SecurityError', readyEvent.data.idbError?.name);
+    testing.expectEqual({
+      name: 'SecurityError',
+      message: "Failed to read the 'localStorage' property from 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag.",
+      code: 18,
+    }, readyEvent.data.localStorageError);
+    testing.expectEqual({
+      name: 'SecurityError',
+      message: "Failed to read the 'sessionStorage' property from 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag.",
+      code: 18,
+    }, readyEvent.data.sessionStorageError);
+    testing.expectEqual({
+      name: 'SecurityError',
+      message: "Failed to read the 'cookie' property from 'Document': The document is sandboxed and lacks the 'allow-same-origin' flag.",
+      code: 18,
+    }, readyEvent.data.cookieGetError);
+    testing.expectEqual({
+      name: 'SecurityError',
+      message: "Failed to set the 'cookie' property on 'Document': The document is sandboxed and lacks the 'allow-same-origin' flag.",
+      code: 18,
+    }, readyEvent.data.cookieSetError);
+    testing.expectEqual({
+      name: 'SecurityError',
+      message: "Failed to execute 'get' on 'CookieStore': Access to the CookieStore API is denied in this context.",
+      code: 18,
+    }, readyEvent.data.cookieStoreGetError);
+    testing.expectEqual({
+      name: 'SecurityError',
+      message: "Failed to execute 'set' on 'CookieStore': Access to the CookieStore API is denied in this context.",
+      code: 18,
+    }, readyEvent.data.cookieStoreSetError);
+    testing.expectEqual(['wildcard-target'], echoes);
+  });
+}
+</script>

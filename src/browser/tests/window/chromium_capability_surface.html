@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!--
+  Keep the generic capability bundle internally coherent.  These are browser
+  primitives that are commonly consumed together; a single missing member is
+  more observable than an unsupported feature reported consistently.
+-->
+<script id="Chromium capability surface">
+{
+  testing.expectEqual('function', typeof Worker);
+  testing.expectEqual('function', typeof Blob);
+  testing.expectEqual('function', typeof URL.createObjectURL);
+  testing.expectEqual('function', typeof URL.revokeObjectURL);
+  testing.expectEqual('function', typeof Worker.prototype.terminate);
+  testing.expectEqual('function', typeof ReadableStream.prototype.pipeTo);
+  testing.expectEqual('function', typeof BigInt);
+  testing.expectEqual('object', typeof crypto);
+  testing.expectEqual('function', typeof crypto.getRandomValues);
+  testing.expectEqual('object', typeof performance);
+  testing.expectEqual('function', typeof performance.getEntries);
+  testing.expectEqual('function', typeof PerformanceObserver);
+
+  const nativeSource = Function.prototype.toString.call(Object.getOwnPropertyNames);
+  testing.expectEqual(
+    'function getOwnPropertyNames() { [native code] }',
+    nativeSource,
+  );
+
+  // A non-touch desktop must report the whole bundle consistently.
+  testing.expectFalse('ontouchstart' in window);
+  testing.expectEqual(0, navigator.maxTouchPoints);
+
+  const workerUrl = URL.createObjectURL(new Blob([
+    '"you" === "bot"',
+  ], {type: 'text/javascript'}));
+  const worker = new Worker(workerUrl);
+  URL.revokeObjectURL(workerUrl);
+  worker.terminate();
+}
+</script>

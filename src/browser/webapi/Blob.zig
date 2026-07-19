@@ -1,0 +1,447 @@
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+const std = @import("std");
+const lp = @import("darkpanda");
+
+const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
+
+const Mime = @import("../Mime.zig");
+
+const Writer = std.Io.Writer;
+const Execution = js.Execution;
+const Allocator = std.mem.Allocator;
+
+/// https://w3c.github.io/FileAPI/#blob-section
+/// https://developer.mozilla.org/en-US/docs/Web/API/Blob
+const Blob = @This();
+
+pub const _prototype_root = true;
+
+// Each global keeps the keys it minted so its live URLs can be revoked when
+// that global is destroyed. Resolution is page-wide because object URLs are
+// usable by other globals in the same agent cluster (for example, a URL made
+// in a DedicatedWorker and consumed by its owning Window).
+pub const OwnedURLSet = std.StringHashMapUnmanaged(void);
+pub const URLRegistry = struct {
+    allocator: Allocator,
+    mutex: std.Thread.Mutex = .{},
+    map: std.StringHashMapUnmanaged(*Blob) = .empty,
+
+    pub fn init(allocator: Allocator) URLRegistry {
+        return .{ .allocator = allocator };
+    }
+
+    // The registry is shared by Window and DedicatedWorker agents. Keep the
+    // key, map mutation, and registry-owned Blob reference in one critical
+    // section so another agent can never observe a map entry without its
+    // corresponding strong reference.
+    pub fn register(self: *URLRegistry, url: []const u8, blob: *Blob) !void {
+        const registry_url = try self.allocator.dupe(u8, url);
+        errdefer self.allocator.free(registry_url);
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        try self.map.putNoClobber(self.allocator, registry_url, blob);
+        blob.acquireRef();
+    }
+
+    // Returns a strong reference. The caller must pair every non-null result
+    // with Blob.releaseRef after it has finished consuming the Blob.
+    pub fn acquire(self: *URLRegistry, url: []const u8) ?*Blob {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const blob = self.map.get(url) orelse return null;
+        blob.acquireRef();
+        return blob;
+    }
+
+    pub fn revoke(self: *URLRegistry, url: []const u8, page: *Page) void {
+        self.mutex.lock();
+        const removed = self.map.fetchRemove(url);
+        self.mutex.unlock();
+
+        if (removed) |entry| {
+            self.allocator.free(entry.key);
+            entry.value.releaseRef(page);
+        }
+    }
+
+    pub fn count(self: *URLRegistry) usize {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.map.count();
+    }
+
+    pub fn deinit(self: *URLRegistry, page: *Page) void {
+        // Page teardown has already joined every Worker, but detach the map
+        // under the same lock so this stays safe if a future caller changes
+        // teardown ordering.
+        self.mutex.lock();
+        var map = self.map;
+        self.map = .empty;
+        self.mutex.unlock();
+
+        var it = map.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.*.releaseRef(page);
+        }
+        map.deinit(self.allocator);
+    }
+};
+
+_type: Type,
+_rc: lp.RC(u32),
+
+_arena: Allocator,
+
+/// Immutable slice of blob.
+/// Note that another blob may hold a pointer/slice to this,
+/// so its better to leave the deallocation of it to arena allocator.
+_slice: []const u8,
+/// MIME attached to blob. Can be an empty string.
+_mime: []const u8,
+
+pub const Type = union(enum) {
+    generic,
+    file: *@import("File.zig"),
+};
+
+const InitOptions = struct {
+    /// MIME type.
+    type: []const u8 = "",
+    /// How to handle line endings (CR and LF).
+    /// `transparent` means do nothing, `native` expects CRLF (\r\n) on Windows.
+    endings: []const u8 = "transparent",
+};
+
+/// Creates a new Blob from JS values with optional MIME validation.
+/// This is the JS Constructor
+pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, page: *Page) !*Blob {
+    const session = page.session;
+    const arena = try session.getArena(.large, "Blob");
+    errdefer session.releaseArena(arena);
+
+    const opts: InitOptions = opts_ orelse .{};
+    const mime = try Mime.serialize(arena, opts.type);
+
+    const data = blk: {
+        if (parts_) |blob_parts| {
+            const use_native_endings = std.mem.eql(u8, opts.endings, "native");
+            var w: Writer.Allocating = .init(arena);
+            for (blob_parts) |js_val| {
+                const part = try js_val.toStringSmart();
+                try writePartWithEndings(part, use_native_endings, &w.writer);
+            }
+            break :blk w.written();
+        }
+
+        break :blk "";
+    };
+
+    const self = try arena.create(Blob);
+    self.* = .{
+        ._rc = .{},
+        ._arena = arena,
+        ._type = .generic,
+        ._slice = data,
+        ._mime = mime,
+    };
+    return self;
+}
+
+fn initBinding(parts_value: ?js.Value, opts: ?InitOptions, exec: *Execution) !*Blob {
+    const parts: ?[]const js.Value = if (parts_value) |value| blk: {
+        if (value.isUndefined()) break :blk null;
+        break :blk value.toZig([]const js.Value) catch
+            return js.WebIDL.constructorTypeError(
+                exec,
+                "Blob",
+                "The provided value cannot be converted to a sequence.",
+            );
+    } else null;
+    return init(parts, opts, exec.page);
+}
+
+/// Creates a new Blob from raw byte slices (for internal Zig use).
+pub fn initFromBytes(data: []const u8, content_type: []const u8, page: *Page) !*Blob {
+    // + 256 because the arena might also be used by File
+    const arena = try page.getArena(data.len + content_type.len + 256, "Blob");
+    errdefer page.releaseArena(arena);
+
+    const mime = try Mime.serialize(arena, content_type);
+
+    const self = try arena.create(Blob);
+    self.* = .{
+        ._rc = .{},
+        ._arena = arena,
+        ._type = .generic,
+        ._slice = try arena.dupe(u8, data),
+        ._mime = mime,
+    };
+    return self;
+}
+
+pub fn deinit(self: *Blob, page: *Page) void {
+    page.releaseArena(self._arena);
+}
+
+pub fn releaseRef(self: *Blob, page: *Page) void {
+    self._rc.release(self, page);
+}
+
+pub fn acquireRef(self: *Blob) void {
+    self._rc.acquire();
+}
+
+pub fn structuredSerialize(self: *const Blob, writer: *js.StructuredWriter) !void {
+    writer.writeBytes(self._mime);
+    writer.writeBytes(self._slice);
+}
+
+pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*Blob {
+    const mime = try reader.readBytes();
+    const data = try reader.readBytes();
+
+    const arena = try page.getArena(data.len + mime.len + 256, "Blob.clone");
+    errdefer page.releaseArena(arena);
+
+    const self = try arena.create(Blob);
+    self.* = .{
+        ._rc = .{},
+        ._arena = arena,
+        ._type = .generic,
+        ._slice = try arena.dupe(u8, data),
+        // the serialized mime is already in normalized form; copy it verbatim
+        ._mime = try arena.dupe(u8, mime),
+    };
+    return self;
+}
+
+const largest_vector = @max(std.simd.suggestVectorLength(u8) orelse 1, 8);
+/// Array of possible vector sizes for the current arch in decrementing order.
+/// We may move this to some file for SIMD helpers in the future.
+const vector_sizes = blk: {
+    // Required for length calculation.
+    var n: usize = largest_vector;
+    var total: usize = 0;
+    while (n != 2) : (n /= 2) total += 1;
+    // Populate an array with vector sizes.
+    n = largest_vector;
+    var i: usize = 0;
+    var items: [total]usize = undefined;
+    while (n != 2) : (n /= 2) {
+        defer i += 1;
+        items[i] = n;
+    }
+
+    break :blk items;
+};
+
+/// Writes a single part with optional line ending normalization.
+pub fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: *Writer) !void {
+    // Transparent - no conversion needed.
+    if (!use_native_endings) {
+        try writer.writeAll(part);
+        return;
+    }
+
+    // TODO: Windows support.
+
+    // Linux & Unix.
+    // Both Firefox and Chrome implement it as such:
+    // CRLF => LF
+    // CR   => LF
+    // So even though CR is not followed by LF, it gets replaced.
+    //
+    // I believe this is because such scenario is possible:
+    // ```
+    // let parts = [ "the quick\r", "\nbrown fox" ];
+    // ```
+    // In the example, one should have to check the part before in order to
+    // understand that CRLF is being presented in the final buffer.
+    // So they took a simpler approach, here's what given blob parts produce:
+    // ```
+    // "the quick\n\nbrown fox"
+    // ```
+    var end: usize = 0;
+
+    inline for (vector_sizes) |vector_len| {
+        const Vec = @Vector(vector_len, u8);
+
+        while (end + vector_len <= part.len) : (end += vector_len) {
+            const cr: Vec = @splat('\r');
+            // Load chunk as vectors.
+            const data = part[end..][0..vector_len];
+            const chunk: Vec = data.*;
+            // Look for CR.
+            const match = chunk == cr;
+
+            // Create a bitset out of match vector.
+            const bitset = std.bit_set.IntegerBitSet(vector_len){
+                .mask = @bitCast(@intFromBool(match)),
+            };
+
+            var iter = bitset.iterator(.{});
+            var relative_start: usize = 0;
+            while (iter.next()) |index| {
+                _ = try writer.writeVec(&.{ data[relative_start..index], "\n" });
+
+                if (index + 1 != data.len and data[index + 1] == '\n') {
+                    relative_start = index + 2;
+                } else {
+                    relative_start = index + 1;
+                }
+            }
+
+            _ = try writer.writeVec(&.{data[relative_start..]});
+        }
+    }
+
+    // Scalar scan fallback.
+    var relative_start: usize = end;
+    while (end < part.len) {
+        if (part[end] == '\r') {
+            _ = try writer.writeVec(&.{ part[relative_start..end], "\n" });
+
+            // Part ends with CR. We need to remember this for next part.
+            if (end + 1 == part.len) {
+                return;
+            }
+
+            // If next char is LF, skip it too.
+            if (part[end + 1] == '\n') {
+                relative_start = end + 2;
+            } else {
+                relative_start = end + 1;
+            }
+        }
+
+        end += 1;
+    }
+
+    // Write the remaining. We get this in such situations:
+    // `the quick brown\rfox`
+    // `the quick brown\r\nfox`
+    try writer.writeAll(part[relative_start..end]);
+}
+
+/// Returns a Promise that resolves with the contents of the blob
+/// as binary data contained in an ArrayBuffer.
+pub fn arrayBuffer(self: *const Blob, exec: *Execution) !js.Promise {
+    return exec.js.local.?.resolvePromise(js.ArrayBuffer{ .values = self._slice });
+}
+
+const ReadableStream = @import("streams/ReadableStream.zig");
+/// Returns a ReadableStream which upon reading returns the data
+/// contained within the Blob.
+pub fn stream(self: *const Blob, exec: *Execution) !*ReadableStream {
+    return ReadableStream.initWithData(self._slice, exec);
+}
+
+/// Returns a Promise that resolves with a string containing
+/// the contents of the blob, interpreted as UTF-8.
+pub fn text(self: *const Blob, exec: *Execution) !js.Promise {
+    return exec.js.local.?.resolvePromise(self._slice);
+}
+
+/// Extension to Blob; works on Firefox and Safari.
+/// https://developer.mozilla.org/en-US/docs/Web/API/Blob/bytes
+/// Returns a Promise that resolves with a Uint8Array containing
+/// the contents of the blob as an array of bytes.
+pub fn bytes(self: *const Blob, exec: *Execution) !js.Promise {
+    return exec.js.local.?.resolvePromise(js.TypedArray(u8){ .values = self._slice });
+}
+
+/// Returns a new Blob object which contains data
+/// from a subset of the blob on which it's called.
+pub fn slice(
+    self: *const Blob,
+    start_: ?i32,
+    end_: ?i32,
+    content_type_: ?[]const u8,
+    page: *Page,
+) !*Blob {
+    const data = self._slice;
+
+    const start = blk: {
+        const requested_start = start_ orelse break :blk 0;
+        if (requested_start < 0) {
+            break :blk data.len -| @abs(requested_start);
+        }
+        break :blk @min(data.len, @as(u31, @intCast(requested_start)));
+    };
+
+    const end: usize = blk: {
+        const requested_end = end_ orelse break :blk data.len;
+        if (requested_end < 0) {
+            break :blk @max(start, data.len -| @abs(requested_end));
+        }
+
+        break :blk @min(data.len, @max(start, @as(u31, @intCast(requested_end))));
+    };
+
+    return Blob.initFromBytes(data[start..end], content_type_ orelse "", page);
+}
+
+/// Returns the size of the Blob in bytes.
+pub fn getSize(self: *const Blob) usize {
+    return self._slice.len;
+}
+
+/// Returns the type of Blob; likely a MIME type, yet anything can be given.
+pub fn getType(self: *const Blob) []const u8 {
+    return self._mime;
+}
+
+pub const JsApi = struct {
+    pub const bridge = js.Bridge(Blob);
+
+    pub const Meta = struct {
+        pub const name = "Blob";
+        pub const prototype_chain = bridge.prototypeChain();
+        pub var class_id: bridge.ClassId = undefined;
+    };
+
+    pub const constructor = bridge.constructor(Blob.initBinding, .{});
+    // Chrome 149 follows Blob's IDL declaration order here.
+    pub const size = bridge.accessor(Blob.getSize, null, .{});
+    pub const @"type" = bridge.accessor(Blob.getType, null, .{});
+    pub const arrayBuffer = bridge.function(Blob.arrayBuffer, .{});
+    pub const slice = bridge.function(Blob.slice, .{});
+    pub const stream = bridge.function(Blob.stream, .{});
+    pub const text = bridge.function(Blob.text, .{});
+    pub const bytes = bridge.function(Blob.bytes, .{});
+};
+
+const testing = @import("../../testing.zig");
+test "WebApi: Blob" {
+    try testing.htmlRunner("blob.html", .{});
+}
+
+test "WebApi: Blob URL registry cross-agent concurrency" {
+    try testing.htmlRunner("worker/blob-registry-concurrency.html", .{ .timeout_ms = 15_000 });
+}
+
+test "WebApi: Blob URL registry page close with active worker" {
+    try testing.htmlRunner("worker/blob-registry-page-close.html", .{ .timeout_ms = 8_000 });
+}

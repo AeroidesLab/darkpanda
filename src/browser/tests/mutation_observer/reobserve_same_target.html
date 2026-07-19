@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<div id="target">Test</div>
+
+<script src="../testing.js"></script>
+<script id="reobserve_same_target" type=module>
+  const state = await testing.async();
+  const element = document.getElementById('target');
+
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+
+  observer.observe(element, { attributes: true, attributeOldValue: false });
+  observer.observe(element, { attributes: true, attributeOldValue: true });
+
+  element.setAttribute('data-foo', 'value1');
+  element.setAttribute('data-foo', 'value2');
+
+  await state.done((mutations) => {
+    testing.expectEqual(2, mutations.length);
+    testing.expectEqual(null, mutations[0].oldValue);
+    testing.expectEqual('value1', mutations[1].oldValue);
+  });
+</script>

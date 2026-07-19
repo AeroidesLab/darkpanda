@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<body></body>
+<script src="../testing.js"></script>
+
+<script id="worker_stack_limit_lifecycle" type="module">
+  {
+    function measureWindowStackDepth() {
+      let depth = 0;
+      function recurse() {
+        'use strict';
+        depth++;
+        recurse();
+      }
+
+      try {
+        recurse();
+      } catch (error) {
+        return {
+          depth,
+          name: error.name,
+          message: error.message,
+        };
+      }
+
+      throw new Error('recursive call unexpectedly returned');
+    }
+
+    function stableWindowDepth() {
+      let result;
+      for (let i = 0; i < 6; i++) result = measureWindowStackDepth();
+      return result;
+    }
+
+    const before = stableWindowDepth();
+    const state = await testing.async();
+    const worker = new Worker('./stack-limit-worker.js');
+    let ready;
+
+    worker.onerror = (event) => {
+      state.resolve({ error: event.message || 'worker error' });
+    };
+    worker.onmessage = (event) => {
+      if (event.data.phase === 'ready') {
+        ready = event.data;
+        worker.postMessage('measure-message-entry');
+        return;
+      }
+      if (event.data.phase === 'message') {
+        state.resolve({ ready, message: event.data.result });
+      }
+    };
+
+    await state.done((workerResults) => {
+      if (workerResults.error) {
+        testing.fail(workerResults.error);
+        return;
+      }
+      const after = stableWindowDepth();
+      worker.terminate();
+
+      testing.expectEqual('RangeError', before.name);
+      testing.expectEqual('RangeError', after.name);
+      testing.expectEqual(
+        'Maximum call stack size exceeded',
+        before.message,
+      );
+
+      const workerSamples = [
+        workerResults.ready.initial,
+        workerResults.ready.imported,
+        workerResults.ready.timer,
+        workerResults.message,
+      ];
+      for (const sample of workerSamples) {
+        testing.expectEqual('RangeError', sample.name);
+        testing.expectEqual(
+          'Maximum call stack size exceeded',
+          sample.message,
+        );
+        // This verifies the source-derived Blink worker budget as a general
+        // execution-agent property, without relying on an exact depth or a
+        // challenge-specific fingerprint.
+        testing.expectTrue(sample.depth > 0);
+        testing.expectTrue(sample.depth < before.depth);
+      }
+
+      // Returning from Worker delivery must restore V8's exact Window limit.
+      // Warmed recursion depth is deterministic in normal V8 tiers; retain a
+      // small tolerance for instrumentation/sanitizer builds.
+      const restoreDelta = Math.abs(after.depth - before.depth);
+      testing.expectTrue(
+        restoreDelta <= Math.max(64, Math.floor(before.depth * 0.05)),
+      );
+    });
+  }
+</script>

@@ -1,0 +1,24 @@
+[package]
+name = "darkpanda-canvas-backend"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "AGPL-3.0-or-later"
+description = "Optional CPU Canvas backend for DarkPanda"
+publish = false
+
+[lib]
+name = "darkpanda_canvas_backend"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Pin both the Rust API and the Skia binary-cache metadata.  This deliberately
+# enables only the CPU raster surface; PDF, codecs, GPU APIs and ICU are not
+# needed by CanvasRenderingContext2D's pixel backing store.
+skia-safe = { version = "=0.99.0", default-features = false, features = ["binary-cache", "embed-freetype"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+panic = "unwind"

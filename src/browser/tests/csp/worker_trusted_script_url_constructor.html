@@ -1,0 +1,89 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+<script id="worker-trusted-script-url-constructor">
+  testing.expectTrue(true);
+  (async () => {
+    const state = await testing.async();
+    const source = `postMessage('accepted')`;
+    const blobUrl = URL.createObjectURL(new Blob([source], {type: 'text/javascript'}));
+    const expectedRequired =
+      "Failed to construct 'Worker': This document requires 'TrustedScriptURL' assignment.";
+
+    const capture = callback => {
+      try {
+        callback();
+        return null;
+      } catch (error) {
+        return {name: error.name, message: error.message};
+      }
+    };
+
+    for (const raw of [
+      blobUrl,
+      "data:text/javascript,postMessage('raw-data')",
+      'worker_policy_probe.js?policy=none',
+    ]) {
+      testing.expectEqual(
+        {name: 'TypeError', message: expectedRequired},
+        capture(() => new Worker(raw)),
+      );
+    }
+
+    let optionsGetterRan = false;
+    testing.expectEqual(
+      {
+        name: 'TypeError',
+        message: "Failed to construct 'Worker': Cannot convert a Symbol value to a string",
+      },
+      capture(() => new Worker(Symbol('url'), {
+        get type() {
+          optionsGetterRan = true;
+          return 'classic';
+        },
+      })),
+    );
+    testing.expectEqual(false, optionsGetterRan);
+
+    const urlPolicy = trustedTypes.createPolicy('worker-url', {
+      createScriptURL(input) {
+        return input;
+      },
+    });
+    const genuine = urlPolicy.createScriptURL(blobUrl);
+
+    const calls = [];
+    trustedTypes.createPolicy('default', {
+      createScriptURL(input, type, sink) {
+        calls.push([input, type, sink]);
+        return input;
+      },
+    });
+
+    const run = value => new Promise(resolve => {
+      const worker = new Worker(value);
+      worker.onmessage = event => {
+        worker.terminate();
+        resolve(event.data);
+      };
+      worker.onerror = event => {
+        worker.terminate();
+        resolve({workerError: event.message});
+      };
+    });
+
+    const genuineResult = await run(genuine);
+    const defaultResult = await run(blobUrl);
+    state.resolve({genuineResult, defaultResult, calls});
+
+    await state.done(result => {
+      URL.revokeObjectURL(blobUrl);
+      testing.expectEqual('accepted', result.genuineResult);
+      testing.expectEqual('accepted', result.defaultResult);
+      testing.expectEqual(
+        [[blobUrl, 'TrustedScriptURL', 'Worker constructor']],
+        result.calls,
+      );
+    });
+  })();
+</script>

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="Fake backend is deterministic and self-consistent">
+{
+  const first = document.createElement('canvas');
+  first.width = 2;
+  first.height = 1;
+  const firstCtx = first.getContext('2d');
+  const baseline = Array.from(firstCtx.getImageData(0, 0, 2, 1).data);
+  testing.expectEqual(baseline, Array.from(firstCtx.getImageData(0, 0, 2, 1).data));
+  testing.expectTrue(baseline.some(value => value !== 0));
+
+  const second = document.createElement('canvas');
+  second.width = 2;
+  second.height = 1;
+  const secondBaseline = Array.from(second.getContext('2d').getImageData(0, 0, 2, 1).data);
+  testing.expectFalse(JSON.stringify(baseline) === JSON.stringify(secondBaseline));
+
+  firstCtx.fillStyle = 'red';
+  firstCtx.fillRect(0, 0, 1, 1);
+  const mutated = Array.from(firstCtx.getImageData(0, 0, 2, 1).data);
+  testing.expectFalse(JSON.stringify(baseline) === JSON.stringify(mutated));
+  testing.expectEqual(mutated, Array.from(firstCtx.getImageData(0, 0, 2, 1).data));
+
+  firstCtx.reset();
+  testing.expectEqual(baseline, Array.from(firstCtx.getImageData(0, 0, 2, 1).data));
+
+  const data = firstCtx.createImageData(1, 1);
+  data.data.set([17, 99, 201, 7]);
+  firstCtx.putImageData(data, 1, 0);
+  testing.expectEqual(
+    [0, 109, 219, 7],
+    Array.from(firstCtx.getImageData(1, 0, 1, 1).data),
+  );
+
+  // A dimension assignment resets to the same coordinate/seed-derived
+  // baseline instead of drawing a fresh random image on each read.
+  first.width = first.width;
+  testing.expectEqual(baseline, Array.from(firstCtx.getImageData(0, 0, 2, 1).data));
+}
+</script>

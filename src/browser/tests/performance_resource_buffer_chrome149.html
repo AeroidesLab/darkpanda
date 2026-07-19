@@ -1,0 +1,406 @@
+<!doctype html>
+<script src="testing.js"></script>
+
+<script id="performance_resource_buffer_chrome149" type="module">
+  const state = await testing.async();
+
+  const expectedWindowKeys = [
+    "timeOrigin",
+    "onresourcetimingbufferfull",
+    "clearMarks",
+    "clearMeasures",
+    "clearResourceTimings",
+    "getEntries",
+    "getEntriesByName",
+    "getEntriesByType",
+    "mark",
+    "measure",
+    "setResourceTimingBufferSize",
+    "toJSON",
+    "now",
+    "constructor",
+    "timing",
+    "navigation",
+    "memory",
+    "eventCounts",
+    "interactionCount",
+    "Symbol(Symbol.toStringTag)",
+  ];
+
+  const expectedWorkerKeys = [
+    "timeOrigin",
+    "onresourcetimingbufferfull",
+    "clearMarks",
+    "clearMeasures",
+    "clearResourceTimings",
+    "getEntries",
+    "getEntriesByName",
+    "getEntriesByType",
+    "mark",
+    "measure",
+    "setResourceTimingBufferSize",
+    "toJSON",
+    "now",
+    "constructor",
+    "Symbol(Symbol.toStringTag)",
+  ];
+
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const settleTasks = async () => {
+    await tick();
+    await tick();
+  };
+  const withTimeout = (promise, label) => Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error(`timed out waiting for ${label}`)),
+      5000,
+    )),
+  ]);
+
+  // The native fixture server exposes `/xhr` as a repeatable resource. Resource
+  // Timing buffers individual entries even when their names are identical.
+  const resourceUrl = () => `${testing.ORIGIN}/xhr`;
+  const requestResource = async (label) => {
+    const url = resourceUrl(label);
+    const response = await fetch(url);
+    await response.text();
+    return url;
+  };
+
+  async function run() {
+    const result = {};
+
+    result.windowKeys = Reflect.ownKeys(Performance.prototype).map(String);
+    result.performanceIsPerformance = performance instanceof Performance;
+    result.performanceIsEventTarget = performance instanceof EventTarget;
+    result.performanceParentIsEventTarget =
+      Object.getPrototypeOf(Performance.prototype) === EventTarget.prototype;
+    result.tag = Object.prototype.toString.call(performance);
+    result.jsonKeys = Object.keys(performance.toJSON());
+    result.jsonTimeOrigin = performance.toJSON().timeOrigin;
+    result.memoryShape = [
+      typeof performance.memory,
+      typeof performance.memory.totalJSHeapSize,
+      typeof performance.memory.usedJSHeapSize,
+      typeof performance.memory.jsHeapSizeLimit,
+    ];
+    result.interactionCount = performance.interactionCount;
+
+    const timeOriginDescriptor = Object.getOwnPropertyDescriptor(
+      Performance.prototype,
+      "timeOrigin",
+    );
+    const handlerDescriptor = Object.getOwnPropertyDescriptor(
+      Performance.prototype,
+      "onresourcetimingbufferfull",
+    );
+    const setSizeDescriptor = Object.getOwnPropertyDescriptor(
+      Performance.prototype,
+      "setResourceTimingBufferSize",
+    );
+    result.descriptors = {
+      timeOrigin: {
+        getName: timeOriginDescriptor.get.name,
+        set: timeOriginDescriptor.set,
+        enumerable: timeOriginDescriptor.enumerable,
+        configurable: timeOriginDescriptor.configurable,
+      },
+      handler: {
+        getName: handlerDescriptor.get.name,
+        setName: handlerDescriptor.set.name,
+        enumerable: handlerDescriptor.enumerable,
+        configurable: handlerDescriptor.configurable,
+      },
+      setSize: {
+        name: setSizeDescriptor.value.name,
+        length: setSizeDescriptor.value.length,
+        writable: setSizeDescriptor.writable,
+        enumerable: setSizeDescriptor.enumerable,
+        configurable: setSizeDescriptor.configurable,
+      },
+    };
+
+    // Lock the inherited EventTarget methods on the actual singleton, including
+    // removal and dispatchEvent's boolean result.
+    let customListenerCalls = 0;
+    const customListener = () => customListenerCalls++;
+    performance.addEventListener("darkpanda-performance-probe", customListener);
+    result.firstDispatch = performance.dispatchEvent(
+      new Event("darkpanda-performance-probe"),
+    );
+    performance.removeEventListener("darkpanda-performance-probe", customListener);
+    performance.dispatchEvent(new Event("darkpanda-performance-probe"));
+    result.customListenerCalls = customListenerCalls;
+
+    performance.onresourcetimingbufferfull = 42;
+    result.nonFunctionHandlerBecomesNull =
+      performance.onresourcetimingbufferfull === null;
+
+    // The untouched default primary limit is exactly 250. Fill it without an
+    // overflow, then add one entry so the secondary buffer and one async event
+    // are both observable without completion-order races.
+    performance.clearResourceTimings();
+    const defaultObserved = [];
+    const defaultObserver = new PerformanceObserver((list) => {
+      defaultObserved.push(...list.getEntriesByType("resource"));
+    });
+    defaultObserver.observe({ type: "resource" });
+    for (let batch = 0; batch < 10; ++batch) {
+      await Promise.all(Array.from(
+        { length: 25 },
+        (_, index) => requestResource(`default-${batch}-${index}`),
+      ));
+    }
+    await settleTasks();
+    result.defaultPrimaryBeforeOverflow =
+      performance.getEntriesByType("resource").length;
+
+    let defaultHandlerCalls = 0;
+    let defaultListenerCalls = 0;
+    let defaultEventTrusted = null;
+    let defaultEventTarget = null;
+    let defaultHandlerThis = null;
+    let resolveDefaultEvent;
+    const defaultEventDone = new Promise((resolve) => {
+      resolveDefaultEvent = resolve;
+    });
+    const defaultListener = () => defaultListenerCalls++;
+    performance.addEventListener("resourcetimingbufferfull", defaultListener);
+    performance.onresourcetimingbufferfull = function(event) {
+      defaultHandlerCalls++;
+      defaultEventTrusted = event.isTrusted;
+      defaultEventTarget = event.target === performance &&
+        event.currentTarget === performance;
+      defaultHandlerThis = this === performance;
+      resolveDefaultEvent();
+    };
+    await requestResource("default-overflow");
+    await withTimeout(defaultEventDone, "default buffer-full event");
+    await settleTasks();
+    performance.removeEventListener("resourcetimingbufferfull", defaultListener);
+    defaultObserver.disconnect();
+    result.default = {
+      primary: performance.getEntriesByType("resource").length,
+      observed: defaultObserved.length,
+      handlerCalls: defaultHandlerCalls,
+      listenerCalls: defaultListenerCalls,
+      eventTrusted: defaultEventTrusted,
+      eventTarget: defaultEventTarget,
+      handlerThis: defaultHandlerThis,
+    };
+
+    // At size zero, observers are queued before primary admission. Growing the
+    // limit inside the event does not synchronously expose entries; Blink copies
+    // the queued secondary entries only after dispatch returns.
+    performance.clearResourceTimings();
+    performance.setResourceTimingBufferSize(0);
+    const growObserved = [];
+    const primarySizesAtObserver = [];
+    let resolveGrowObserver;
+    const growObserverDone = new Promise((resolve) => {
+      resolveGrowObserver = resolve;
+    });
+    const growObserver = new PerformanceObserver((list) => {
+      growObserved.push(...list.getEntriesByType("resource"));
+      primarySizesAtObserver.push(
+        performance.getEntriesByType("resource").length,
+      );
+      if (growObserved.length >= 2) resolveGrowObserver();
+    });
+    growObserver.observe({ type: "resource" });
+
+    let growEventCalls = 0;
+    let growBeforeSet = null;
+    let growAfterSet = null;
+    let resolveGrowEvent;
+    const growEventDone = new Promise((resolve) => {
+      resolveGrowEvent = resolve;
+    });
+    performance.onresourcetimingbufferfull = () => {
+      growEventCalls++;
+      growBeforeSet = performance.getEntriesByType("resource").length;
+      performance.setResourceTimingBufferSize(2);
+      growAfterSet = performance.getEntriesByType("resource").length;
+      resolveGrowEvent();
+    };
+    await Promise.all([
+      requestResource("grow-a"),
+      requestResource("grow-b"),
+    ]);
+    await withTimeout(growObserverDone, "size-zero observer entries");
+    await withTimeout(growEventDone, "grow buffer-full event");
+    await settleTasks();
+    growObserver.disconnect();
+    result.grow = {
+      primary: performance.getEntriesByType("resource").length,
+      observed: growObserved.length,
+      eventCalls: growEventCalls,
+      beforeSet: growBeforeSet,
+      afterSet: growAfterSet,
+      primarySizesAtObserver,
+    };
+
+    // A handler which makes no progress causes Blink to discard secondary
+    // entries. Increasing the limit later is inert: no copy and no new event.
+    performance.clearResourceTimings();
+    performance.setResourceTimingBufferSize(0);
+    let noProgressCalls = 0;
+    let resolveNoProgress;
+    const noProgressDone = new Promise((resolve) => {
+      resolveNoProgress = resolve;
+    });
+    performance.onresourcetimingbufferfull = () => {
+      noProgressCalls++;
+      resolveNoProgress();
+    };
+    await requestResource("no-progress");
+    await withTimeout(noProgressDone, "no-progress buffer-full event");
+    await settleTasks();
+    const noProgressBeforeResize =
+      performance.getEntriesByType("resource").length;
+    performance.setResourceTimingBufferSize(1);
+    await settleTasks();
+    result.noProgress = {
+      beforeResize: noProgressBeforeResize,
+      afterResize: performance.getEntriesByType("resource").length,
+      eventCalls: noProgressCalls,
+    };
+
+    // clearResourceTimings removes only the primary. Clearing from the handler
+    // leaves the pending secondary entry available for the post-dispatch copy.
+    performance.clearResourceTimings();
+    performance.setResourceTimingBufferSize(1);
+    performance.onresourcetimingbufferfull = null;
+    await requestResource("clear-primary");
+    await settleTasks();
+    const oldPrimaryEntry = performance.getEntriesByType("resource")[0];
+    let clearEventCalls = 0;
+    let resolveClearEvent;
+    const clearEventDone = new Promise((resolve) => {
+      resolveClearEvent = resolve;
+    });
+    performance.onresourcetimingbufferfull = () => {
+      clearEventCalls++;
+      performance.clearResourceTimings();
+      resolveClearEvent();
+    };
+    await requestResource("clear-secondary");
+    await withTimeout(clearEventDone, "clear-primary buffer-full event");
+    await settleTasks();
+    const clearEntries = performance.getEntriesByType("resource");
+    result.clearPrimaryOnly = {
+      eventCalls: clearEventCalls,
+      entryCount: clearEntries.length,
+      oldPrimaryWasReplaced:
+        clearEntries.length === 1 && clearEntries[0] !== oldPrimaryEntry,
+    };
+
+    // Worker exposure uses the same EventTarget-backed implementation, but the
+    // Window-only supplements must be absent from its realized prototype.
+    const workerResult = await withTimeout(new Promise((resolve, reject) => {
+      const worker = new Worker("./performance-resource-buffer-worker.js");
+      worker.onmessage = (event) => {
+        worker.terminate();
+        resolve(event.data);
+      };
+      worker.onerror = (event) => {
+        worker.terminate();
+        reject(new Error(event.message || "worker error"));
+      };
+      worker.postMessage({ url: resourceUrl("worker-size-zero") });
+    }), "worker performance buffer probe");
+    result.worker = workerResult;
+    result.expectedWindowKeys = expectedWindowKeys;
+    result.expectedWorkerKeys = expectedWorkerKeys;
+    return result;
+  }
+
+  try {
+    state.resolve({ ok: true, result: await run() });
+  } catch (error) {
+    state.resolve({
+      ok: false,
+      error: String(error),
+      stack: error && error.stack,
+    });
+  }
+
+  await state.done((payload) => {
+    testing.expectEqual(true, payload.ok, payload);
+    if (!payload.ok) return;
+    const r = payload.result;
+
+    testing.expectEqual(r.expectedWindowKeys, r.windowKeys);
+    testing.expectEqual(true, r.performanceIsPerformance);
+    testing.expectEqual(true, r.performanceIsEventTarget);
+    testing.expectEqual(true, r.performanceParentIsEventTarget);
+    testing.expectEqual("[object Performance]", r.tag);
+    testing.expectEqual(["timeOrigin"], r.jsonKeys);
+    testing.expectEqual(performance.timeOrigin, r.jsonTimeOrigin);
+    testing.expectEqual(["object", "number", "number", "number"], r.memoryShape);
+    testing.expectEqual(0, r.interactionCount);
+    testing.expectEqual({
+      timeOrigin: {
+        getName: "get timeOrigin",
+        set: undefined,
+        enumerable: true,
+        configurable: true,
+      },
+      handler: {
+        getName: "get onresourcetimingbufferfull",
+        setName: "set onresourcetimingbufferfull",
+        enumerable: true,
+        configurable: true,
+      },
+      setSize: {
+        name: "setResourceTimingBufferSize",
+        length: 1,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      },
+    }, r.descriptors);
+    testing.expectEqual(true, r.firstDispatch);
+    testing.expectEqual(1, r.customListenerCalls);
+    testing.expectEqual(true, r.nonFunctionHandlerBecomesNull);
+
+    testing.expectEqual(250, r.defaultPrimaryBeforeOverflow);
+    testing.expectEqual({
+      primary: 250,
+      observed: 251,
+      handlerCalls: 1,
+      listenerCalls: 1,
+      eventTrusted: true,
+      eventTarget: true,
+      handlerThis: true,
+    }, r.default);
+    testing.expectEqual(2, r.grow.primary);
+    testing.expectEqual(2, r.grow.observed);
+    testing.expectEqual(1, r.grow.eventCalls);
+    testing.expectEqual(0, r.grow.beforeSet);
+    testing.expectEqual(0, r.grow.afterSet);
+    testing.expectEqual(0, r.grow.primarySizesAtObserver[0]);
+    testing.expectEqual({
+      beforeResize: 0,
+      afterResize: 0,
+      eventCalls: 1,
+    }, r.noProgress);
+    testing.expectEqual(1, r.clearPrimaryOnly.eventCalls);
+    testing.expectEqual(1, r.clearPrimaryOnly.entryCount);
+    testing.expectEqual(true, r.clearPrimaryOnly.oldPrimaryWasReplaced);
+
+    testing.expectEqual(true, r.worker.ok, r.worker);
+    testing.expectEqual(r.expectedWorkerKeys, r.worker.keys);
+    testing.expectEqual(true, r.worker.isPerformance);
+    testing.expectEqual(true, r.worker.isEventTarget);
+    testing.expectEqual(true, r.worker.parentIsEventTarget);
+    testing.expectEqual(true, r.worker.listenerRemoved);
+    testing.expectEqual(true, r.worker.windowMembersAbsent);
+    testing.expectEqual(true, r.worker.handlerDescriptor);
+    testing.expectEqual(1, r.worker.observed);
+    testing.expectEqual(0, r.worker.primary);
+    testing.expectEqual(1, r.worker.eventCalls);
+    testing.expectEqual(true, r.worker.eventTarget);
+  });
+</script>

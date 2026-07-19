@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<div id="grandparent">
+  <div id="parent">
+    <div id="child" data-test="initial">Child</div>
+  </div>
+</div>
+
+<div id="text-grandparent">
+  <div id="text-parent">
+    <div id="text-container">Text here</div>
+  </div>
+</div>
+
+<div id="childlist-grandparent">
+  <div id="childlist-parent"></div>
+</div>
+
+<script src="../testing.js"></script>
+<script id="subtree_attributes" type=module>
+  const state = await testing.async();
+  const grandparent = document.getElementById('grandparent');
+  const child = document.getElementById('child');
+
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(grandparent, { attributes: true, subtree: true });
+
+  child.setAttribute('data-test', 'changed');
+
+  await state.done((mutations) => {
+    testing.expectEqual(1, mutations.length);
+    testing.expectEqual('attributes', mutations[0].type);
+    testing.expectEqual(child, mutations[0].target);
+    testing.expectEqual('data-test', mutations[0].attributeName);
+  });
+</script>
+
+<script id="subtree_attributes_without_subtree" type=module>
+  const state = await testing.async();
+  const grandparent = document.getElementById('grandparent');
+  const child = document.getElementById('child');
+
+  let callbackCalled = false;
+  const observer = new MutationObserver(() => {
+    callbackCalled = true;
+  });
+  observer.observe(grandparent, { attributes: true, subtree: false });
+
+  child.setAttribute('data-no-subtree', 'test');
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  observer.disconnect();
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(false, callbackCalled);
+  });
+</script>
+
+<script id="subtree_character_data" type=module>
+  const state = await testing.async();
+  const grandparent = document.getElementById('text-grandparent');
+  const container = document.getElementById('text-container');
+  const textNode = container.firstChild;
+
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(grandparent, {
+    characterData: true,
+    characterDataOldValue: true,
+    subtree: true
+  });
+
+  textNode.data = 'Changed text';
+
+  await state.done((mutations) => {
+    testing.expectEqual(1, mutations.length);
+    testing.expectEqual('characterData', mutations[0].type);
+    testing.expectEqual(textNode, mutations[0].target);
+    testing.expectEqual('Text here', mutations[0].oldValue);
+  });
+</script>
+
+<script id="subtree_childlist" type=module>
+  const state = await testing.async();
+  const grandparent = document.getElementById('childlist-grandparent');
+  const parent = document.getElementById('childlist-parent');
+
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(grandparent, { childList: true, subtree: true });
+
+  const newChild = document.createElement('div');
+  newChild.textContent = 'New child';
+  parent.appendChild(newChild);
+
+  await state.done((mutations) => {
+    testing.expectEqual(1, mutations.length);
+    testing.expectEqual('childList', mutations[0].type);
+    testing.expectEqual(parent, mutations[0].target);
+    testing.expectEqual(1, mutations[0].addedNodes.length);
+    testing.expectEqual(newChild, mutations[0].addedNodes[0]);
+  });
+</script>
+
+<script id="subtree_deep_nesting" type=module>
+  const state = await testing.async();
+  const root = document.createElement('div');
+  const child = document.createElement('div');
+
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+
+  root.appendChild(child);
+  observer.observe(root, { attributes: true, subtree: true });
+  child.setAttribute('data-deep', 'value');
+
+  await state.done((mutations) => {
+    const lastMutation = mutations[mutations.length - 1];
+    testing.expectEqual('attributes', lastMutation.type);
+    testing.expectEqual(child, lastMutation.target);
+    testing.expectEqual('data-deep', lastMutation.attributeName);
+  });
+</script>

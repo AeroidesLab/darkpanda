@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<head>
+  <meta charset="utf-8">
+  <title>Cross-origin WindowProxy security boundary</title>
+  <script src="../testing.js"></script>
+</head>
+<body></body>
+
+<script id="chrome149_cross_origin_windowproxy">
+  const iframe = document.createElement('iframe');
+  const childURL = 'data:text/html,<!doctype html><title>cross-origin target</title>' +
+    '<iframe srcdoc="<!doctype html><title>nested target</title>"></iframe>';
+
+  iframe.src = childURL;
+  document.body.appendChild(iframe);
+
+  testing.onload(() => {
+    const w = iframe.contentWindow;
+    const expectedWindowKeys = [
+      '0', 'window', 'self', 'location', 'closed', 'frames', 'length', 'top',
+      'opener', 'parent', 'blur', 'close', 'focus', 'postMessage', 'then',
+      'Symbol(Symbol.toStringTag)', 'Symbol(Symbol.hasInstance)',
+      'Symbol(Symbol.isConcatSpreadable)',
+    ];
+    const expectedLocationKeys = [
+      'href', 'replace', 'then', 'Symbol(Symbol.toStringTag)',
+      'Symbol(Symbol.hasInstance)', 'Symbol(Symbol.isConcatSpreadable)',
+    ];
+    const keyNames = object => Reflect.ownKeys(object).map(String);
+
+    testing.expectTrue(w === iframe.contentWindow);
+    // HTMLIFrameElement.contentDocument is [CheckSecurity=ReturnValue]: a
+    // denied return is replaced with null rather than exposing the child
+    // Document or throwing a SecurityError.
+    testing.expectEqual(null, iframe.contentDocument);
+    testing.expectTrue(w.window === w);
+    testing.expectTrue(w.self === w);
+    testing.expectTrue(w.frames === w);
+    testing.expectTrue(w.parent === window);
+    testing.expectTrue(w.top === window);
+    testing.expectEqual(1, w.length);
+    testing.expectFalse(w.closed);
+    testing.expectEqual('function', typeof w.blur);
+    testing.expectEqual('function', typeof w.close);
+    testing.expectEqual('function', typeof w.focus);
+    testing.expectEqual('function', typeof w.postMessage);
+    testing.expectEqual('object', typeof w.location);
+    testing.expectTrue(w.location === w.location);
+
+    testing.expectTrue(Object.getPrototypeOf(w) === null);
+    testing.expectEqual('[object Object]', Object.prototype.toString.call(w));
+    testing.expectEqual(['0'], Object.keys(w));
+    testing.expectEqual(expectedWindowKeys, keyNames(w));
+    testing.expectTrue(Object.getPrototypeOf(w.location) === null);
+    testing.expectEqual('[object Object]', Object.prototype.toString.call(w.location));
+    testing.expectEqual([], Object.keys(w.location));
+    testing.expectEqual(expectedLocationKeys, keyNames(w.location));
+
+    const indexedDescriptor = Object.getOwnPropertyDescriptor(w, '0');
+    testing.expectTrue(indexedDescriptor.value === w[0]);
+    testing.expectTrue(indexedDescriptor.value === w.frames[0]);
+    testing.expectEqual(false, indexedDescriptor.writable);
+    testing.expectEqual(true, indexedDescriptor.enumerable);
+    testing.expectEqual(true, indexedDescriptor.configurable);
+    testing.expectTrue('0' in w);
+
+    const postMessageDescriptor = Object.getOwnPropertyDescriptor(w, 'postMessage');
+    testing.expectEqual(false, postMessageDescriptor.writable);
+    testing.expectEqual(false, postMessageDescriptor.enumerable);
+    testing.expectEqual(true, postMessageDescriptor.configurable);
+    testing.expectEqual('postMessage', postMessageDescriptor.value.name);
+    testing.expectEqual(1, postMessageDescriptor.value.length);
+
+    const windowDescriptor = Object.getOwnPropertyDescriptor(w, 'window');
+    testing.expectEqual('function', typeof windowDescriptor.get);
+    testing.expectEqual(undefined, windowDescriptor.set);
+    testing.expectEqual(false, windowDescriptor.enumerable);
+    testing.expectEqual(true, windowDescriptor.configurable);
+
+    const hrefDescriptor = Object.getOwnPropertyDescriptor(w.location, 'href');
+    testing.expectEqual(undefined, hrefDescriptor.get);
+    testing.expectEqual('function', typeof hrefDescriptor.set);
+    testing.expectEqual(false, hrefDescriptor.enumerable);
+    testing.expectEqual(true, hrefDescriptor.configurable);
+
+    function expectSecurityError(operation, expectedMessage) {
+      try {
+        operation();
+        testing.fail('cross-origin operation did not throw');
+      } catch (error) {
+        testing.expectTrue(error instanceof DOMException);
+        testing.expectEqual('SecurityError', error.name);
+        testing.expectEqual(18, error.code);
+        testing.expectEqual(expectedMessage, error.message);
+      }
+    }
+
+    const blocked = `Blocked a frame with origin "${location.origin}" from accessing a cross-origin frame.`;
+
+    // WindowProxy's internal object methods are origin-checked independently
+    // of its visible null prototype.  In particular, setting null again is
+    // not an allowed no-op, and it must not fall through to ordinary Proxy or
+    // immutable-prototype TypeErrors.
+    expectSecurityError(() => Object.setPrototypeOf(w, Object.prototype), blocked);
+    expectSecurityError(() => Reflect.setPrototypeOf(w, Object.prototype), blocked);
+    expectSecurityError(() => Object.setPrototypeOf(w, null), blocked);
+    expectSecurityError(() => Reflect.setPrototypeOf(w, null), blocked);
+    expectSecurityError(() => Object.preventExtensions(w), blocked);
+    expectSecurityError(() => Reflect.preventExtensions(w), blocked);
+    expectSecurityError(() => Object.seal(w), blocked);
+    expectSecurityError(() => Object.freeze(w), blocked);
+    testing.expectTrue(Object.isExtensible(w));
+    testing.expectTrue(Reflect.isExtensible(w));
+
+    const indexedReadError = index =>
+      `Failed to read an indexed property [${index}] from 'Window': ${blocked}`;
+    const indexedSetError = index =>
+      `Failed to set an indexed property [${index}] on 'Window': ${blocked}`;
+
+    expectSecurityError(() => w[1], indexedReadError(1));
+    expectSecurityError(() => '1' in w, indexedReadError(1));
+    expectSecurityError(
+      () => Object.getOwnPropertyDescriptor(w, '1'),
+      indexedReadError(1)
+    );
+    expectSecurityError(() => Reflect.set(w, '0', 1), indexedSetError(0));
+    expectSecurityError(() => Reflect.set(w, '1', 1), indexedSetError(1));
+    expectSecurityError(
+      () => Object.defineProperty(w, '0', {value: 1}),
+      blocked
+    );
+    expectSecurityError(
+      () => Object.defineProperty(w, '1', {value: 1}),
+      blocked
+    );
+    expectSecurityError(() => delete w[0], blocked);
+    expectSecurityError(() => delete w[1], blocked);
+
+    const allowedSymbols = [
+      Symbol.toStringTag,
+      Symbol.hasInstance,
+      Symbol.isConcatSpreadable,
+    ];
+    for (const symbol of allowedSymbols) {
+      testing.expectEqual(undefined, w[symbol]);
+      testing.expectTrue(symbol in w);
+
+      const descriptor = Object.getOwnPropertyDescriptor(w, symbol);
+      testing.expectEqual(undefined, descriptor.value);
+      testing.expectEqual(false, descriptor.writable);
+      testing.expectEqual(false, descriptor.enumerable);
+      testing.expectEqual(true, descriptor.configurable);
+
+      const label = `[${symbol.description}]`;
+      expectSecurityError(
+        () => Reflect.set(w, symbol, 1),
+        `Failed to set a named property '${label}' on 'Window': ${blocked}`
+      );
+      expectSecurityError(
+        () => Object.defineProperty(w, symbol, {value: 1}),
+        blocked
+      );
+      expectSecurityError(() => delete w[symbol], blocked);
+    }
+
+    for (const symbol of [Symbol.iterator, Symbol('custom')]) {
+      const label = `[${symbol.description}]`;
+      expectSecurityError(
+        () => w[symbol],
+        `Failed to read a named property '${label}' from 'Window': ${blocked}`
+      );
+      expectSecurityError(() => symbol in w, blocked);
+      expectSecurityError(
+        () => Object.getOwnPropertyDescriptor(w, symbol),
+        `Failed to read a named property '${label}' from 'Window': ${blocked}`
+      );
+      expectSecurityError(
+        () => Reflect.set(w, symbol, 1),
+        `Failed to set a named property '${label}' on 'Window': ${blocked}`
+      );
+      expectSecurityError(
+        () => Object.defineProperty(w, symbol, {value: 1}),
+        blocked
+      );
+      expectSecurityError(() => delete w[symbol], blocked);
+    }
+
+    expectSecurityError(
+      () => w.document,
+      `Failed to read a named property 'document' from 'Window': ${blocked}`
+    );
+    const frameElementRead =
+      `Failed to read a named property 'frameElement' from 'Window': ${blocked}`;
+    expectSecurityError(() => w.frameElement, frameElementRead);
+    expectSecurityError(
+      () => Reflect.get(w, 'frameElement'),
+      frameElementRead
+    );
+    expectSecurityError(
+      () => Object.getOwnPropertyDescriptor(w, 'frameElement'),
+      frameElementRead
+    );
+
+    // A locally obtained native getter still validates its WindowProxy
+    // receiver before [CheckSecurity=ReturnValue] examines the owner Element.
+    // That receiver gate uses Chrome's shorter generic SecurityError text.
+    const ownFrameElementDescriptor =
+      Object.getOwnPropertyDescriptor(window, 'frameElement');
+    testing.expectEqual(undefined, ownFrameElementDescriptor.set);
+    testing.expectEqual('get frameElement', ownFrameElementDescriptor.get.name);
+    testing.expectEqual(0, ownFrameElementDescriptor.get.length);
+    testing.expectEqual(
+      undefined,
+      Object.getOwnPropertyDescriptor(Window.prototype, 'frameElement')
+    );
+    expectSecurityError(
+      () => ownFrameElementDescriptor.get.call(w),
+      blocked
+    );
+    expectSecurityError(
+      () => Reflect.get(window, 'frameElement', w),
+      blocked
+    );
+
+    const contentDocumentDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLIFrameElement.prototype,
+      'contentDocument'
+    );
+    testing.expectEqual(true, contentDocumentDescriptor.enumerable);
+    testing.expectEqual(true, contentDocumentDescriptor.configurable);
+    testing.expectEqual(undefined, contentDocumentDescriptor.set);
+    testing.expectEqual('get contentDocument', contentDocumentDescriptor.get.name);
+    testing.expectEqual(0, contentDocumentDescriptor.get.length);
+
+    for (const getter of [
+      ownFrameElementDescriptor.get,
+      contentDocumentDescriptor.get,
+    ]) {
+      try {
+        getter.call({});
+        testing.fail('invalid native getter receiver did not throw');
+      } catch (error) {
+        testing.expectTrue(error instanceof TypeError);
+        testing.expectEqual('Illegal invocation', error.message);
+      }
+    }
+    expectSecurityError(
+      () => { w.secret = 1; },
+      `Failed to set a named property 'secret' on 'Window': ${blocked}`
+    );
+    expectSecurityError(() => 'document' in w, blocked);
+    expectSecurityError(() => delete w.document, blocked);
+    expectSecurityError(
+      () => Object.defineProperty(w, 'secret', { value: 1 }),
+      blocked
+    );
+    expectSecurityError(
+      () => w.location.href,
+      `Failed to read a named property 'href' from 'Location': ${blocked}`
+    );
+    expectSecurityError(
+      () => w.location.assign,
+      `Failed to read a named property 'assign' from 'Location': ${blocked}`
+    );
+    testing.expectEqual('function', typeof w.location.replace);
+  });
+</script>
+
+<script id="chrome149_cross_origin_frame_element_return_value" type="module">
+{
+  const state = await testing.async();
+  const timeout = setTimeout(() => state.resolve({timeout: true}), 5000);
+
+  const onMessage = event => {
+    if (event.data?.kind !== 'cross-origin-frame-element') return;
+    clearTimeout(timeout);
+    window.removeEventListener('message', onMessage);
+    state.resolve(event.data);
+  };
+  window.addEventListener('message', onMessage);
+
+  const source = `<!doctype html><script>
+    const result = {
+      kind: 'cross-origin-frame-element',
+      isNull: frameElement === null,
+      escaped: false,
+      error: null,
+    };
+    try {
+      result.escaped = frameElement !== null &&
+        frameElement.ownerDocument.defaultView === parent;
+    } catch (caught) {
+      result.error = {name: caught.name, message: caught.message};
+    }
+    parent.postMessage(result, '*');
+  <\/script>`;
+
+  const child = document.createElement('iframe');
+  child.src = 'data:text/html,' + encodeURIComponent(source);
+  document.body.appendChild(child);
+
+  await state.done(result => {
+    child.remove();
+    testing.expectEqual(undefined, result.timeout);
+    testing.expectTrue(result.isNull);
+    testing.expectFalse(result.escaped);
+    testing.expectEqual(null, result.error);
+  });
+}
+</script>

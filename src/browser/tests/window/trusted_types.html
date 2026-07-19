@@ -1,0 +1,518 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Trusted Types Chrome 149 parity</title>
+<script src="../testing.js"></script>
+
+<script id="trusted_types_chrome149_surface">
+  const own = (object, key) =>
+    Object.prototype.hasOwnProperty.call(object, key);
+  const errorOf = callback => {
+    try {
+      callback();
+      return null;
+    } catch (error) {
+      return { name: error.name, message: error.message };
+    }
+  };
+  const nativeSource = name => `function ${name}() { [native code] }`;
+  const codeUnits = value => Array.from(
+    { length: value.length },
+    (_, index) => value.charCodeAt(index),
+  );
+
+  const interfaces = {
+    TrustedTypePolicyFactory: [
+      'emptyHTML', 'emptyScript', 'defaultPolicy', 'createPolicy',
+      'getAttributeType', 'getPropertyType', 'getTypeMapping',
+      'isHTML', 'isScript', 'isScriptURL', 'constructor',
+      'Symbol(Symbol.toStringTag)',
+    ],
+    TrustedTypePolicy: [
+      'name', 'createHTML', 'createScript', 'createScriptURL', 'constructor',
+      'Symbol(Symbol.toStringTag)',
+    ],
+    TrustedHTML: [
+      'toJSON', 'toString', 'constructor', 'Symbol(Symbol.toStringTag)',
+    ],
+    TrustedScript: [
+      'toJSON', 'toString', 'constructor', 'Symbol(Symbol.toStringTag)',
+    ],
+    TrustedScriptURL: [
+      'toJSON', 'toString', 'constructor', 'Symbol(Symbol.toStringTag)',
+    ],
+  };
+
+  for (const [name, expectedKeys] of Object.entries(interfaces)) {
+    const Interface = globalThis[name];
+    testing.expectEqual('function', typeof Interface);
+    testing.expectEqual(0, Interface.length);
+    testing.expectEqual(nativeSource(name), Function.prototype.toString.call(Interface));
+    testing.expectEqual(expectedKeys, Reflect.ownKeys(Interface.prototype).map(String));
+
+    const prototypeDescriptor = Object.getOwnPropertyDescriptor(
+      Interface,
+      'prototype',
+    );
+    testing.expectFalse(prototypeDescriptor.writable);
+    testing.expectFalse(prototypeDescriptor.enumerable);
+    testing.expectFalse(prototypeDescriptor.configurable);
+
+    const tag = Object.getOwnPropertyDescriptor(
+      Interface.prototype,
+      Symbol.toStringTag,
+    );
+    testing.expectEqual(name, tag.value);
+    testing.expectFalse(tag.writable);
+    testing.expectFalse(tag.enumerable);
+    testing.expectTrue(tag.configurable);
+
+    const construction = errorOf(() => new Interface());
+    testing.expectEqual('TypeError', construction.name);
+    testing.expectEqual(
+      `Failed to construct '${name}': Illegal constructor`,
+      construction.message,
+    );
+  }
+
+  const globalDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'trustedTypes',
+  );
+  testing.expectTrue(own(globalThis, 'trustedTypes'));
+  testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(
+    Window.prototype,
+    'trustedTypes',
+  ));
+  testing.expectEqual('function', typeof globalDescriptor.get);
+  testing.expectEqual(undefined, globalDescriptor.set);
+  testing.expectTrue(globalDescriptor.enumerable);
+  testing.expectTrue(globalDescriptor.configurable);
+  testing.expectEqual(
+    nativeSource('get trustedTypes'),
+    Function.prototype.toString.call(globalDescriptor.get),
+  );
+  testing.expectEqual(trustedTypes, globalThis.trustedTypes);
+  testing.expectEqual(
+    '[object TrustedTypePolicyFactory]',
+    Object.prototype.toString.call(trustedTypes),
+  );
+  testing.expectEqual([], Reflect.ownKeys(trustedTypes));
+
+  const methodLengths = {
+    createPolicy: 1,
+    getAttributeType: 2,
+    getPropertyType: 2,
+    getTypeMapping: 0,
+    isHTML: 1,
+    isScript: 1,
+    isScriptURL: 1,
+  };
+  for (const [name, length] of Object.entries(methodLengths)) {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      TrustedTypePolicyFactory.prototype,
+      name,
+    );
+    testing.expectEqual('function', typeof descriptor.value);
+    testing.expectEqual(length, descriptor.value.length);
+    testing.expectTrue(descriptor.writable);
+    testing.expectTrue(descriptor.enumerable);
+    testing.expectTrue(descriptor.configurable);
+    testing.expectEqual(nativeSource(name), Function.prototype.toString.call(descriptor.value));
+  }
+
+  testing.expectEqual(null, trustedTypes.defaultPolicy);
+  testing.expectEqual(trustedTypes.emptyHTML, trustedTypes.emptyHTML);
+  testing.expectEqual(trustedTypes.emptyScript, trustedTypes.emptyScript);
+  testing.expectEqual('', String(trustedTypes.emptyHTML));
+  testing.expectEqual('', String(trustedTypes.emptyScript));
+  testing.expectTrue(trustedTypes.isHTML(trustedTypes.emptyHTML));
+  testing.expectTrue(trustedTypes.isScript(trustedTypes.emptyScript));
+  testing.expectFalse(trustedTypes.isScriptURL(trustedTypes.emptyScript));
+
+  // Chrome 149 introspection tables are generated from Blink's Web IDL
+  // database. Exercise namespace matching, name normalization, the SVG xlink
+  // split, MathML event handlers, and observable mapping insertion order.
+  const HTML_NS = 'http://www.w3.org/1999/xhtml';
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const MATHML_NS = 'http://www.w3.org/1998/Math/MathML';
+  const XLINK_NS = 'http://www.w3.org/1999/xlink';
+  const UNKNOWN_NS = 'urn:darkpanda-trusted-types-fixture';
+
+  const attributeCases = [
+    [['iframe', 'srcdoc'], 'TrustedHTML'],
+    [['iframe', 'srcdoc', null, null], 'TrustedHTML'],
+    [['IFRAME', 'SRCDOC', HTML_NS, ''], 'TrustedHTML'],
+    [['iframe', 'srcdoc', SVG_NS, ''], null],
+    [['script', 'src'], 'TrustedScriptURL'],
+    [['script', 'href'], null],
+    [['script', 'href', SVG_NS, ''], 'TrustedScriptURL'],
+    [['script', 'href', SVG_NS, XLINK_NS], 'TrustedScriptURL'],
+    [['script', 'xlink:href', SVG_NS, XLINK_NS], null],
+    [['script', 'src', SVG_NS, ''], null],
+    [['ScRiPt', 'HrEf', SVG_NS, XLINK_NS], 'TrustedScriptURL'],
+    [['div', 'onclick', HTML_NS, ''], 'TrustedScript'],
+    [['div', 'ONABORTPAYMENT', HTML_NS, ''], 'TrustedScript'],
+    [['circle', 'onzoomlevelchange', SVG_NS, ''], 'TrustedScript'],
+    [['math', 'onwebkitfullscreenerror', MATHML_NS, ''], 'TrustedScript'],
+    [['x', 'onclick', UNKNOWN_NS, ''], null],
+    [['div', 'onclick', HTML_NS, XLINK_NS], null],
+    [['div', 'ondefinitelyfake', HTML_NS, ''], null],
+  ];
+  for (const [args, expected] of attributeCases) {
+    testing.expectEqual(expected, trustedTypes.getAttributeType(...args));
+  }
+
+  const propertyCases = [
+    [['div', 'innerHTML', HTML_NS], 'TrustedHTML'],
+    [['circle', 'innerHTML', SVG_NS], 'TrustedHTML'],
+    [['math', 'outerHTML', MATHML_NS], 'TrustedHTML'],
+    [['x', 'innerHTML', UNKNOWN_NS], 'TrustedHTML'],
+    [['div', 'innerhtml', HTML_NS], null],
+    [['script', 'src'], 'TrustedScriptURL'],
+    [['script', 'href'], null],
+    [['SCRIPT', 'textContent', HTML_NS], 'TrustedScript'],
+    [['script', 'textcontent', HTML_NS], null],
+    [['script', 'href', SVG_NS], 'TrustedScriptURL'],
+    [['script', 'src', SVG_NS], null],
+    [['iframe', 'srcdoc', null], 'TrustedHTML'],
+    [['iframe', 'srcdoc', MATHML_NS], null],
+    [['div', 'onclick', HTML_NS], null],
+  ];
+  for (const [args, expected] of propertyCases) {
+    testing.expectEqual(expected, trustedTypes.getPropertyType(...args));
+  }
+
+  const typeMapping = trustedTypes.getTypeMapping();
+  testing.expectEqual(
+    ['embed', 'iframe', 'object', 'script', '*'],
+    Reflect.ownKeys(typeMapping),
+  );
+  for (const tag of Reflect.ownKeys(typeMapping)) {
+    testing.expectEqual(
+      ['attributes', 'properties'],
+      Reflect.ownKeys(typeMapping[tag]),
+    );
+  }
+  testing.expectEqual(['src'], Reflect.ownKeys(typeMapping.embed.attributes));
+  testing.expectEqual(['src'], Reflect.ownKeys(typeMapping.embed.properties));
+  testing.expectEqual(
+    ['codebase', 'data'],
+    Reflect.ownKeys(typeMapping.object.attributes),
+  );
+  testing.expectEqual(
+    ['codeBase', 'data'],
+    Reflect.ownKeys(typeMapping.object.properties),
+  );
+  testing.expectEqual(
+    ['src', 'href'],
+    Reflect.ownKeys(typeMapping.script.attributes),
+  );
+  testing.expectEqual(
+    ['innerText', 'src', 'text', 'textContent', 'href'],
+    Reflect.ownKeys(typeMapping.script.properties),
+  );
+  testing.expectEqual(
+    ['innerHTML', 'outerHTML'],
+    Reflect.ownKeys(typeMapping['*'].properties),
+  );
+
+  const eventHandlerKeys = Reflect.ownKeys(typeMapping['*'].attributes);
+  let eventHandlerHash = 2166136261;
+  for (const character of eventHandlerKeys.join('\0')) {
+    eventHandlerHash ^= character.charCodeAt(0);
+    eventHandlerHash = Math.imul(eventHandlerHash, 16777619);
+  }
+  testing.expectEqual(321, eventHandlerKeys.length);
+  testing.expectEqual('53da0cef', (eventHandlerHash >>> 0).toString(16).padStart(8, '0'));
+  testing.expectEqual('TrustedScript', typeMapping['*'].attributes.onabortpayment);
+  testing.expectEqual('TrustedScript', typeMapping['*'].attributes.onzoomlevelchange);
+  testing.expectEqual(undefined, typeMapping['*'].attributes.ondefinitelyfake);
+
+  testing.expectEqual(
+    ['embed', 'iframe', 'object', 'script', '*'],
+    Reflect.ownKeys(trustedTypes.getTypeMapping('')),
+  );
+  testing.expectEqual(
+    ['embed', 'iframe', 'object', 'script', '*'],
+    Reflect.ownKeys(trustedTypes.getTypeMapping(undefined)),
+  );
+  for (const namespace of [null, HTML_NS, SVG_NS, 0, false]) {
+    testing.expectEqual(null, trustedTypes.getTypeMapping(namespace));
+  }
+
+  const calls = [];
+  const policy = trustedTypes.createPolicy('fixture-policy', {
+    createHTML(input, ...args) {
+      calls.push(['html', input, args]);
+      return `H:${input}`;
+    },
+    createScript(input, ...args) {
+      calls.push(['script', input, args]);
+      return `S:${input}`;
+    },
+    createScriptURL(input, ...args) {
+      calls.push(['url', input, args]);
+      return `U:${input}`;
+    },
+  });
+  const html = policy.createHTML('a', 1);
+  const script = policy.createScript('b', 2);
+  const scriptURL = policy.createScriptURL('c', 3);
+  testing.expectEqual([
+    ['html', 'a', [1]],
+    ['script', 'b', [2]],
+    ['url', 'c', [3]],
+  ], calls);
+  testing.expectEqual('fixture-policy', policy.name);
+  testing.expectEqual('H:a', String(html));
+  testing.expectEqual('S:b', String(script));
+  testing.expectEqual('U:c', String(scriptURL));
+  testing.expectEqual('"H:a"', JSON.stringify(html));
+  testing.expectEqual('"S:b"', JSON.stringify(script));
+  testing.expectEqual('"U:c"', JSON.stringify(scriptURL));
+  testing.expectTrue(trustedTypes.isHTML(html));
+  testing.expectTrue(trustedTypes.isScript(script));
+  testing.expectTrue(trustedTypes.isScriptURL(scriptURL));
+  testing.expectFalse(trustedTypes.isScript(Object.create(TrustedScript.prototype)));
+  testing.expectEqual([], Reflect.ownKeys(policy));
+
+  // DOMString keeps arbitrary UTF-16 code units. TrustedScriptURL is the one
+  // exception here: its callback result is a USVString, so lone surrogates are
+  // replaced while a valid surrogate pair remains intact.
+  const loneHigh = String.fromCharCode(0xd800);
+  const loneLow = String.fromCharCode(0xdc00);
+  const scalarPair = String.fromCodePoint(0x1f600);
+  const rawUTF16 = `A${loneHigh}B${loneLow}C${scalarPair}D`;
+  const rawUnits = [65, 0xd800, 66, 0xdc00, 67, 0xd83d, 0xde00, 68];
+  const usvUnits = [65, 0xfffd, 66, 0xfffd, 67, 0xd83d, 0xde00, 68];
+  const seenUTF16 = {};
+  const utf16Policy = trustedTypes.createPolicy(`utf16-${rawUTF16}`, {
+    createHTML(input) {
+      seenUTF16.html = codeUnits(input);
+      return input;
+    },
+    createScript(input) {
+      seenUTF16.script = codeUnits(input);
+      return input;
+    },
+    createScriptURL(input) {
+      seenUTF16.url = codeUnits(input);
+      return input;
+    },
+  });
+  const utf16HTML = utf16Policy.createHTML(rawUTF16);
+  const utf16Script = utf16Policy.createScript(rawUTF16);
+  const utf16URL = utf16Policy.createScriptURL(rawUTF16);
+  testing.expectEqual(codeUnits(`utf16-${rawUTF16}`), codeUnits(utf16Policy.name));
+  testing.expectEqual(rawUnits, seenUTF16.html);
+  testing.expectEqual(rawUnits, seenUTF16.script);
+  testing.expectEqual(rawUnits, seenUTF16.url);
+  testing.expectEqual(rawUnits, codeUnits(String(utf16HTML)));
+  testing.expectEqual(rawUnits, codeUnits(utf16HTML.toJSON()));
+  testing.expectEqual(rawUnits, codeUnits(String(utf16Script)));
+  testing.expectEqual(rawUnits, codeUnits(utf16Script.toJSON()));
+  testing.expectEqual(usvUnits, codeUnits(String(utf16URL)));
+  testing.expectEqual(usvUnits, codeUnits(utf16URL.toJSON()));
+
+  const objectUTF16Policy = trustedTypes.createPolicy('utf16-object-results', {
+    createHTML: () => ({ toString: () => loneHigh }),
+    createScript: () => ({ toString: () => loneLow }),
+    createScriptURL: () => ({ toString: () => `${loneHigh}X${loneLow}` }),
+  });
+  testing.expectEqual([0xd800], codeUnits(String(objectUTF16Policy.createHTML('x'))));
+  testing.expectEqual([0xdc00], codeUnits(String(objectUTF16Policy.createScript('x'))));
+  testing.expectEqual(
+    [0xfffd, 88, 0xfffd],
+    codeUnits(String(objectUTF16Policy.createScriptURL('x'))),
+  );
+
+  const duplicateA = trustedTypes.createPolicy('regular-duplicate', {
+    createScript: input => input,
+  });
+  const duplicateB = trustedTypes.createPolicy('regular-duplicate', {
+    createScript: input => input,
+  });
+  testing.expectFalse(duplicateA === duplicateB);
+
+  const missing = errorOf(() =>
+    trustedTypes.createPolicy('missing-rule', {}).createScript('x')
+  );
+  testing.expectEqual('TypeError', missing.name);
+  testing.expectEqual(
+    "Failed to execute 'createScript' on 'TrustedTypePolicy': Policy missing-rule's TrustedTypePolicyOptions did not specify a 'createScript' member.",
+    missing.message,
+  );
+
+  for (const invalid of [1, null]) {
+    const failure = errorOf(() => trustedTypes.createPolicy(
+      `invalid-${String(invalid)}`,
+      { createScript: invalid },
+    ));
+    testing.expectEqual(
+      'TypeError',
+      failure ? failure.name : `NO_THROW:${String(invalid)}`,
+    );
+    testing.expectEqual(
+      "Failed to execute 'createPolicy' on 'TrustedTypePolicyFactory': Failed to read the 'createScript' property from 'TrustedTypePolicyOptions': The given value is not a function.",
+      failure ? failure.message : `NO_THROW:${String(invalid)}`,
+    );
+  }
+
+  const nullish = trustedTypes.createPolicy('nullish', {
+    createHTML: () => null,
+    createScript: () => undefined,
+    createScriptURL: () => null,
+  });
+  testing.expectEqual('', String(nullish.createHTML('a')));
+  testing.expectEqual('', String(nullish.createScript('b')));
+  testing.expectEqual('', String(nullish.createScriptURL('c')));
+
+  const defaultPolicy = trustedTypes.createPolicy('default', {
+    createScript: input => input,
+  });
+  testing.expectEqual(defaultPolicy, trustedTypes.defaultPolicy);
+  const duplicateDefault = errorOf(() => trustedTypes.createPolicy(
+    'default',
+    { createScript: input => input },
+  ));
+  testing.expectEqual('TypeError', duplicateDefault.name);
+  testing.expectEqual(
+    "Failed to execute 'createPolicy' on 'TrustedTypePolicyFactory': Policy with name \"default\" already exists.",
+    duplicateDefault.message,
+  );
+
+  const evalPolicy = trustedTypes.createPolicy('window-eval', {
+    createScript: input => input,
+  });
+  testing.expectEqual(
+    149,
+    eval(evalPolicy.createScript('globalThis.__trustedEval = 149')),
+  );
+  testing.expectEqual(149, globalThis.__trustedEval);
+  const loneSource = 'globalThis.__trustedLone = "' + loneHigh +
+    '"; globalThis.__trustedLone.charCodeAt(0)';
+  testing.expectEqual(0xd800, eval(utf16Policy.createScript(loneSource)));
+  testing.expectEqual(
+    0xd800,
+    (0, eval)(utf16Policy.createScript('"' + loneHigh + '".charCodeAt(0)')),
+  );
+  testing.expectEqual(
+    0xd800,
+    Function(utf16Policy.createScript(
+      'return "' + loneHigh + '".charCodeAt(0)',
+    ))(),
+  );
+  const fakeScript = {
+    toString() {
+      globalThis.__forgedEvalRan = true;
+      return 'globalThis.__forgedEvalRan = true';
+    },
+  };
+  testing.expectEqual(fakeScript, eval(fakeScript));
+  testing.expectEqual(undefined, globalThis.__forgedEvalRan);
+
+  (async () => {
+    const state = await testing.async();
+    const workerSource = `
+    const out = {};
+    try {
+      out.globals = [
+        typeof trustedTypes,
+        typeof TrustedTypePolicyFactory,
+        typeof TrustedTypePolicy,
+        typeof TrustedHTML,
+        typeof TrustedScript,
+        typeof TrustedScriptURL,
+      ];
+      const policy = trustedTypes.createPolicy('worker-eval', {
+        createScript: input => input,
+      });
+      out.value = eval(policy.createScript('globalThis.__workerTrustedEval = 150'));
+      out.stored = globalThis.__workerTrustedEval;
+      const codeUnits = value => Array.from(
+        { length: value.length },
+        (_, index) => value.charCodeAt(index),
+      );
+      const loneHigh = String.fromCharCode(0xd800);
+      const loneLow = String.fromCharCode(0xdc00);
+      const scalarPair = String.fromCodePoint(0x1f600);
+      const raw = 'A' + loneHigh + 'B' + loneLow + 'C' + scalarPair + 'D';
+      const seen = {};
+      const utf16Policy = trustedTypes.createPolicy('worker-utf16-' + loneHigh, {
+        createHTML(input) { seen.html = codeUnits(input); return input; },
+        createScript(input) { seen.script = codeUnits(input); return input; },
+        createScriptURL(input) { seen.url = codeUnits(input); return input; },
+      });
+      const html = utf16Policy.createHTML(raw);
+      const script = utf16Policy.createScript(raw);
+      const scriptURL = utf16Policy.createScriptURL(raw);
+      out.utf16 = {
+        name: codeUnits(utf16Policy.name),
+        // Snapshot the initial callback observations before the later eval
+        // probes call createScript again and update the mutable seen object.
+        seen: {
+          html: seen.html.slice(),
+          script: seen.script.slice(),
+          url: seen.url.slice(),
+        },
+        html: codeUnits(String(html)),
+        script: codeUnits(String(script)),
+        url: codeUnits(String(scriptURL)),
+      };
+      const loneSource = 'globalThis.__workerLone = "' + loneHigh +
+        '"; globalThis.__workerLone.charCodeAt(0)';
+      out.directLone = eval(utf16Policy.createScript(loneSource));
+      out.indirectLone = (0, eval)(
+        utf16Policy.createScript('"' + loneHigh + '".charCodeAt(0)'),
+      );
+      out.functionLone = Function(utf16Policy.createScript(
+        'return "' + loneHigh + '".charCodeAt(0)',
+      ))();
+      const fake = { toString() { globalThis.__workerForgedEvalRan = true; return '1'; } };
+      out.fakeIdentity = eval(fake) === fake;
+      out.fakeRan = globalThis.__workerForgedEvalRan;
+      out.globalOwn = Object.prototype.hasOwnProperty.call(globalThis, 'trustedTypes');
+      out.tag = Object.prototype.toString.call(trustedTypes);
+    } catch (error) {
+      out.error = { name: error.name, message: error.message };
+    }
+    postMessage(out);
+  `;
+    const workerURL = URL.createObjectURL(new Blob([workerSource], {
+      type: 'text/javascript',
+    }));
+    const worker = new Worker(workerURL);
+    URL.revokeObjectURL(workerURL);
+    worker.onmessage = event => state.resolve(event.data);
+    worker.onerror = event => state.resolve({
+      error: { name: 'WorkerError', message: event.message },
+    });
+
+    await state.done(result => {
+      testing.expectEqual(undefined, result.error);
+      testing.expectEqual([
+        'object', 'function', 'function', 'function', 'function', 'function',
+      ], result.globals);
+      testing.expectEqual(150, result.value);
+      testing.expectEqual(150, result.stored);
+      testing.expectEqual(
+        codeUnits('worker-utf16-' + loneHigh),
+        result.utf16.name,
+      );
+      testing.expectEqual(rawUnits, result.utf16.seen.html);
+      testing.expectEqual(rawUnits, result.utf16.seen.script);
+      testing.expectEqual(rawUnits, result.utf16.seen.url);
+      testing.expectEqual(rawUnits, result.utf16.html);
+      testing.expectEqual(rawUnits, result.utf16.script);
+      testing.expectEqual(usvUnits, result.utf16.url);
+      testing.expectEqual(0xd800, result.directLone);
+      testing.expectEqual(0xd800, result.indirectLone);
+      testing.expectEqual(0xd800, result.functionLone);
+      testing.expectTrue(result.fakeIdentity);
+      testing.expectEqual(undefined, result.fakeRan);
+      testing.expectFalse(result.globalOwn);
+      testing.expectEqual('[object TrustedTypePolicyFactory]', result.tag);
+    });
+    worker.terminate();
+  })();
+</script>

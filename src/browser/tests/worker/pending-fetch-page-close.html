@@ -1,0 +1,6 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<script id="worker_pending_fetch_page_close">
+  const worker = new Worker('./echo-worker.js?delay_ms=300');
+  testing.expectTrue(worker instanceof Worker);
+</script>

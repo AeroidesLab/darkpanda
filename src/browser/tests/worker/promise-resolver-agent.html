@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<body></body>
+<script src="../testing.js"></script>
+
+<script id="window_checkpoint_does_not_drain_worker_agent" type="module">
+  {
+    const state = await testing.async();
+    const worker = new Worker('./promise-resolver-agent-worker.js');
+    const sharedMemory = new WebAssembly.Memory({
+      initial: 1,
+      maximum: 1,
+      shared: true,
+    });
+    const gate = new Int32Array(sharedMemory.buffer);
+
+    const windowOrder = [];
+    let notified = false;
+    let workerMicrotaskBeforeNotify = false;
+    let workerMicrotaskSeen = false;
+    let released;
+
+    const finishIfComplete = () => {
+      if (released && workerMicrotaskSeen) {
+        state.resolve({
+          released,
+          windowOrder: [...windowOrder],
+          workerMicrotaskBeforeNotify,
+        });
+      }
+    };
+
+    worker.onerror = (event) => {
+      state.resolve({ error: event.message || 'worker error' });
+    };
+    worker.onmessage = (event) => {
+      if (event.data.phase === 'armed') {
+        queueMicrotask(() => windowOrder.push('window-queueMicrotask'));
+        Promise.resolve().then(() => windowOrder.push('window-promise-then'));
+
+        // This timer runs only after Window's microtask checkpoint. The worker
+        // already has a queued microtask, but remains blocked in its own agent.
+        setTimeout(() => {
+          notified = true;
+          Atomics.store(gate, 0, 1);
+          Atomics.notify(gate, 0, 1);
+        }, 0);
+        return;
+      }
+
+      if (event.data.phase === 'worker-microtask') {
+        if (!notified) workerMicrotaskBeforeNotify = true;
+        workerMicrotaskSeen = true;
+        finishIfComplete();
+        return;
+      }
+
+      if (event.data.phase === 'released') {
+        released = event.data;
+        finishIfComplete();
+      }
+    };
+
+    worker.postMessage({ gate: sharedMemory.buffer });
+
+    // Both sides have bounded waits so a failed assertion cannot strand the
+    // worker owner thread during page teardown.
+    const timeout = setTimeout(() => {
+      Atomics.store(gate, 0, 1);
+      Atomics.notify(gate, 0, 1);
+      state.resolve({ error: 'worker agent checkpoint timed out' });
+    }, 6000);
+
+    try {
+      await state.done((result) => {
+        testing.expectEqual(undefined, result.error);
+        testing.expectFalse(result.workerMicrotaskBeforeNotify);
+        testing.expectEqual(
+          ['window-queueMicrotask', 'window-promise-then'],
+          result.windowOrder,
+        );
+        // If the Window wins the scheduling race just before Atomics.wait,
+        // V8 reports "not-equal" instead of "ok". Both prove that the gate,
+        // rather than a worker microtask checkpoint, released this task.
+        testing.expectTrue(
+          result.released.waitResult === 'ok' ||
+            result.released.waitResult === 'not-equal',
+        );
+      });
+    } finally {
+      clearTimeout(timeout);
+      Atomics.store(gate, 0, 1);
+      Atomics.notify(gate, 0, 1);
+      worker.terminate();
+    }
+  }
+</script>

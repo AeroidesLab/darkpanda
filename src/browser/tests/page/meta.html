@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id=meta>
+  testing.expectEqual('HTMLDocument', document.constructor.name);
+  testing.expectEqual('Document', new Document().constructor.name);
+  testing.expectEqual('[object Document]', new Document().toString());
+  testing.expectEqual('Window', window.constructor.name);
+
+  // Important test. new Document() returns a Node, but getElementById
+  // exists on the Document. So this is a simple way to make sure that
+  // the returned Zig type is associated with the correct JS class.
+  testing.expectEqual(null, new Document().getElementById('x'));
+
+  // HTMLDocument (global document) should have HTML-specific properties
+  testing.expectEqual('object', typeof document.head);
+  testing.expectEqual('object', typeof document.body);
+  testing.expectEqual('string', typeof document.title);
+  testing.expectEqual('object', typeof document.images);
+  testing.expectEqual('object', typeof document.scripts);
+  testing.expectEqual('object', typeof document.links);
+  testing.expectEqual('object', typeof document.forms);
+  testing.expectEqual('object', typeof document.location);
+
+  // The HTML specification exposes these members on Document itself. Chrome
+  // 149 therefore returns null/empty live collections for a constructed
+  // non-HTML Document rather than leaving the properties undefined.
+  const plainDoc = new Document();
+  testing.expectEqual(null, plainDoc.head);
+  testing.expectEqual(null, plainDoc.body);
+  testing.expectEqual('', plainDoc.title);
+  testing.expectEqual('HTMLCollection', plainDoc.images.constructor.name);
+  testing.expectEqual('HTMLCollection', plainDoc.scripts.constructor.name);
+  testing.expectEqual('HTMLCollection', plainDoc.links.constructor.name);
+  testing.expectEqual('HTMLCollection', plainDoc.forms.constructor.name);
+  testing.expectEqual(null, plainDoc.location);
+
+  // Both should have common Document properties
+  testing.expectEqual('string', typeof document.URL);
+  testing.expectEqual('string', typeof plainDoc.URL);
+  testing.expectEqual('string', typeof document.readyState);
+  testing.expectEqual('string', typeof plainDoc.readyState);
+
+  testing.expectEqual("[object Intl.DateTimeFormat]", new Intl.DateTimeFormat().toString());
+</script>
+
+<!-- Leave it, it used to crash -->
+<script src='empty.js?x=["violated-directive=worker-src","TEST COMPLETE"]'></script>
+
+<!--
+  A blocking <script src> whose fetch returns a non-2xx status must:
+    - NOT execute the response body as JavaScript
+    - Fire an `error` event on the element (and NOT `load`)
+  /404.js returns valid JS (`window.__404_body_executed = true;`) with a
+  404 status, so the regression where we eval'd 4xx bodies would flip
+  __404_body_executed to true.
+-->
+<script>window.__bad404 = { error: false, load: false };</script>
+<script src="404.js" onerror="window.__bad404.error = true" onload="window.__bad404.load = true"></script>
+<script>
+  testing.expectEqual(true, window.__bad404.error);
+  testing.expectEqual(false, window.__bad404.load);
+  testing.expectEqual('undefined', typeof window.__404_body_executed);
+</script>

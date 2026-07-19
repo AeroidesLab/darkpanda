@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<head>
+  <title>Chrome Worker global prototype topology</title>
+  <script src="../testing.js"></script>
+</head>
+
+<body></body>
+
+<script id="worker_prototype_topology_standalone" type="module">
+  const state = await testing.async();
+  window.__workerPrototypeTopology = new Promise((resolve, reject) => {
+    const worker = new Worker('./prototype-topology-worker.js');
+    worker.onmessage = event => {
+      worker.terminate();
+      resolve(JSON.stringify(event.data));
+    };
+    worker.onerror = event => {
+      worker.terminate();
+      reject(new Error(event.message));
+    };
+  });
+
+  window.__workerPrototypeTopology.then(
+    value => state.resolve({ ok: true, value }),
+    error => state.resolve({ ok: false, error: String(error) }),
+  );
+
+  await state.done(outcome => {
+    testing.expectTrue(outcome.ok, outcome.error || 'Worker topology failed');
+    const topology = JSON.parse(outcome.value);
+    testing.expectTrue(topology.selfIsDedicatedWorkerGlobalScope);
+    testing.expectTrue(topology.selfIsWorkerGlobalScope);
+    testing.expectTrue(topology.globalPrototypeIsDedicated);
+    testing.expectTrue(topology.workerPrototypeIsWorker);
+    testing.expectTrue(topology.eventTargetPrototypeIsNext);
+    testing.expectTrue(topology.postMessageOnGlobal);
+    testing.expectTrue(topology.importScriptsOnWorkerPrototype);
+  });
+</script>

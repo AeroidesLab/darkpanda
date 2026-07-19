@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=response>
+  {
+    let response = new Response("Hello, World!");
+    testing.expectEqual(200, response.status);
+    testing.expectEqual("", response.statusText);
+    testing.expectEqual(true, response.ok);
+    testing.expectEqual("", response.url);
+    testing.expectEqual(false, response.redirected);
+  }
+
+  {
+    let response2 = new Response("Error occurred", {
+      status: 404,
+      statusText: "Not Found",
+      headers: {
+          "Content-Type": "text/plain",
+          "X-Custom": "test-value",
+          "Cache-Control": "no-cache"
+      }
+    });
+    testing.expectEqual(404, response2.status);
+    testing.expectEqual("Not Found", response2.statusText);
+    testing.expectEqual(false, response2.ok);
+    testing.expectEqual("test-value", response2.headers.get("X-Custom"));
+    testing.expectEqual("no-cache", response2.headers.get("cache-control"));
+  }
+
+  {
+    let response3 = new Response("Created", { status: 201, statusText: "Created" });
+    testing.expectEqual("default", response3.type);
+    testing.expectEqual(201, response3.status);
+    testing.expectEqual("Created", response3.statusText);
+    testing.expectEqual(true, response3.ok);
+  }
+
+  {
+    let nullResponse = new Response(null);
+    testing.expectEqual(200, nullResponse.status);
+    testing.expectEqual("", nullResponse.statusText);
+  }
+
+  {
+    let emptyResponse = new Response("");
+    testing.expectEqual(200, emptyResponse.status);
+  }
+</script>
+
+<script id=body_methods type=module>
+  const state = await testing.async();
+
+  const response1 = new Response('Hello, World!');
+  const text1 = await response1.text();
+
+  const response2 = new Response('{"name": "test"}');
+  const json2 = await response2.json();
+
+  const response3 = new Response('binary data');
+  const buffer3 = await response3.arrayBuffer();
+
+  const response4 = new Response('blob content', {
+    headers: { 'Content-Type': 'text/plain' }
+  });
+  const blob4 = await response4.blob();
+
+  const response5 = new Response('bytes');
+  const bytes5 = await response5.bytes();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('Hello, World!', text1);
+
+    testing.expectEqual('test', json2.name);
+
+    testing.expectEqual(true, buffer3 instanceof ArrayBuffer);
+    testing.expectEqual(11, buffer3.byteLength);
+
+    testing.expectEqual(true, blob4 instanceof Blob);
+    testing.expectEqual(12, blob4.size);
+    testing.expectEqual('text/plain', blob4.type);
+
+    testing.expectEqual(true, bytes5 instanceof Uint8Array);
+    testing.expectEqual(5, bytes5.length);
+  });
+</script>
+
+<script id=clone type=module>
+  const state = await testing.async();
+
+  const syncResponse1 = new Response('test body', {
+    status: 201,
+    statusText: 'Created',
+    headers: { 'X-Custom': 'value' }
+  });
+  const syncResponse2 = syncResponse1.clone();
+
+  const cloneResponse1 = new Response('cloned body');
+  const cloneResponse2 = cloneResponse1.clone();
+
+  const cloneText1 = await cloneResponse1.text();
+  const cloneText2 = await cloneResponse2.text();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(syncResponse1.status, syncResponse2.status);
+    testing.expectEqual(syncResponse1.statusText, syncResponse2.statusText);
+    testing.expectEqual('value', syncResponse2.headers.get('X-Custom'));
+
+    testing.expectEqual('cloned body', cloneText1);
+    testing.expectEqual('cloned body', cloneText2);
+  });
+</script>
+
+<script id=body_types type=module>
+  const state = await testing.async();
+
+  // Test Response with ArrayBuffer body
+  const arrayBufferData = new Uint8Array([72, 101, 108, 108, 111]); // "Hello"
+  const arrayBuffer = arrayBufferData.buffer;
+  const arrayBufferResponse = new Response(arrayBuffer);
+  const arrayBufferResult = await arrayBufferResponse.arrayBuffer();
+  const arrayBufferView = new Uint8Array(arrayBufferResult);
+
+  // Test Response with Uint8Array body
+  const uint8Data = new Uint8Array([87, 111, 114, 108, 100]); // "World"
+  const uint8Response = new Response(uint8Data);
+  const uint8Result = await uint8Response.arrayBuffer();
+  const uint8View = new Uint8Array(uint8Result);
+
+  // Test Response with Blob body
+  const blob = new Blob(['Test', 'Data'], { type: 'text/plain' });
+  const blobResponse = new Response(blob);
+  const blobText = await blobResponse.text();
+
+  // Test Response with ReadableStream body
+  const chunks = [
+    new Uint8Array([65, 66, 67]), // "ABC"
+    new Uint8Array([68, 69, 70])  // "DEF"
+  ];
+  let chunkIndex = 0;
+
+  const stream = new ReadableStream({
+    pull(controller) {
+      if (chunkIndex < chunks.length) {
+        controller.enqueue(chunks[chunkIndex++]);
+      } else {
+        controller.close();
+      }
+    }
+  });
+
+  const streamResponse = new Response(stream);
+  const streamResult = await streamResponse.arrayBuffer();
+  const streamView = new Uint8Array(streamResult);
+
+  // Test Response.body returns ReadableStream
+  const bodyStream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2, 3]));
+      controller.close();
+    }
+  });
+
+  const bodyStreamResponse = new Response(bodyStream);
+  const body = bodyStreamResponse.body;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, arrayBufferResult instanceof ArrayBuffer);
+    testing.expectEqual(5, arrayBufferResult.byteLength);
+    testing.expectEqual(72, arrayBufferView[0]);  // 'H'
+    testing.expectEqual(111, arrayBufferView[4]); // 'o'
+
+    testing.expectEqual(true, uint8Result instanceof ArrayBuffer);
+    testing.expectEqual(5, uint8Result.byteLength);
+    testing.expectEqual(87, uint8View[0]);  // 'W'
+    testing.expectEqual(100, uint8View[4]); // 'd'
+
+    testing.expectEqual('TestData', blobText);
+
+    testing.expectEqual(true, streamResult instanceof ArrayBuffer);
+    testing.expectEqual(6, streamResult.byteLength);
+    testing.expectEqual(65, streamView[0]); // 'A'
+    testing.expectEqual(66, streamView[1]); // 'B'
+    testing.expectEqual(67, streamView[2]); // 'C'
+    testing.expectEqual(68, streamView[3]); // 'D'
+    testing.expectEqual(69, streamView[4]); // 'E'
+    testing.expectEqual(70, streamView[5]); // 'F'
+
+    testing.expectEqual(true, body instanceof ReadableStream);
+  });
+</script>
+
+<script id=body_used type=module>
+  const state = await testing.async();
+
+  const response1 = new Response('hi');
+  const usedBefore1 = response1.bodyUsed;
+  await response1.text();
+  const usedAfter1 = response1.bodyUsed;
+
+  // Re-consuming a used body rejects.
+  let rejected1 = false;
+  try { await response1.text(); } catch (e) { rejected1 = true; }
+
+  // A bodyless response is never "used".
+  const response2 = new Response();
+  const usedBefore2 = response2.bodyUsed;
+  await response2.text();
+  const usedAfter2 = response2.bodyUsed;
+
+  // text() decodes as UTF-8, stripping a leading BOM.
+  const response3 = new Response('﻿hi');
+  const text3 = await response3.text();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectFalse(usedBefore1);
+    testing.expectTrue(usedAfter1);
+    testing.expectTrue(rejected1);
+
+    testing.expectFalse(usedBefore2);
+    testing.expectFalse(usedAfter2);
+
+    testing.expectEqual('hi', text3);
+  });
+</script>
+
+<script id=default_type>
+  {
+    testing.expectEqual('default', new Response('x').type);
+  }
+</script>
+
+<script id=content_type_from_body>
+  {
+    testing.expectEqual('text/plain;charset=UTF-8', new Response('x').headers.get('content-type'));
+  }
+  {
+    const usp = new URLSearchParams({ a: '1' });
+    testing.expectEqual('application/x-www-form-urlencoded;charset=UTF-8', new Response(usp).headers.get('content-type'));
+  }
+  {
+    const blob = new Blob(['x'], { type: 'text/CustomCase' });
+    testing.expectEqual('text/customcase', new Response(blob).headers.get('content-type'));
+  }
+  {
+    // Buffer sources carry no default Content-Type.
+    testing.expectTrue(new Response(new Uint8Array([1, 2, 3])).headers.get('content-type') === null);
+  }
+</script>
+
+<script id=static_error>
+  {
+    const r = Response.error();
+    testing.expectEqual('error', r.type);
+    testing.expectEqual(0, r.status);
+    testing.expectEqual('', r.statusText);
+    testing.expectEqual(false, r.ok);
+    testing.expectEqual(null, r.body);
+  }
+</script>
+
+<script id=static_redirect>
+  {
+    const r = Response.redirect('https://example.com/a');
+    testing.expectEqual(302, r.status);
+    testing.expectEqual('https://example.com/a', r.headers.get('location'));
+    testing.expectEqual('default', r.type);
+  }
+  {
+    const r = Response.redirect('https://example.com/a', 301);
+    testing.expectEqual(301, r.status);
+  }
+  {
+    let threw = false;
+    try { Response.redirect('https://example.com/a', 200); } catch (e) { threw = e instanceof RangeError; }
+    testing.expectTrue(threw);
+  }
+</script>
+
+<script id=static_response_headers_immutable_and_validation_order>
+  {
+    const responses = [
+      Response.error(),
+      Response.error().clone(),
+      Response.redirect('https://example.com/immutable'),
+      Response.redirect('https://example.com/immutable').clone(),
+    ];
+    const operations = [
+      ['append', headers => headers.append('x-test', 'append')],
+      ['set', headers => headers.set('x-test', 'set')],
+      ['delete', headers => headers.delete('location')],
+    ];
+
+    for (const response of responses) {
+      for (const [operation, mutate] of operations) {
+        let observed = null;
+        try { mutate(response.headers); }
+        catch (error) { observed = {name: error.name, message: error.message}; }
+        testing.expectEqual('TypeError', observed?.name);
+        testing.expectEqual(
+          `Failed to execute '${operation}' on 'Headers': Headers are immutable`,
+          observed?.message,
+        );
+      }
+    }
+
+    // Fetch validates and normalizes arguments before consulting the guard.
+    // These invalid inputs therefore throw their validation TypeError instead
+    // of the immutable-guard diagnostic.
+    const immutable = Response.error().headers;
+    for (const [operation, reason, mutate] of [
+      ['append', 'Invalid name', headers => headers.append('bad name', 'value')],
+      ['set', 'Invalid value', headers => headers.set('x-test', 'bad\nvalue')],
+      ['delete', 'Invalid name', headers => headers.delete('bad name')],
+    ]) {
+      let observed = null;
+      try { mutate(immutable); }
+      catch (error) { observed = {name: error.name, message: error.message}; }
+      testing.expectEqual('TypeError', observed?.name);
+      testing.expectEqual(
+        `Failed to execute '${operation}' on 'Headers': ${reason}`,
+        observed?.message,
+      );
+    }
+  }
+</script>
+
+<script id=static_json type=module>
+  {
+    const r = Response.json({ a: 1, b: 'two' });
+    testing.expectEqual(200, r.status);
+    testing.expectEqual('application/json', r.headers.get('content-type'));
+    testing.expectEqual('{"a":1,"b":"two"}', await r.text());
+  }
+  {
+    const r = Response.json([1, 2], { status: 201, headers: { 'content-type': 'application/vnd.api+json' } });
+    testing.expectEqual(201, r.status);
+    // An explicit content-type is not overridden.
+    testing.expectEqual('application/vnd.api+json', r.headers.get('content-type'));
+    testing.expectEqual('[1,2]', await r.text());
+  }
+  {
+    let threw = false;
+    try { Response.json(undefined); } catch (e) { threw = e instanceof TypeError; }
+    testing.expectTrue(threw);
+  }
+</script>

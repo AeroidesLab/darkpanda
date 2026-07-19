@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Chrome 149 Worker interface surface</title>
+<script src="../testing.js"></script>
+
+<script id="worker_interface_chrome149">
+  const keyName = key => typeof key === 'symbol' ? key.toString() : key;
+  const descriptorShape = descriptor => ({
+    kind: Object.hasOwn(descriptor, 'value') ? 'data' : 'accessor',
+    writable: Object.hasOwn(descriptor, 'writable')
+      ? descriptor.writable
+      : undefined,
+    enumerable: descriptor.enumerable,
+    configurable: descriptor.configurable,
+    valueName: typeof descriptor.value === 'function'
+      ? descriptor.value.name
+      : undefined,
+    valueLength: typeof descriptor.value === 'function'
+      ? descriptor.value.length
+      : undefined,
+    getterName: typeof descriptor.get === 'function'
+      ? descriptor.get.name
+      : undefined,
+    getterLength: typeof descriptor.get === 'function'
+      ? descriptor.get.length
+      : undefined,
+    setterName: typeof descriptor.set === 'function'
+      ? descriptor.set.name
+      : undefined,
+    setterLength: typeof descriptor.set === 'function'
+      ? descriptor.set.length
+      : undefined,
+  });
+  const captureError = callback => {
+    try {
+      callback();
+      return null;
+    } catch (error) {
+      return {
+        name: error.name,
+        message: error.message,
+        ownKeys: Reflect.ownKeys(error).map(keyName),
+      };
+    }
+  };
+
+  const prototype = Worker.prototype;
+  testing.expectEqual([
+    'onmessage',
+    'postMessage',
+    'terminate',
+    'constructor',
+    'onerror',
+    'Symbol(Symbol.toStringTag)',
+  ], Reflect.ownKeys(prototype).map(keyName));
+  testing.expectTrue(Object.getPrototypeOf(prototype) === EventTarget.prototype);
+  testing.expectEqual('[object Worker]', Object.prototype.toString.call(prototype));
+  testing.expectFalse('onmessageerror' in prototype);
+
+  testing.expectEqual({
+    kind: 'accessor', writable: undefined,
+    enumerable: true, configurable: true,
+    valueName: undefined, valueLength: undefined,
+    getterName: 'get onmessage', getterLength: 0,
+    setterName: 'set onmessage', setterLength: 1,
+  }, descriptorShape(Object.getOwnPropertyDescriptor(prototype, 'onmessage')));
+  testing.expectEqual({
+    kind: 'data', writable: true,
+    enumerable: true, configurable: true,
+    valueName: 'postMessage', valueLength: 1,
+    getterName: undefined, getterLength: undefined,
+    setterName: undefined, setterLength: undefined,
+  }, descriptorShape(Object.getOwnPropertyDescriptor(prototype, 'postMessage')));
+  testing.expectEqual({
+    kind: 'data', writable: true,
+    enumerable: true, configurable: true,
+    valueName: 'terminate', valueLength: 0,
+    getterName: undefined, getterLength: undefined,
+    setterName: undefined, setterLength: undefined,
+  }, descriptorShape(Object.getOwnPropertyDescriptor(prototype, 'terminate')));
+  testing.expectEqual({
+    kind: 'data', writable: true,
+    enumerable: false, configurable: true,
+    valueName: 'Worker', valueLength: 1,
+    getterName: undefined, getterLength: undefined,
+    setterName: undefined, setterLength: undefined,
+  }, descriptorShape(Object.getOwnPropertyDescriptor(prototype, 'constructor')));
+
+  const illegalInvocation = {
+    name: 'TypeError',
+    message: 'Illegal invocation',
+    ownKeys: ['stack', 'message'],
+  };
+  testing.expectEqual(
+    illegalInvocation,
+    captureError(() => prototype.postMessage.call({})),
+  );
+  testing.expectEqual(
+    illegalInvocation,
+    captureError(() => prototype.terminate.call({})),
+  );
+  const onmessage = Object.getOwnPropertyDescriptor(prototype, 'onmessage');
+  testing.expectEqual(
+    illegalInvocation,
+    captureError(() => onmessage.get.call({})),
+  );
+  testing.expectEqual(
+    illegalInvocation,
+    captureError(() => onmessage.set.call({}, null)),
+  );
+
+  const worker = new Worker('./quiescence-dormant-worker.js');
+  testing.expectEqual([], Reflect.ownKeys(worker));
+  testing.expectEqual('[object Worker]', Object.prototype.toString.call(worker));
+  testing.expectTrue(Object.getPrototypeOf(worker) === prototype);
+  testing.expectEqual(undefined, worker.onmessageerror);
+  worker.terminate();
+</script>

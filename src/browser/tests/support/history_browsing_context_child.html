@@ -1,0 +1,7 @@
+<!doctype html>
+<script>
+  if (!location.search.includes('child-replaced')) {
+    history.replaceState({child: true}, '', '?child-replaced');
+  }
+  parent.__historyChildReady = true;
+</script>

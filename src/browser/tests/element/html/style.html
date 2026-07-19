@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id="sheet">
+  {
+    // Disconnected style element should have no sheet
+    testing.expectEqual(null, document.createElement('style').sheet);
+
+    // Connected style element should have a CSSStyleSheet
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    testing.expectEqual(true, style.sheet instanceof CSSStyleSheet);
+
+    // Same sheet instance on repeated access
+    testing.expectEqual(true, style.sheet === style.sheet);
+
+    // Non-CSS type should have no sheet
+    const lessStyle = document.createElement('style');
+    lessStyle.type = 'text/less';
+    document.head.appendChild(lessStyle);
+    testing.expectEqual(null, lessStyle.sheet);
+
+    // Empty type attribute is valid (defaults to text/css per spec)
+    const emptyType = document.createElement('style');
+    emptyType.setAttribute('type', '');
+    document.head.appendChild(emptyType);
+    testing.expectEqual(true, emptyType.sheet instanceof CSSStyleSheet);
+
+    // Case-insensitive type check
+    const upperType = document.createElement('style');
+    upperType.type = 'TEXT/CSS';
+    document.head.appendChild(upperType);
+    testing.expectEqual(true, upperType.sheet instanceof CSSStyleSheet);
+
+    // Disconnection clears sheet
+    const tempStyle = document.createElement('style');
+    document.head.appendChild(tempStyle);
+    testing.expectEqual(true, tempStyle.sheet instanceof CSSStyleSheet);
+    document.head.removeChild(tempStyle);
+    testing.expectEqual(null, tempStyle.sheet);
+
+    // ownerNode points back to the style element
+    const ownStyle = document.createElement('style');
+    document.head.appendChild(ownStyle);
+    testing.expectEqual(true, ownStyle.sheet.ownerNode === ownStyle);
+  }
+</script>
+
+<script id="type">
+  {
+    const style = document.createElement('style');
+    testing.expectEqual('', style.type);
+
+    style.type = 'text/plain';
+    testing.expectEqual('text/plain', style.type);
+  }
+</script>
+
+<script id="media">
+  {
+    const style = document.createElement('style');
+    testing.expectEqual('', style.media);
+
+    style.media = 'screen';
+    testing.expectEqual('screen', style.media);
+
+    style.media = 'print and (max-width: 600px)';
+    testing.expectEqual('print and (max-width: 600px)', style.media);
+  }
+</script>
+
+<script id="blocking">
+  {
+    const style = document.createElement('style');
+    testing.expectEqual('', style.blocking);
+
+    style.blocking = 'render';
+    testing.expectEqual('render', style.blocking);
+  }
+</script>
+
+<script id="disabled">
+  {
+    const style = document.createElement('style');
+    testing.expectEqual(false, style.disabled);
+
+    // Blink delegates to the existing sheet. A disconnected style has no
+    // sheet, so assigning disabled is a no-op and never reflects an attribute.
+    style.disabled = true;
+    testing.expectEqual(false, style.disabled);
+    testing.expectEqual(false, style.hasAttribute('disabled'));
+
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+    style.disabled = true;
+    testing.expectEqual(true, style.disabled);
+    testing.expectEqual(true, sheet.disabled);
+    testing.expectEqual(false, style.hasAttribute('disabled'));
+
+    style.disabled = false;
+    testing.expectEqual(false, style.disabled);
+    testing.expectEqual(false, sheet.disabled);
+    style.remove();
+  }
+</script>
+
+<script id="attributes">
+  {
+    const style = document.createElement('style');
+
+    style.setAttribute('media', 'screen');
+    testing.expectEqual('screen', style.media);
+
+    style.setAttribute('type', 'text/less');
+    testing.expectEqual('text/less', style.type);
+
+    style.setAttribute('disabled', '');
+    testing.expectEqual(false, style.disabled);
+    testing.expectEqual(true, style.hasAttribute('disabled'));
+  }
+</script>
+
+<script id="disabled_sheet_identity_and_cascade">
+  {
+    const target = document.createElement('div');
+    target.className = 'disabled-sheet-cascade-target';
+    document.documentElement.appendChild(target);
+
+    const style = document.createElement('style');
+    style.textContent = '.disabled-sheet-cascade-target { display: none; }';
+    document.head.appendChild(style);
+    const list = document.styleSheets;
+    const sheet = style.sheet;
+
+    testing.expectEqual(false, target.checkVisibility());
+    testing.expectEqual(false, style.hasAttribute('disabled'));
+
+    style.disabled = true;
+    testing.expectEqual(true, style.disabled);
+    testing.expectEqual(true, sheet.disabled);
+    testing.expectEqual(false, style.hasAttribute('disabled'));
+    testing.expectEqual(true, target.checkVisibility());
+    testing.expectTrue(document.styleSheets === list);
+    testing.expectTrue(style.sheet === sheet);
+
+    // The similarly-named content attribute is not the IDL property's state.
+    style.setAttribute('disabled', 'content-attribute-is-ignored');
+    testing.expectEqual(true, style.disabled);
+
+    sheet.disabled = false;
+    testing.expectEqual(false, style.disabled);
+    testing.expectEqual(false, sheet.disabled);
+    testing.expectEqual(true, style.hasAttribute('disabled'));
+    testing.expectEqual(false, target.checkVisibility());
+    testing.expectTrue(document.styleSheets === list);
+    testing.expectTrue(style.sheet === sheet);
+
+    style.remove();
+    target.remove();
+  }
+</script>
+
+<script id="style-load-event" type=module>
+  // A style element fires a load event when appended to the DOM.
+  const state = await testing.async();
+  const style = document.createElement("style");
+
+  style.addEventListener("load", (e) => {
+    state.resolve(e);
+  });
+  document.head.appendChild(style);
+
+  await state.done((e) => {
+    testing.expectEqual(false, e.bubbles);
+    testing.expectEqual(false, e.cancelBubble);
+    testing.expectEqual(false, e.cancelable);
+    testing.expectEqual(false, e.composed);
+    testing.expectEqual(true, e.isTrusted);
+    testing.expectEqual(style, e.target);
+  });
+</script>
+
+<script id="style-tag-content-parsing">
+{
+  const style = document.createElement("style");
+  style.textContent = '.content-test { padding: 5px; }';
+  document.head.appendChild(style);
+
+  const sheet = style.sheet;
+  testing.expectTrue(sheet instanceof CSSStyleSheet);
+  testing.expectEqual(1, sheet.cssRules.length);
+  testing.expectEqual('.content-test', sheet.cssRules[0].selectorText);
+  testing.expectEqual('5px', sheet.cssRules[0].style.padding);
+}
+</script>

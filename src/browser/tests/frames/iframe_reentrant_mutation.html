@@ -1,0 +1,52 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<body>
+<iframe id="stable" srcdoc="<!doctype html><p>stable</p>"></iframe>
+<script id="iframe_reentrant_mutation" type="module">
+  const state = await testing.async();
+  window.__iframeMutationDone = state.resolve;
+
+  // The child deliberately mutates its parent's frame tree during its initial
+  // srcdoc navigation: one sibling is inserted before all owner elements,
+  // another after them, and the currently navigating child discards itself.
+  // Waiting for a signal keeps this oracle valid both for Chrome's asynchronous
+  // srcdoc commit and for DarkPanda's current synchronous implementation.
+  const outer = document.createElement('iframe');
+  outer.id = 'discarded-during-initial-navigation';
+  outer.srcdoc = `<!doctype html><script>
+    const owner = frameElement;
+    const parentDocument = parent.document;
+
+    const before = parentDocument.createElement('iframe');
+    before.id = 'inserted-before';
+    before.srcdoc = '<!doctype html><p>before</p>';
+    parentDocument.body.insertBefore(before, parentDocument.body.firstChild);
+
+    const after = parentDocument.createElement('iframe');
+    after.id = 'inserted-after';
+    after.srcdoc = '<!doctype html><p>after</p>';
+    parentDocument.body.appendChild(after);
+
+    parent.__iframeMutationDone();
+    owner.remove();
+  <\/script>`;
+  document.body.appendChild(outer);
+
+  await state.done(() => {
+    delete window.__iframeMutationDone;
+    testing.expectEqual(false, outer.isConnected);
+    testing.expectEqual(null, outer.contentWindow);
+    testing.expectEqual(3, window.length);
+
+    const domIds = Array.from(document.querySelectorAll('iframe'), frame => frame.id);
+    testing.expectEqual('inserted-before,stable,inserted-after', domIds.join(','));
+
+    const frameIds = Array.from({length: window.length}, (_, index) =>
+      window[index].frameElement.id);
+    // Window's indexed getter follows FrameTree creation order, not the owner
+    // elements' current DOM order.
+    testing.expectEqual('stable,inserted-before,inserted-after', frameIds.join(','));
+    testing.expectEqual(3, new Set(frameIds).size);
+  });
+</script>
+</body>

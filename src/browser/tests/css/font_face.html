@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="constructor_basic">
+{
+    const face = new FontFace("TestFont", "url(test.woff)");
+    testing.expectTrue(face instanceof FontFace);
+}
+</script>
+
+<script id="constructor_name">
+{
+    testing.expectEqual('FontFace', FontFace.name);
+}
+</script>
+
+<script id="family_property">
+{
+    const face = new FontFace("MyFont", "url(font.woff2)");
+    testing.expectEqual("MyFont", face.family);
+}
+</script>
+
+<script id="url_source_status_is_unloaded">
+{
+    const face = new FontFace("F", "url(f.woff)");
+    testing.expectEqual("unloaded", face.status);
+}
+</script>
+
+<script id="loaded_is_promise">
+{
+    const face = new FontFace("F", "url(f.woff)");
+    testing.expectTrue(face.loaded instanceof Promise);
+}
+</script>
+
+<script id="load_returns_promise">
+{
+    const face = new FontFace("F", "url(f.woff)");
+    testing.expectTrue(face.load() instanceof Promise);
+}
+</script>
+
+<script id="default_descriptors">
+{
+    const face = new FontFace("F", "url(f.woff)");
+    testing.expectEqual("normal", face.style);
+    testing.expectEqual("normal", face.weight);
+    testing.expectEqual("normal", face.stretch);
+    testing.expectEqual("normal", face.variant);
+    testing.expectEqual("normal", face.featureSettings);
+    testing.expectEqual("normal", face.variationSettings);
+    testing.expectEqual("auto", face.display);
+    testing.expectEqual("U+0-10FFFF", face.unicodeRange);
+    testing.expectEqual("normal", face.ascentOverride);
+    testing.expectEqual("normal", face.descentOverride);
+    testing.expectEqual("normal", face.lineGapOverride);
+    testing.expectEqual("100%", face.sizeAdjust);
+}
+</script>
+
+<script id="prototype_accessors">
+{
+    const writable = [
+        "family", "style", "weight", "stretch", "unicodeRange", "variant",
+        "featureSettings", "variationSettings", "display", "ascentOverride",
+        "descentOverride", "lineGapOverride", "sizeAdjust",
+    ];
+    for (const name of writable) {
+        const descriptor = Object.getOwnPropertyDescriptor(FontFace.prototype, name);
+        testing.expectEqual("function", typeof descriptor.get);
+        testing.expectEqual("function", typeof descriptor.set);
+        testing.expectTrue(descriptor.enumerable);
+        testing.expectTrue(descriptor.configurable);
+        testing.expectFalse("value" in descriptor);
+    }
+
+    const status = Object.getOwnPropertyDescriptor(FontFace.prototype, "status");
+    testing.expectEqual("function", typeof status.get);
+    testing.expectEqual(undefined, status.set);
+    testing.expectTrue(status.enumerable);
+    testing.expectTrue(status.configurable);
+    testing.expectFalse("value" in status);
+}
+</script>
+
+<script id="writable_accessors_are_per_instance">
+{
+    const first = new FontFace("First", "url(first.woff)");
+    const second = new FontFace("Second", "url(second.woff)");
+    const values = {
+        family: "Changed",
+        style: "oblique",
+        weight: "600",
+        stretch: "expanded",
+        unicodeRange: "U+30-39",
+        variant: "normal",
+        featureSettings: '"liga" 0',
+        variationSettings: '"wdth" 90',
+        display: "fallback",
+        ascentOverride: "75%",
+        descentOverride: "25%",
+        lineGapOverride: "2%",
+        sizeAdjust: "105%",
+    };
+
+    for (const [name, value] of Object.entries(values)) {
+        first[name] = value;
+        testing.expectEqual(value, first[name]);
+        testing.expectFalse(Object.hasOwn(first, name));
+    }
+    testing.expectEqual("Second", second.family);
+    testing.expectEqual("normal", second.style);
+    testing.expectEqual("100%", second.sizeAdjust);
+
+    first.status = "loaded";
+    testing.expectEqual("unloaded", first.status);
+    testing.expectFalse(Object.hasOwn(first, "status"));
+}
+</script>
+
+<script id="constructor_descriptors">
+{
+    const face = new FontFace("Configured", "url(configured.woff)", {
+        style: "italic",
+        weight: "700",
+        stretch: "condensed",
+        unicodeRange: "U+20-7E",
+        variant: "small-caps",
+        featureSettings: '"kern" 0',
+        variationSettings: '"wght" 625',
+        display: "swap",
+        ascentOverride: "80%",
+        descentOverride: "20%",
+        lineGapOverride: "5%",
+        sizeAdjust: "110%",
+    });
+    testing.expectEqual("Configured", face.family);
+    testing.expectEqual("italic", face.style);
+    testing.expectEqual("700", face.weight);
+    testing.expectEqual("condensed", face.stretch);
+    testing.expectEqual("U+20-7E", face.unicodeRange);
+    testing.expectEqual("small-caps", face.variant);
+    testing.expectEqual('"kern" 0', face.featureSettings);
+    testing.expectEqual('"wght" 625', face.variationSettings);
+    testing.expectEqual("swap", face.display);
+    testing.expectEqual("80%", face.ascentOverride);
+    testing.expectEqual("20%", face.descentOverride);
+    testing.expectEqual("5%", face.lineGapOverride);
+    testing.expectEqual("110%", face.sizeAdjust);
+}
+</script>
+
+<script id="document_fonts_add">
+{
+    const face = new FontFace("AddedFont", "url(added.woff)");
+    const result = document.fonts.add(face);
+    testing.expectTrue(result === document.fonts);
+}
+</script>

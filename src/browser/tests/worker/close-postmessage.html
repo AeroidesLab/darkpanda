@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Self-closed Worker creator postMessage</title>
+<script src="../testing.js"></script>
+
+<script type="module">
+  const state = await testing.async();
+  const worker = new Worker('./close-postmessage-worker.js');
+  worker.onerror = event => state.resolve({ error: event.message });
+  worker.onmessage = event => {
+    if (event.data !== 'closed') return;
+    for (let i = 0; i < 128; i++) worker.postMessage({ i });
+    setTimeout(() => state.resolve({ ok: true }), 20);
+  };
+
+  await state.done(result => {
+    testing.expectEqual(undefined, result.error);
+    testing.expectTrue(result.ok);
+  });
+</script>

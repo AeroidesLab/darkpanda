@@ -1,0 +1,304 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="detached_iframe_context_creation_chrome149">
+{
+  const wrapper = document.createElement('div');
+  const iframe = document.createElement('iframe');
+  wrapper.appendChild(iframe);
+
+  testing.expectEqual(null, iframe.contentWindow);
+  testing.expectEqual(null, iframe.contentDocument);
+
+  document.body.appendChild(wrapper);
+  testing.expectTrue(!!iframe.contentWindow);
+  testing.expectTrue(!!iframe.contentDocument);
+  wrapper.remove();
+}
+</script>
+
+<script id="detached_shadow_subtree_and_synthetic_document_chrome149">
+{
+  const baseline = window.length;
+  const host = document.createElement('div');
+  const shadow = host.attachShadow({mode: 'closed'});
+  const shadowFrame = document.createElement('iframe');
+  shadow.appendChild(shadowFrame);
+
+  testing.expectTrue(shadowFrame.isConnected === false);
+  testing.expectEqual(null, shadowFrame.contentWindow);
+  document.body.appendChild(host);
+  const shadowWindow = shadowFrame.contentWindow;
+  testing.expectTrue(!!shadowWindow);
+  testing.expectEqual(baseline, window.length);
+
+  host.remove();
+  testing.expectEqual(null, shadowFrame.contentWindow);
+  testing.expectTrue(shadowWindow.closed);
+
+  // Nodes rooted in a synthetic Document are connected per DOM, but that
+  // Document is not fully active and therefore owns no browsing contexts.
+  const synthetic = document.implementation.createHTMLDocument('synthetic');
+  const syntheticFrame = synthetic.createElement('iframe');
+  synthetic.body.appendChild(syntheticFrame);
+  testing.expectTrue(syntheticFrame.isConnected);
+  testing.expectEqual(null, syntheticFrame.contentWindow);
+  testing.expectEqual(null, syntheticFrame.contentDocument);
+  testing.expectEqual(baseline, window.length);
+}
+</script>
+
+<script id="atomic_move_shadow_including_id_maps_chrome149">
+{
+  const outerHost = document.createElement('div');
+  const outerShadow = outerHost.attachShadow({mode: 'open'});
+  document.body.appendChild(outerHost);
+
+  const subtree = document.createElement('section');
+  subtree.id = 'atomic-scope-root';
+  const lightDescendant = document.createElement('span');
+  lightDescendant.id = 'atomic-scope-light';
+  subtree.appendChild(lightDescendant);
+
+  const innerShadow = subtree.attachShadow({mode: 'open'});
+  const innerShadowDescendant = document.createElement('b');
+  innerShadowDescendant.id = 'atomic-scope-inner-shadow';
+  innerShadow.appendChild(innerShadowDescendant);
+  document.body.appendChild(subtree);
+
+  outerShadow.moveBefore(subtree, null);
+  testing.expectEqual(null, document.getElementById('atomic-scope-root'));
+  testing.expectEqual(null, document.getElementById('atomic-scope-light'));
+  testing.expectEqual(subtree, outerShadow.getElementById('atomic-scope-root'));
+  testing.expectEqual(lightDescendant, outerShadow.getElementById('atomic-scope-light'));
+  testing.expectEqual(null, outerShadow.getElementById('atomic-scope-inner-shadow'));
+  testing.expectEqual(innerShadowDescendant, innerShadow.getElementById('atomic-scope-inner-shadow'));
+
+  document.body.moveBefore(subtree, outerHost);
+  testing.expectEqual(subtree, document.getElementById('atomic-scope-root'));
+  testing.expectEqual(lightDescendant, document.getElementById('atomic-scope-light'));
+  testing.expectEqual(null, outerShadow.getElementById('atomic-scope-root'));
+  testing.expectEqual(null, outerShadow.getElementById('atomic-scope-light'));
+  testing.expectEqual(innerShadowDescendant, innerShadow.getElementById('atomic-scope-inner-shadow'));
+
+  subtree.remove();
+  outerHost.remove();
+}
+</script>
+
+<script id="dirty_duplicate_id_maps_and_position_bits_chrome149">
+{
+  const host = document.createElement('div');
+  const shadow = host.attachShadow({mode: 'open'});
+  document.body.appendChild(host);
+
+  // Removing a duplicate dirties the whole key. A later insertion may fill
+  // the fast map before lookup; getElementById must still rescan tree order.
+  const documentFirst = document.createElement('i');
+  const documentMoved = document.createElement('i');
+  documentFirst.id = documentMoved.id = 'dirty-document-duplicate';
+  document.body.append(documentFirst, documentMoved);
+  shadow.moveBefore(documentMoved, null);
+  const documentLate = document.createElement('i');
+  documentLate.id = 'dirty-document-duplicate';
+  document.body.appendChild(documentLate);
+  testing.expectEqual(documentFirst, document.getElementById('dirty-document-duplicate'));
+
+  const shadowFirst = document.createElement('b');
+  const shadowMoved = document.createElement('b');
+  shadowFirst.id = shadowMoved.id = 'dirty-shadow-duplicate';
+  shadow.append(shadowFirst, shadowMoved);
+  document.body.moveBefore(shadowMoved, null);
+  const shadowLate = document.createElement('b');
+  shadowLate.id = 'dirty-shadow-duplicate';
+  shadow.appendChild(shadowLate);
+  testing.expectEqual(shadowFirst, shadow.getElementById('dirty-shadow-duplicate'));
+
+  // ancestor.compareDocumentPosition(descendant) includes FOLLOWING together
+  // with CONTAINED_BY (0x14); FOLLOWING must be treated as a bit, not equality.
+  const ancestor = document.createElement('section');
+  const descendant = document.createElement('span');
+  descendant.id = 'combined-position-duplicate';
+  ancestor.appendChild(descendant);
+  document.body.appendChild(ancestor);
+  ancestor.id = 'combined-position-duplicate';
+  testing.expectEqual(ancestor, document.getElementById('combined-position-duplicate'));
+
+  ancestor.remove();
+  documentFirst.remove();
+  documentLate.remove();
+  shadowMoved.remove();
+  host.remove();
+}
+</script>
+
+<script id="ordinary_moves_recreate_browsing_context_chrome149">
+{
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const iframe = document.createElement('iframe');
+  host.appendChild(iframe);
+
+  let oldWindow = iframe.contentWindow;
+  host.appendChild(iframe);
+  testing.expectFalse(oldWindow === iframe.contentWindow);
+  testing.expectTrue(oldWindow.closed);
+
+  oldWindow = iframe.contentWindow;
+  host.insertBefore(iframe, iframe);
+  testing.expectFalse(oldWindow === iframe.contentWindow);
+  testing.expectTrue(oldWindow.closed);
+
+  oldWindow = iframe.contentWindow;
+  host.replaceChild(iframe, iframe);
+  testing.expectFalse(oldWindow === iframe.contentWindow);
+  testing.expectTrue(oldWindow.closed);
+
+  const nested = document.createElement('iframe');
+  const wrapper = document.createElement('div');
+  wrapper.appendChild(nested);
+  host.appendChild(wrapper);
+  oldWindow = nested.contentWindow;
+  host.appendChild(wrapper);
+  testing.expectFalse(oldWindow === nested.contentWindow);
+  testing.expectTrue(oldWindow.closed);
+  host.remove();
+}
+</script>
+
+<script id="ordinary_move_custom_element_lifecycle_chrome149">
+{
+  const calls = [];
+  const name = 'frame-move-lifecycle-' + Math.random().toString(36).slice(2);
+  customElements.define(name, class extends HTMLElement {
+    connectedCallback() { calls.push('connected'); }
+    disconnectedCallback() { calls.push('disconnected'); }
+    connectedMoveCallback() {
+      this.moveCount = (this.moveCount || 0) + 1;
+      calls.push('moved');
+    }
+  });
+
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const element = document.createElement(name);
+  host.appendChild(element);
+  testing.expectEqual('connected', calls.join(','));
+
+  host.appendChild(element);
+  testing.expectEqual('connected,disconnected,connected', calls.join(','));
+
+  host.moveBefore(element, null);
+  testing.expectEqual('connected,disconnected,connected,moved', calls.join(','));
+  host.remove();
+
+  const subtreeHost = document.createElement('div');
+  const subtreeShadow = subtreeHost.attachShadow({mode: 'closed'});
+  const shadowCustom = document.createElement(name);
+  const lightCustom = document.createElement(name);
+  subtreeShadow.appendChild(shadowCustom);
+  subtreeHost.appendChild(lightCustom);
+  document.body.appendChild(subtreeHost);
+  document.body.moveBefore(subtreeHost, null);
+  testing.expectEqual(1, shadowCustom.moveCount);
+  testing.expectEqual(1, lightCustom.moveCount);
+  subtreeHost.remove();
+}
+</script>
+
+<script id="host_including_cycle_and_same_parent_reentry_chrome149" type="module">
+{
+  const host = document.createElement('div');
+  const shadow = host.attachShadow({mode: 'open'});
+  document.body.appendChild(host);
+  testing.withError(error => {
+    testing.expectEqual('HierarchyRequestError', error.name);
+    testing.expectEqual(3, error.code);
+  }, () => shadow.moveBefore(host, null));
+  host.remove();
+
+  const state = await testing.async();
+  window.__sameParentRoundTripDone = state.resolve;
+  const iframe = document.createElement('iframe');
+  iframe.srcdoc = `<!doctype html><script>
+    if (!parent.__sameParentRoundTripOnce) {
+      parent.__sameParentRoundTripOnce = true;
+      const owner = frameElement;
+      const container = owner.parentNode;
+      owner.remove();
+      container.appendChild(owner);
+    } else {
+      parent.__sameParentRoundTripDone();
+    }
+  <\/script>`;
+  document.body.appendChild(iframe);
+
+  await state.done(() => {
+    delete window.__sameParentRoundTripDone;
+    delete window.__sameParentRoundTripOnce;
+    testing.expectEqual(1, document.body.querySelectorAll('iframe').length);
+    testing.expectTrue(!!iframe.contentWindow);
+    testing.expectEqual(1, window.length);
+    iframe.remove();
+  });
+}
+</script>
+
+<script id="shadow_scoped_children_and_atomic_moves_chrome149">
+{
+  const host = document.createElement('div');
+  const shadow = host.attachShadow({mode: 'open'});
+  document.body.appendChild(host);
+
+  const light = document.createElement('iframe');
+  light.id = 'light-created';
+  document.body.appendChild(light);
+  const lightWindow = light.contentWindow;
+
+  const shadowCreated = document.createElement('iframe');
+  shadowCreated.id = 'shadow-created';
+  shadow.appendChild(shadowCreated);
+  const shadowWindow = shadowCreated.contentWindow;
+
+  testing.expectEqual(1, window.length);
+  testing.expectEqual(lightWindow, window[0]);
+  testing.expectEqual(light, document.getElementById('light-created'));
+  testing.expectEqual(null, shadow.getElementById('light-created'));
+  testing.expectEqual(null, document.getElementById('shadow-created'));
+  testing.expectEqual(shadowCreated, shadow.getElementById('shadow-created'));
+
+  // A state-preserving atomic move does not alter the Frame's captured scope.
+  shadow.moveBefore(light, null);
+  document.body.moveBefore(shadowCreated, host);
+  testing.expectEqual(lightWindow, light.contentWindow);
+  testing.expectEqual(shadowWindow, shadowCreated.contentWindow);
+  testing.expectEqual(null, document.getElementById('light-created'));
+  testing.expectEqual(light, shadow.getElementById('light-created'));
+  testing.expectEqual(shadowCreated, document.getElementById('shadow-created'));
+  testing.expectEqual(null, shadow.getElementById('shadow-created'));
+  testing.expectEqual(1, window.length);
+  testing.expectEqual(lightWindow, window[0]);
+
+  // Ordinary moves rebuild the browsing context, so scope is recaptured from
+  // the new owner TreeScope in both directions.
+  const movedIntoShadowOld = shadowCreated.contentWindow;
+  shadow.appendChild(shadowCreated);
+  testing.expectFalse(movedIntoShadowOld === shadowCreated.contentWindow);
+  testing.expectTrue(movedIntoShadowOld.closed);
+  testing.expectEqual(1, window.length);
+  testing.expectEqual(lightWindow, window[0]);
+
+  const movedIntoLightOld = light.contentWindow;
+  document.body.appendChild(light);
+  testing.expectFalse(movedIntoLightOld === light.contentWindow);
+  testing.expectTrue(movedIntoLightOld.closed);
+  testing.expectEqual(1, window.length);
+  testing.expectEqual(light.contentWindow, window[0]);
+
+  light.remove();
+  shadowCreated.remove();
+  host.remove();
+}
+</script>

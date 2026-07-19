@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<body>
+<script src="../testing.js"></script>
+<script id=default>
+  let event = new MouseEvent('click');
+  testing.expectEqual('click', event.type);
+  testing.expectEqual(true, event instanceof MouseEvent);
+  testing.expectEqual(true, event instanceof UIEvent);
+  testing.expectEqual(true, event instanceof Event);
+  testing.expectEqual(0, event.clientX);
+  testing.expectEqual(0, event.clientY);
+  testing.expectEqual(0, event.screenX);
+  testing.expectEqual(0, event.screenY);
+  testing.expectEqual(0, event.buttons);
+</script>
+
+<script id=parameters>
+  let new_event = new MouseEvent('click', { 'button': 0, 'clientX': 10, 'clientY': 20, screenX: 200, screenY: 500, buttons: 5 });
+  testing.expectEqual(0, new_event.button);
+  testing.expectEqual(5, new_event.buttons);
+  testing.expectEqual(10, new_event.x);
+  testing.expectEqual(20, new_event.y);
+  testing.expectEqual(10, new_event.pageX);
+  testing.expectEqual(20, new_event.pageY);
+  testing.expectEqual(200, new_event.screenX);
+  testing.expectEqual(500, new_event.screenY);
+</script>
+
+<script id=constructor_coordinate_quantization>
+{
+  let offsetReads = 0;
+  const ignoredOffsetOptions = {};
+  Object.defineProperty(ignoredOffsetOptions, 'offsetX', {get() { offsetReads++; return 99; }});
+  Object.defineProperty(ignoredOffsetOptions, 'offsetY', {get() { offsetReads++; return 99; }});
+  new MouseEvent('x', ignoredOffsetOptions);
+  testing.expectEqual(0, offsetReads);
+
+  const cases = [
+    {value: 1.4, client: 1, offset: 1, movement: 1},
+    {value: 1.5, client: 1, offset: 2, movement: 1},
+    {value: -1.4, client: -2, offset: -1, movement: -1},
+    {value: -1.5, client: -2, offset: -2, movement: -1},
+    {value: 0.5, client: 0, offset: 1, movement: 0},
+    {value: -0.5, client: -1, offset: -1, movement: 0},
+    {value: -1.75, client: -2, offset: -2, movement: -1},
+    {value: -2.5, client: -3, offset: -3, movement: -2},
+  ];
+  for (const expected of cases) {
+    const event = new MouseEvent('x', {
+      clientX: expected.value,
+      clientY: expected.value,
+      screenX: expected.value,
+      screenY: expected.value,
+      movementX: expected.value,
+      movementY: expected.value,
+      offsetX: 99,
+      offsetY: 99,
+    });
+    testing.expectEqual(expected.client, event.clientX);
+    testing.expectEqual(expected.client, event.clientY);
+    testing.expectEqual(expected.client, event.screenX);
+    testing.expectEqual(expected.client, event.screenY);
+    testing.expectEqual(expected.offset, event.offsetX);
+    testing.expectEqual(expected.offset, event.offsetY);
+    testing.expectEqual(expected.movement, event.movementX);
+    testing.expectEqual(expected.movement, event.movementY);
+  }
+}
+</script>
+
+<script id=dispatch_recomputes_offset>
+{
+  const parent = document.createElement('div');
+  const target = document.createElement('button');
+  parent.style.cssText = 'position:fixed;left:100px;top:50px;width:80px;height:40px';
+  target.style.cssText = 'position:fixed;left:110px;top:55px;width:20px;height:20px;border:2px solid transparent';
+  parent.appendChild(target);
+  document.body.appendChild(parent);
+
+  const rect = target.getBoundingClientRect();
+  const clientX = rect.x + target.clientLeft + 3.5;
+  const clientY = rect.y + target.clientTop + 3.5;
+  const event = new MouseEvent('mouse-offset-probe', {bubbles:true, clientX, clientY});
+  testing.expectEqual(Math.round(clientX), event.offsetX);
+  testing.expectEqual(Math.round(clientY), event.offsetY);
+
+  let atTarget = null;
+  let atParent = null;
+  let atDocument = null;
+  target.addEventListener('mouse-offset-probe', e => atTarget = [e.offsetX, e.offsetY]);
+  parent.addEventListener('mouse-offset-probe', e => atParent = [e.offsetX, e.offsetY]);
+  document.addEventListener('mouse-offset-probe', e => atDocument = [e.offsetX, e.offsetY], {once:true});
+  target.dispatchEvent(event);
+
+  testing.expectEqual(4, atTarget[0]);
+  testing.expectEqual(4, atTarget[1]);
+  testing.expectEqual(4, atParent[0]);
+  testing.expectEqual(4, atParent[1]);
+  testing.expectEqual(4, atDocument[0]);
+  testing.expectEqual(4, atDocument[1]);
+  testing.expectEqual(4, event.offsetX);
+  testing.expectEqual(4, event.offsetY);
+  parent.remove();
+}
+</script>
+
+<script id=dispatch_recomputes_shadow_retargeted_offset>
+{
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:100px;top:50px;width:80px;height:40px';
+  const root = host.attachShadow({mode:'closed'});
+  const target = document.createElement('button');
+  target.style.cssText = 'position:fixed;left:110px;top:55px;width:20px;height:20px;border:2px solid transparent';
+  root.appendChild(target);
+  document.body.appendChild(host);
+
+  const targetRect = target.getBoundingClientRect();
+  const hostRect = host.getBoundingClientRect();
+  const clientX = targetRect.x + target.clientLeft + 3.5;
+  const clientY = targetRect.y + target.clientTop + 3.5;
+  const hostOffsetX = clientX - hostRect.x - host.clientLeft;
+  const hostOffsetY = clientY - hostRect.y - host.clientTop;
+  const event = new MouseEvent('mouse-shadow-offset-probe', {bubbles:true, composed:true, clientX, clientY});
+
+  let inner = null;
+  let outer = null;
+  let documentOffset = null;
+  target.addEventListener('mouse-shadow-offset-probe', e => inner = [e.offsetX, e.offsetY, e.target === target]);
+  host.addEventListener('mouse-shadow-offset-probe', e => outer = [e.offsetX, e.offsetY, e.target === host]);
+  document.addEventListener('mouse-shadow-offset-probe', e => documentOffset = [e.offsetX, e.offsetY, e.target === host], {once:true});
+  target.dispatchEvent(event);
+
+  testing.expectEqual(4, inner[0]);
+  testing.expectEqual(4, inner[1]);
+  testing.expectEqual(true, inner[2]);
+  testing.expectEqual(Math.round(hostOffsetX), outer[0]);
+  testing.expectEqual(Math.round(hostOffsetY), outer[1]);
+  testing.expectEqual(true, outer[2]);
+  testing.expectEqual(Math.round(hostOffsetX), documentOffset[0]);
+  testing.expectEqual(Math.round(hostOffsetY), documentOffset[1]);
+  testing.expectEqual(true, documentOffset[2]);
+  testing.expectEqual(Math.round(hostOffsetX), event.offsetX);
+  testing.expectEqual(Math.round(hostOffsetY), event.offsetY);
+  host.remove();
+}
+</script>
+
+<script id=listener>
+  let me = new MouseEvent('click');
+  testing.expectEqual(true, me instanceof Event);
+
+  var evt = null;
+  document.addEventListener('click', function (e) {
+    evt = e;
+  });
+  document.dispatchEvent(me);
+  testing.expectEqual('click', evt.type);
+  testing.expectEqual(true, evt instanceof MouseEvent);
+</script>
+
+<script id=isTrusted>
+  // Test isTrusted on MouseEvent
+  let mouseEvent = new MouseEvent('click');
+  testing.expectEqual(false, mouseEvent.isTrusted);
+
+  // Test isTrusted on dispatched MouseEvent
+  let mouseIsTrusted = null;
+  document.addEventListener('mousetest', (e) => {
+    mouseIsTrusted = e.isTrusted;
+    testing.expectEqual(true, e instanceof MouseEvent);
+  });
+  document.dispatchEvent(new MouseEvent('mousetest'));
+  testing.expectEqual(false, mouseIsTrusted);
+</script>
+
+<script id=which>
+  {
+    testing.expectEqual(1, new MouseEvent('click').which);
+    testing.expectEqual(2, new MouseEvent('click', {button: 1}).which);
+    testing.expectEqual(3, new MouseEvent('click', {button: 2}).which);
+  }
+</script>
+
+<script id=layerXY>
+  {
+    let evt = new MouseEvent('click', {clientX: 11, clientY: 22});
+    testing.expectEqual(11, evt.layerX);
+    testing.expectEqual(22, evt.layerY);
+  }
+</script>
+
+<script id=getModifierState>
+  {
+    let evt = new MouseEvent('click', {altKey: true, ctrlKey: true, shiftKey: true, metaKey: true});
+    testing.expectEqual(true, evt.getModifierState('Alt'));
+    testing.expectEqual(true, evt.getModifierState('AltGraph'));
+    testing.expectEqual(true, evt.getModifierState('Control'));
+    testing.expectEqual(true, evt.getModifierState('Shift'));
+    testing.expectEqual(true, evt.getModifierState('Meta'));
+    testing.expectEqual(true, evt.getModifierState('Accel'));
+    testing.expectEqual(false, evt.getModifierState('NumLock'));
+
+    let none = new MouseEvent('click');
+    testing.expectEqual(false, none.getModifierState('Shift'));
+  }
+</script>
+
+<script id=initMouseEvent>
+  {
+    let evt = document.createEvent('MouseEvent');
+    evt.initMouseEvent('click', true, true, window, 1, 10, 20, 30, 40, true, false, true, false, 2, null);
+    testing.expectEqual('click', evt.type);
+    testing.expectEqual(true, evt.bubbles);
+    testing.expectEqual(true, evt.cancelable);
+    testing.expectEqual(1, evt.detail);
+    testing.expectEqual(10, evt.screenX);
+    testing.expectEqual(20, evt.screenY);
+    testing.expectEqual(30, evt.clientX);
+    testing.expectEqual(40, evt.clientY);
+    testing.expectEqual(true, evt.ctrlKey);
+    testing.expectEqual(false, evt.altKey);
+    testing.expectEqual(true, evt.shiftKey);
+    testing.expectEqual(false, evt.metaKey);
+    testing.expectEqual(2, evt.button);
+  }
+</script>
+
+<script id=initMouseEventOptional>
+  {
+    let evt = document.createEvent('MouseEvent');
+    evt.initMouseEvent('mousedown');
+    testing.expectEqual('mousedown', evt.type);
+    testing.expectEqual(false, evt.bubbles);
+    testing.expectEqual(false, evt.cancelable);
+    testing.expectEqual(0, evt.clientX);
+    testing.expectEqual(0, evt.button);
+  }
+</script>

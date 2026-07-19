@@ -1,0 +1,18 @@
+<!doctype html>
+<head>
+<script src="../testing.js"></script>
+</head>
+<body>
+<div id="target"></div>
+<script id="trusted-types-default-throw">
+testing.onload(() => {
+  const sentinel = new RangeError('default-html-sentinel');
+  trustedTypes.createPolicy('default', { createHTML() { throw sentinel; } });
+  let error = null;
+  try { document.getElementById('target').innerHTML = 'blocked'; } catch (caught) { error = caught; }
+  testing.expectEqual(sentinel, error);
+  testing.expectEqual('RangeError', error && error.name);
+  testing.expectEqual('default-html-sentinel', error && error.message);
+});
+</script>
+</body>

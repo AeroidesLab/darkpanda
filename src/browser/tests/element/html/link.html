@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<link id="lh1" rel="stylesheet" href="/styles/main.css" media="screen" as="style" crossorigin="anonymous">
+<link id="lh2">
+
+<script id="link-from-html">
+  {
+    const lh1 = document.getElementById('lh1');
+    testing.expectEqual('HTMLLinkElement', lh1.constructor.name);
+    testing.expectEqual('stylesheet', lh1.rel);
+    testing.expectEqual(testing.ORIGIN + '/styles/main.css', lh1.href);
+    testing.expectEqual('screen', lh1.media);
+    testing.expectEqual('style', lh1.as);
+    testing.expectEqual('anonymous', lh1.crossOrigin);
+
+    lh1.rel = 'preload';
+    testing.expectEqual('preload', lh1.rel);
+    lh1.media = 'print';
+    testing.expectEqual('print', lh1.media);
+
+    const lh2 = document.getElementById('lh2');
+    testing.expectEqual('', lh2.rel);
+    testing.expectEqual('', lh2.href);
+    testing.expectEqual('', lh2.media);
+    testing.expectEqual('', lh2.as);
+  }
+</script>
+
+<script id=link>
+  let l2 = document.createElement('link');
+  testing.expectEqual('', l2.href);
+  l2.href = 'https://lightpanda.io/opensource-browser/15';
+  testing.expectEqual('https://lightpanda.io/opensource-browser/15', l2.href);
+
+  l2.href = '/over/9000';
+  testing.expectEqual(testing.ORIGIN + '/over/9000', l2.href);
+
+  l2.crossOrigin = 'nope';
+  testing.expectEqual('anonymous', l2.crossOrigin);
+
+  l2.crossOrigin = 'use-Credentials';
+  testing.expectEqual('use-credentials', l2.crossOrigin);
+
+  l2.crossOrigin = '';
+  testing.expectEqual('anonymous', l2.crossOrigin);
+
+  testing.expectEqual('', l2.media);
+  l2.media = 'screen and (max-width: 600px)';
+  testing.expectEqual('screen and (max-width: 600px)', l2.media);
+  l2.media = 'print';
+  testing.expectEqual('print', l2.media);
+</script>
+
+<script id="link-load-event" type=module>
+  // A link with rel=stylesheet and a non-empty href fires a load event when appended to the DOM
+  const state = await testing.async();
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = 'https://lightpanda.io/opensource-browser/15';
+
+  link.addEventListener('load', (e) => {
+    state.resolve(e);
+  });
+  document.head.appendChild(link);
+
+  await state.done((e) => {
+    testing.expectEqual(false, e.bubbles);
+    testing.expectEqual(false, e.cancelBubble);
+    testing.expectEqual(false, e.cancelable);
+    testing.expectEqual(false, e.composed);
+    testing.expectEqual(true, e.isTrusted);
+    testing.expectEqual(link, e.target);
+  });
+</script>
+
+<script id="link-no-load-without-href">
+{
+  // A link with rel=stylesheet but no href should not fire a load event
+  let fired = false;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.addEventListener('load', () => { fired = true; });
+  document.head.appendChild(link);
+  testing.onload(() => testing.expectEqual(false, fired));
+}
+</script>
+
+<script id="link-no-load-wrong-rel">
+{
+  // A link without rel=stylesheet should not fire a load event
+  let fired = false;
+  const link = document.createElement('link');
+  link.href = 'https://lightpanda.io/opensource-browser/15';
+  link.addEventListener('load', () => { fired = true; });
+  document.head.appendChild(link);
+  testing.onload(() => testing.expectEqual(false, fired));
+}
+</script>
+
+<script id="lazy-href-set">
+{
+  let result = false;
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.onload = () => result = true;
+  // Append to DOM,
+  document.head.appendChild(link);
+  // then set href.
+  link.href = 'https://lightpanda.io/opensource-browser/15';
+
+  testing.onload(() => testing.expectEqual(true, result));
+}
+</script>
+
+<script id="refs">
+{
+  const rels = ['stylesheet', 'preload', 'modulepreload'];
+  // stylesheet fetching is off by default and a bare preload has no `as`, so
+  // neither touches the network. modulepreload actually fetches, so it needs
+  // a real file — the load event still fires synthetically either way.
+  const hrefs = ['/nope', '/nope', 'script/modulepreload.js'];
+  const results = rels.map(() => false);
+  rels.forEach((rel, i) => {
+    let link = document.createElement('link')
+    link.rel = rel;
+    link.href = hrefs[i];
+    link.onload = () => results[i] = true;
+    document.documentElement.appendChild(link);
+  });
+
+
+  testing.onload(() => {
+    results.forEach((r) => {
+      testing.expectEqual(true, r);
+    });
+  });
+}
+</script>
+
+<script id="ext_stylesheet_disabled_default">
+{
+  // Flag defaults off — a <link rel=stylesheet> must NOT register a sheet
+  // on document.styleSheets and must NOT touch the network. The synthetic
+  // load event still fires (asserted by other tests above).
+  const before = document.styleSheets.length;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/styles/visibility.css';
+  document.head.appendChild(link);
+  testing.onload(() => {
+    testing.expectEqual(before, document.styleSheets.length);
+  });
+}
+</script>

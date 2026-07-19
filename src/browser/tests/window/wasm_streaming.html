@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<head>
+  <title>Chromium WebAssembly streaming embedder parity</title>
+  <script src="../testing.js"></script>
+</head>
+
+<script id="wasm_streaming_surface">
+  testing.expectEqual('function', typeof WebAssembly.compileStreaming);
+  testing.expectEqual('function', typeof WebAssembly.instantiateStreaming);
+</script>
+
+<script id="wasm_streaming_response_semantics" type="module">
+  const state = await testing.async();
+  const wasm = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+  const headers = { 'Content-Type': 'application/wasm' };
+
+  const compileResponse = new Response(wasm, { headers });
+  const bodyIdentity = compileResponse.body === compileResponse.body;
+  const module = await WebAssembly.compileStreaming(Promise.resolve(compileResponse));
+
+  const instantiateResponse = new Response(wasm, { headers: { 'content-type': 'APPLICATION/WASM' } });
+  const instantiated = await WebAssembly.instantiateStreaming(instantiateResponse);
+
+  const chunks = [wasm.slice(0, 4), wasm.slice(4)];
+  const streamResponse = new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(chunks[0]);
+      controller.enqueue(chunks[1]);
+      controller.close();
+    }
+  }), { headers });
+  const streamModule = await WebAssembly.compileStreaming(streamResponse);
+
+  // Exercise the ordinary asynchronous network path, not only constructed
+  // Responses. Lightpanda's fetch currently resolves after buffering the body;
+  // the V8 embedder callback must still consume it with streaming semantics.
+  const fetchResponse = await fetch('/wasm/minimal.wasm');
+  const fetchModule = await WebAssembly.compileStreaming(fetchResponse);
+
+  const rejected = async (response) => {
+    try {
+      await WebAssembly.compileStreaming(response);
+      return { name: '', message: '' };
+    } catch (error) {
+      return { name: error.name, message: error.message };
+    }
+  };
+
+  const wrongObject = await rejected({});
+  const badStatus = await rejected(new Response(wasm, { status: 404, headers }));
+  const badMime = await rejected(new Response(wasm, {
+    headers: { 'content-type': 'application/wasm; charset=utf-8' }
+  }));
+
+  const lockedResponse = new Response(wasm, { headers });
+  const lockedReader = lockedResponse.body.getReader();
+  const locked = await rejected(lockedResponse);
+  lockedReader.releaseLock();
+
+  const usedResponse = new Response(wasm, { headers });
+  await usedResponse.arrayBuffer();
+  const used = await rejected(usedResponse);
+
+  const empty = await rejected(new Response(null, { headers }));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectTrue(bodyIdentity);
+    testing.expectTrue(module instanceof WebAssembly.Module);
+    testing.expectTrue(compileResponse.bodyUsed);
+    testing.expectTrue(instantiated.module instanceof WebAssembly.Module);
+    testing.expectTrue(instantiated.instance instanceof WebAssembly.Instance);
+    testing.expectTrue(streamModule instanceof WebAssembly.Module);
+    testing.expectTrue(streamResponse.bodyUsed);
+    testing.expectTrue(fetchModule instanceof WebAssembly.Module);
+    testing.expectTrue(fetchResponse.bodyUsed);
+
+    testing.expectEqual('TypeError', wrongObject.name);
+    testing.expectEqual("Failed to execute 'compile' on 'WebAssembly': An argument must be provided, which must be a Response or Promise<Response> object", wrongObject.message);
+    testing.expectEqual('TypeError', badStatus.name);
+    testing.expectEqual("Failed to execute 'compile' on 'WebAssembly': HTTP status code is not ok", badStatus.message);
+    testing.expectEqual('TypeError', badMime.name);
+    testing.expectEqual("Failed to execute 'compile' on 'WebAssembly': Incorrect response MIME type. Expected 'application/wasm'.", badMime.message);
+    testing.expectEqual('TypeError', locked.name);
+    testing.expectEqual("Failed to execute 'compile' on 'WebAssembly': Cannot compile WebAssembly.Module from an already read Response", locked.message);
+    testing.expectEqual('TypeError', used.name);
+    testing.expectEqual("Failed to execute 'compile' on 'WebAssembly': Cannot compile WebAssembly.Module from an already read Response", used.message);
+    testing.expectEqual('CompileError', empty.name);
+    testing.expectEqual("Failed to execute 'compile' on 'WebAssembly': Empty WebAssembly module", empty.message);
+  });
+</script>

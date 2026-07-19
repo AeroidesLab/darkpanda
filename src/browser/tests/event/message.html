@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=messageEventConstructor>
+{
+  const evt = new MessageEvent('message', {
+    data: { foo: 'bar', count: 42 },
+    origin: 'https://example.com',
+    source: window
+  });
+
+  testing.expectEqual('message', evt.type);
+  testing.expectEqual({ foo: 'bar', count: 42 }, evt.data);
+  testing.expectEqual('https://example.com', evt.origin);
+  testing.expectEqual(window, evt.source);
+  testing.expectEqual(false, evt.bubbles);
+  testing.expectEqual(false, evt.cancelable);
+}
+</script>
+
+<script id=messageEventWithString>
+{
+  const evt2 = new MessageEvent('message', {
+    data: 'Hello, World!',
+    origin: 'https://test.com'
+  });
+
+  testing.expectEqual('Hello, World!', evt2.data);
+  testing.expectEqual('https://test.com', evt2.origin);
+}
+</script>
+
+<script id=messageEventDefaults>
+{
+  const evt3 = new MessageEvent('message');
+
+  testing.expectEqual('', evt3.origin);
+  testing.expectEqual(false, evt3.bubbles);
+  testing.expectEqual(false, evt3.cancelable);
+}
+</script>
+
+<script id=messageEventChrome149ExtendedSurface>
+{
+  // This is the Chrome 149 order from MessageEvent.idl.  These members are
+  // observable on every posted-message event even when their values are the
+  // empty/default state.
+  testing.expectEqual([
+    'data',
+    'origin',
+    'lastEventId',
+    'source',
+    'ports',
+    'userActivation',
+    'initMessageEvent',
+    'constructor',
+    Symbol.toStringTag,
+  ], Reflect.ownKeys(MessageEvent.prototype));
+
+  for (const name of ['lastEventId', 'userActivation']) {
+    const descriptor = Object.getOwnPropertyDescriptor(MessageEvent.prototype, name);
+    testing.expectEqual(true, descriptor.enumerable);
+    testing.expectEqual(true, descriptor.configurable);
+    testing.expectEqual('function', typeof descriptor.get);
+    testing.expectEqual(undefined, descriptor.set);
+    testing.expectEqual(`function get ${name}() { [native code] }`,
+      Function.prototype.toString.call(descriptor.get));
+  }
+
+  const initDescriptor = Object.getOwnPropertyDescriptor(
+    MessageEvent.prototype,
+    'initMessageEvent',
+  );
+  testing.expectEqual(true, initDescriptor.enumerable);
+  testing.expectEqual(true, initDescriptor.configurable);
+  testing.expectEqual(true, initDescriptor.writable);
+  testing.expectEqual(1, initDescriptor.value.length);
+  testing.expectEqual('function initMessageEvent() { [native code] }',
+    Function.prototype.toString.call(initDescriptor.value));
+
+  const defaults = new MessageEvent('defaults');
+  testing.expectEqual('', defaults.lastEventId);
+  testing.expectEqual(null, defaults.userActivation);
+
+  const activation = navigator.userActivation;
+  const initialized = new MessageEvent('initialized', {
+    lastEventId: 'event-id',
+    userActivation: activation,
+  });
+  testing.expectEqual('event-id', initialized.lastEventId);
+  testing.expectEqual(activation, initialized.userActivation);
+  testing.expectEqual('[object UserActivation]',
+    Object.prototype.toString.call(initialized.userActivation));
+}
+</script>
+
+<script id=messageEventChrome149LegacyInitializer>
+{
+  const activation = navigator.userActivation;
+  const channel = new MessageChannel();
+  const event = new MessageEvent('before', {
+    data: 'old-data',
+    origin: 'old-origin',
+    lastEventId: 'old-id',
+    source: window,
+    userActivation: activation,
+    bubbles: true,
+    cancelable: false,
+    composed: true,
+  });
+
+  const result = event.initMessageEvent(
+    'after',
+    false,
+    true,
+    undefined,
+    'https://after.test/\ud800',
+    'new-id',
+    channel.port1,
+    [],
+  );
+  testing.expectEqual(undefined, result);
+  testing.expectEqual('after', event.type);
+  testing.expectEqual(false, event.bubbles);
+  testing.expectEqual(true, event.cancelable);
+  // Event.initEvent() does not change the composed flag.
+  testing.expectEqual(true, event.composed);
+  // The optional-any default/conversion maps explicit undefined to null here.
+  testing.expectEqual(null, event.data);
+  // initMessageEvent's origin is USVString, so lone surrogates are replaced.
+  testing.expectEqual('https://after.test/\ufffd', event.origin);
+  testing.expectEqual('new-id', event.lastEventId);
+  testing.expectEqual(channel.port1, event.source);
+  // userActivation is not an initMessageEvent argument and Blink retains it.
+  testing.expectEqual(activation, event.userActivation);
+
+  event.initMessageEvent('omitted');
+  testing.expectEqual('omitted', event.type);
+  testing.expectEqual(false, event.bubbles);
+  testing.expectEqual(false, event.cancelable);
+  testing.expectEqual(true, event.composed);
+  testing.expectEqual(null, event.data);
+  testing.expectEqual('', event.origin);
+  testing.expectEqual('', event.lastEventId);
+  testing.expectEqual(null, event.source);
+  testing.expectEqual(activation, event.userActivation);
+
+  const duringDispatch = new MessageEvent('dispatch', {
+    data: 'stable-data',
+    origin: 'stable-origin',
+    lastEventId: 'stable-id',
+    userActivation: activation,
+  });
+  window.addEventListener('dispatch', () => {
+    duringDispatch.initMessageEvent(
+      'must-not-change', true, true, 'changed', 'changed', 'changed', null, [],
+    );
+    testing.expectEqual('dispatch', duringDispatch.type);
+    testing.expectEqual('stable-data', duringDispatch.data);
+    testing.expectEqual('stable-origin', duringDispatch.origin);
+    testing.expectEqual('stable-id', duringDispatch.lastEventId);
+    testing.expectEqual(activation, duringDispatch.userActivation);
+  }, { once: true });
+  window.dispatchEvent(duringDispatch);
+}
+</script>
+
+<script id=messageEventPorts>
+{
+  // ports must always be a (frozen) array, never undefined.
+  const evt = new MessageEvent('message');
+  testing.expectEqual(0, evt.ports.length);
+  testing.expectEqual(true, Array.isArray(evt.ports) || typeof evt.ports.length === 'number');
+}
+</script>
+
+<script id=messageEventInheritance>
+{
+  const evt4 = new MessageEvent('custom');
+
+  testing.expectEqual('custom', evt4.type);
+  testing.expectEqual(Event.NONE, evt4.eventPhase);
+  testing.expectEqual(false, evt4.defaultPrevented);
+}
+</script>
+
+<script id=postMessageBasic>
+{
+  let receivedEvent = null;
+
+  const handler = (e) => {
+    receivedEvent = e;
+  };
+  window.addEventListener('message', handler, { once: true });
+
+  window.postMessage('test data', '*');
+
+  testing.onload(() => {
+    testing.expectEqual('test data', receivedEvent.data);
+    testing.expectEqual(window, receivedEvent.source);
+    testing.expectEqual('message', receivedEvent.type);
+    testing.expectEqual(true, receivedEvent.isTrusted);
+    testing.expectEqual(true, Object.hasOwn(receivedEvent, 'isTrusted'));
+    const descriptor = Object.getOwnPropertyDescriptor(receivedEvent, 'isTrusted');
+    testing.expectEqual('function', typeof descriptor.get);
+    testing.expectEqual(undefined, descriptor.set);
+    testing.expectEqual(true, descriptor.enumerable);
+    testing.expectEqual(false, descriptor.configurable);
+  });
+}
+</script>
+
+<script id=postMessageWithObject>
+{
+  let receivedData = null;
+
+  const handler = (e) => {
+    receivedData = e.data;
+  };
+  window.addEventListener('message', handler, { once: true });
+
+  const testObj = { type: 'test', value: 123, nested: { key: 'value' } };
+  window.postMessage(testObj, '*');
+
+  testing.onload(() => {
+    testing.expectEqual(testObj, receivedData);
+  });
+}
+</script>
+
+<script id=postMessageTargetOrigin>
+{
+  const received = [];
+  const ownMessages = new Set([
+    'default', 'undefined', 'null', 'slash', 'star',
+    'same-origin', 'same-origin-path', 'wrong-origin',
+  ]);
+  // Other scripts in this fixture also queue same-window message tasks before
+  // the load callbacks run. Keep this assertion scoped to this script's data.
+  const handler = event => {
+    if (ownMessages.has(event.data)) received.push(event.data);
+  };
+  window.addEventListener('message', handler);
+
+  window.postMessage('default');
+  window.postMessage('undefined', undefined);
+  window.postMessage('null', null);
+  window.postMessage('slash', '/');
+  window.postMessage('star', '*');
+  window.postMessage('same-origin', location.origin);
+  window.postMessage('same-origin-path', location.origin + '/ignored');
+  window.postMessage('wrong-origin', 'https://example.invalid');
+
+  testing.expectError('SyntaxError', () => {
+    window.postMessage('relative', 'relative-target');
+  });
+  testing.expectError('SyntaxError', () => {
+    window.postMessage('opaque', 'data:text/plain,opaque');
+  });
+  // Chromium serializes before parsing targetOrigin. If both inputs are bad,
+  // DataCloneError therefore wins over SyntaxError.
+  testing.expectError('DataCloneError', () => {
+    window.postMessage(() => {}, 'relative-target');
+  });
+
+  testing.onload(() => {
+    window.removeEventListener('message', handler);
+    testing.expectEqual([
+      'default',
+      'undefined',
+      'null',
+      'slash',
+      'star',
+      'same-origin',
+      'same-origin-path',
+    ], received);
+  });
+}
+</script>
+
+<script id=postMessageOverloadConversion>
+{
+  testing.expectEqual(1, window.postMessage.length);
+
+  const received = [];
+  const ownMessages = new Set([
+    'one-argument', 'null-options', 'empty-options', 'function-options',
+    'boxed-string-options', 'explicit-options', 'options-getters',
+    'legacy-object-target',
+  ]);
+  const handler = event => {
+    if (ownMessages.has(event.data)) received.push(event.data);
+  };
+  window.addEventListener('message', handler);
+
+  // One argument and null/undefined/object select WindowPostMessageOptions;
+  // boxed strings and functions are objects for overload resolution too.
+  window.postMessage('one-argument');
+  window.postMessage('null-options', null);
+  window.postMessage('empty-options', {});
+  window.postMessage('function-options', function () {});
+  window.postMessage('boxed-string-options', new String('*'));
+  window.postMessage('explicit-options', {targetOrigin: '*'});
+
+  // Dictionary members are read in lexicographic order before serialization.
+  const getterOrder = [];
+  window.postMessage('options-getters', {
+    get transfer() {
+      getterOrder.push('transfer');
+      return [];
+    },
+    get targetOrigin() {
+      getterOrder.push('targetOrigin');
+      return '*';
+    },
+  });
+  testing.expectEqual(['transfer', 'targetOrigin'], getterOrder);
+
+  // A present third argument always selects the legacy overload. Its target
+  // origin is converted before the sequence<object> transfer argument.
+  const legacyOrder = [];
+  window.postMessage('legacy-object-target', {
+    toString() {
+      legacyOrder.push('targetOrigin');
+      return '*';
+    },
+  }, []);
+  testing.expectEqual(['targetOrigin'], legacyOrder);
+
+  testing.expectError('TypeError', () => {
+    window.postMessage(() => {}, Symbol('target'));
+  });
+  testing.expectError('TypeError', () => {
+    window.postMessage('bad-sequence', '*', null);
+  });
+  testing.expectError('TypeError', () => {
+    window.postMessage('primitive-transfer', '*', [1]);
+  });
+  testing.expectError('DataCloneError', () => {
+    window.postMessage('non-transferable-object', '*', [{}]);
+  });
+
+  const duplicate = new MessageChannel();
+  testing.expectError('DataCloneError', () => {
+    window.postMessage('duplicate-port', '*', [duplicate.port2, duplicate.port2]);
+  });
+
+  testing.onload(() => {
+    window.removeEventListener('message', handler);
+    testing.expectEqual([
+      'one-argument',
+      'null-options',
+      'empty-options',
+      'function-options',
+      'boxed-string-options',
+      'explicit-options',
+      'options-getters',
+      'legacy-object-target',
+    ], received);
+  });
+}
+</script>
+
+<script id=postMessageChrome149UserActivationSnapshot>
+{
+  const getterOrder = [];
+  const messages = [];
+  const ownMessages = new Set([
+    'activation-default',
+    'activation-included',
+  ]);
+  const handler = event => {
+    if (!ownMessages.has(event.data)) return;
+    messages.push({
+      data: event.data,
+      trusted: event.isTrusted,
+      lastEventId: event.lastEventId,
+      activation: event.userActivation,
+      activationStable: event.userActivation === event.userActivation,
+      sourceSelf: event.source === window,
+    });
+  };
+  window.addEventListener('message', handler);
+
+  window.postMessage('activation-default', '*');
+  window.postMessage('activation-included', {
+    get transfer() {
+      getterOrder.push('transfer');
+      return [];
+    },
+    get includeUserActivation() {
+      getterOrder.push('includeUserActivation');
+      return true;
+    },
+    get targetOrigin() {
+      getterOrder.push('targetOrigin');
+      return '*';
+    },
+  });
+  testing.expectEqual(
+    ['transfer', 'includeUserActivation', 'targetOrigin'],
+    getterOrder,
+  );
+
+  testing.onload(() => {
+    window.removeEventListener('message', handler);
+    testing.expectEqual(2, messages.length);
+
+    const ordinary = messages.find(item => item.data === 'activation-default');
+    testing.expectEqual(true, ordinary.trusted);
+    testing.expectEqual('', ordinary.lastEventId);
+    testing.expectEqual(null, ordinary.activation);
+    testing.expectEqual(true, ordinary.activationStable);
+    testing.expectEqual(true, ordinary.sourceSelf);
+
+    const included = messages.find(item => item.data === 'activation-included');
+    testing.expectEqual(true, included.trusted);
+    testing.expectEqual('', included.lastEventId);
+    testing.expectEqual(false, included.activation === null);
+    testing.expectEqual(true, included.activationStable);
+    // includeUserActivation creates a call-time snapshot, not the live
+    // Navigator-owned UserActivation object.
+    testing.expectEqual(false, included.activation === navigator.userActivation);
+    testing.expectEqual('[object UserActivation]',
+      Object.prototype.toString.call(included.activation));
+    testing.expectEqual(navigator.userActivation.hasBeenActive,
+      included.activation.hasBeenActive);
+    testing.expectEqual(navigator.userActivation.isActive,
+      included.activation.isActive);
+    testing.expectEqual(true, included.sourceSelf);
+  });
+}
+</script>
+
+<script id=messageEventWithBubbles>
+{
+  const evt = new MessageEvent('message', {
+    data: 'test',
+    bubbles: true,
+    cancelable: true
+  });
+
+  testing.expectEqual(true, evt.bubbles);
+  testing.expectEqual(true, evt.cancelable);
+}
+</script>
+
+<script id=postMessageWithNumber>
+{
+  let received = null;
+
+  const handler = (e) => {
+    received = e.data;
+  };
+  window.addEventListener('message', handler, { once: true });
+
+  window.postMessage(42, '*');
+
+  testing.onload(() => {
+    testing.expectEqual(42, received);
+  });
+}
+</script>
+
+<script id=postMessageWithArray>
+{
+  let received = null;
+
+  const handler = (e) => {
+    received = e.data;
+  };
+  window.addEventListener('message', handler, { once: true });
+
+  const arr = [1, 2, 3, 'test'];
+  window.postMessage(arr, '*');
+
+  testing.onload(() => {
+    testing.expectEqual(arr, received);
+  });
+}
+</script>
+
+<script id=postMessageWithNull>
+{
+  let received = undefined;
+
+  const handler = (e) => {
+    received = e.data;
+  };
+  window.addEventListener('message', handler, { once: true });
+
+  window.postMessage(null, '*');
+
+  testing.onload(() => {
+    testing.expectEqual(null, received);
+  });
+}
+</script>
+
+<script id=postMessageTransfersPorts>
+{
+  // window.postMessage(data, targetOrigin, [port]) must deliver the transferred
+  // MessagePort as event.ports[0] (regression: ports used to always be empty,
+  // so receivers doing `e.ports[0].onmessage = ...` threw on undefined).
+  const channel = new MessageChannel();
+  let received = null;
+  let echoed = null;
+
+  channel.port1.onmessage = (e) => { echoed = e.data; };
+
+  const handler = (e) => {
+    received = e.ports[0];
+    received.postMessage('pong');
+  };
+  window.addEventListener('message', handler, { once: true });
+
+  window.postMessage('ping', '*', [channel.port2]);
+
+  testing.onload(() => {
+    testing.expectEqual(true, received instanceof MessagePort);
+    testing.expectEqual('pong', echoed);
+  });
+}
+</script>
+
+<script id=messageEventOriginFromLocation>
+{
+  let receivedOrigin = null;
+
+  const handler = (e) => {
+    receivedOrigin = e.origin;
+  };
+  window.addEventListener('message', handler, { once: true });
+
+  window.postMessage('test', '*');
+
+  testing.onload(() => {
+    testing.expectEqual(location.origin, receivedOrigin);
+  });
+}
+</script>

@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<head>
+  <title>Chrome Window prototype topology</title>
+  <script src="../testing.js"></script>
+</head>
+
+<body></body>
+
+<script id="window_prototype_topology">
+  // Chrome 149 source baseline:
+  // chromium/src@48860e577c01de4a313192cc79596c46b52efb3a
+  // third_party/blink/renderer/bindings/core/v8/window_proxy.h documents:
+  //   WindowProxy -> inner global -> Window.prototype -> WindowProperties
+  //               -> EventTarget.prototype -> Object.prototype.
+  // V8's global proxy hides the inner global from Object.getPrototypeOf(), so
+  // the author-visible chain starts at Window.prototype. local_window_proxy.cc
+  // likewise obtains Window.prototype directly from global_proxy->GetPrototype().
+  const own = (object, key) =>
+    Object.prototype.hasOwnProperty.call(object, key);
+
+  const windowPrototype = Object.getPrototypeOf(window);
+  const windowProperties = Object.getPrototypeOf(windowPrototype);
+
+  testing.expectEqual(Window.prototype, windowPrototype);
+  testing.expectEqual('[object Window]', Object.prototype.toString.call(window));
+  testing.expectEqual('[object Window]', Object.prototype.toString.call(windowPrototype));
+  testing.expectEqual(
+    '[object WindowProperties]',
+    Object.prototype.toString.call(windowProperties),
+  );
+
+  // Blink marks both the Window global instance and Window.prototype with
+  // V8's immutable-prototype bit.
+  testing.expectTrue(Reflect.setPrototypeOf(windowPrototype, windowProperties));
+  testing.expectFalse(Reflect.setPrototypeOf(windowPrototype, {}));
+  let immutablePrototypeError;
+  try {
+    Object.setPrototypeOf(windowPrototype, {});
+  } catch (error) {
+    immutablePrototypeError = error;
+  }
+  testing.expectEqual('TypeError', immutablePrototypeError && immutablePrototypeError.name);
+  testing.expectEqual(
+    "Immutable prototype object '#<Window>' cannot have their prototype set",
+    immutablePrototypeError && immutablePrototypeError.message,
+  );
+  testing.expectEqual(
+    EventTarget.prototype,
+    Object.getPrototypeOf(windowProperties),
+  );
+
+  const expectedWindowPrototypeKeys = [
+    'TEMPORARY',
+    'PERSISTENT',
+    'constructor',
+    Symbol.toStringTag,
+  ];
+  testing.expectEqual(
+    expectedWindowPrototypeKeys,
+    Reflect.ownKeys(windowPrototype),
+  );
+  testing.expectEqual(
+    [Symbol.toStringTag],
+    Reflect.ownKeys(windowProperties),
+  );
+
+  const windowPropertiesTag = Object.getOwnPropertyDescriptor(
+    windowProperties,
+    Symbol.toStringTag,
+  );
+  testing.expectEqual('WindowProperties', windowPropertiesTag.value);
+  testing.expectFalse(windowPropertiesTag.writable);
+  testing.expectFalse(windowPropertiesTag.enumerable);
+  testing.expectTrue(windowPropertiesTag.configurable);
+
+  for (const [name, value] of [['TEMPORARY', 0], ['PERSISTENT', 1]]) {
+    for (const holder of [Window, Window.prototype]) {
+      const descriptor = Object.getOwnPropertyDescriptor(holder, name);
+      testing.expectEqual(value, descriptor.value);
+      testing.expectFalse(descriptor.writable);
+      testing.expectTrue(descriptor.enumerable);
+      testing.expectFalse(descriptor.configurable);
+    }
+    testing.expectFalse(own(window, name));
+  }
+
+  // [Global] members are installed on the inner global, not duplicated on
+  // Window.prototype. Inherited EventTarget members remain on their interface
+  // prototype and are not flattened onto the global object.
+  for (const name of [
+    'document',
+    'fetch',
+    'setTimeout',
+    'postMessage',
+    'devicePixelRatio',
+  ]) {
+    testing.expectTrue(own(window, name));
+    testing.expectFalse(own(Window.prototype, name));
+  }
+
+  for (const name of ['window', 'top']) {
+    const descriptor = Object.getOwnPropertyDescriptor(window, name);
+    testing.expectFalse(descriptor.configurable);
+  }
+
+  const pixelRatioDescriptor = Object.getOwnPropertyDescriptor(
+    window,
+    'devicePixelRatio',
+  );
+  testing.expectEqual('function', typeof pixelRatioDescriptor.get);
+  testing.expectEqual('function', typeof pixelRatioDescriptor.set);
+  testing.expectTrue(pixelRatioDescriptor.enumerable);
+  testing.expectTrue(pixelRatioDescriptor.configurable);
+  for (const name of [
+    'addEventListener',
+    'dispatchEvent',
+    'removeEventListener',
+  ]) {
+    testing.expectFalse(own(window, name));
+    testing.expectFalse(own(Window.prototype, name));
+    testing.expectTrue(own(EventTarget.prototype, name));
+  }
+
+  // Blink exposes Window.console as a [Replaceable] own data property.  It
+  // must not disappear when [Global] operations move off Window.prototype.
+  const consoleDescriptor = Object.getOwnPropertyDescriptor(window, 'console');
+  testing.expectEqual(console, consoleDescriptor.value);
+  testing.expectTrue(consoleDescriptor.writable);
+  testing.expectFalse(consoleDescriptor.enumerable);
+  testing.expectTrue(consoleDescriptor.configurable);
+  testing.expectFalse(own(Window.prototype, 'console'));
+
+  // CrossOriginWindow is an implementation wrapper, not a Web-exposed
+  // interface object. Meta.name is still useful for V8 class identity, but it
+  // must not implicitly create a global constructor.
+  testing.expectFalse('CrossOriginWindow' in window);
+  testing.expectFalse(own(window, 'CrossOriginWindow'));
+  testing.expectEqual('undefined', typeof CrossOriginWindow);
+</script>
+
+<script id="internal_global_exports">
+  // Exact Chrome 149 (149.0.7827.203) baseline. These names identify
+  // implementation wrappers, namespaces, dictionaries, iterator helpers, or
+  // [LegacyNoInterfaceObject] interfaces. Their templates are still needed to
+  // wrap returned objects, but no property is installed on Window.
+  const internalTypes = [
+    'Console',
+    'Css',
+    'StorageEstimate',
+    'ModelContextClient',
+    'ReadableStreamAsyncIterator',
+    'WEBGL_debug_renderer_info',
+    'WEBGL_lose_context',
+    'SVGGenericElement',
+    'CSSStyleProperties',
+    'FontFaceSet',
+    'CrossOriginWindow',
+  ];
+
+  for (const name of internalTypes) {
+    testing.expectFalse(name in window);
+    testing.expectFalse(Object.prototype.hasOwnProperty.call(window, name));
+    testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(window, name));
+    testing.expectEqual('undefined', typeof window[name]);
+  }
+
+  // Positive controls guard against turning Meta.global_export into a broad
+  // deny-list. These are real Chrome 149 interface objects and retain the
+  // normal Web IDL global descriptor.
+  const publicInterfaces = [
+    'ModelContext',
+    'StorageManager',
+    'CookieStore',
+    'CookieChangeEvent',
+    'CryptoKey',
+    'SubtleCrypto',
+    'ReadableStream',
+    'WebGLRenderingContext',
+    'SVGElement',
+    'CSSStyleDeclaration',
+    'FontFace',
+  ];
+
+  for (const name of publicInterfaces) {
+    const descriptor = Object.getOwnPropertyDescriptor(window, name);
+    testing.expectEqual('function', typeof window[name]);
+    testing.expectEqual(window[name], descriptor.value);
+    testing.expectTrue(descriptor.writable);
+    testing.expectFalse(descriptor.enumerable);
+    testing.expectTrue(descriptor.configurable);
+  }
+
+  testing.expectTrue(Object.prototype.hasOwnProperty.call(window, 'console'));
+  testing.expectEqual('object', typeof console);
+  testing.expectTrue(Object.prototype.hasOwnProperty.call(window, 'CSS'));
+  testing.expectEqual('object', typeof CSS);
+</script>
+
+<script id="transparent_implementation_prototypes">
+  // A host implementation may need a private InstanceTemplate for native
+  // fields or property interceptors without defining a Web-visible interface
+  // prototype. In that case its direct prototype must be the public provider's
+  // exact prototype object, not a look-alike object with the same parent.
+  const expectTransparentImplementation = (instance, PublicInterface, tag) => {
+    testing.expectEqual(PublicInterface.prototype, Object.getPrototypeOf(instance));
+    testing.expectEqual(PublicInterface, instance.constructor);
+    testing.expectTrue(instance instanceof PublicInterface);
+    testing.expectEqual(`[object ${tag}]`, Object.prototype.toString.call(instance));
+    testing.expectFalse(Object.prototype.hasOwnProperty.call(instance, 'constructor'));
+    testing.expectFalse(Object.prototype.hasOwnProperty.call(instance, Symbol.toStringTag));
+  };
+
+  const element = document.createElement('div');
+  document.body.appendChild(element);
+  expectTransparentImplementation(
+    element.style,
+    CSSStyleDeclaration,
+    'CSSStyleDeclaration',
+  );
+  expectTransparentImplementation(
+    getComputedStyle(element),
+    CSSStyleDeclaration,
+    'CSSStyleDeclaration',
+  );
+
+  // Topology alone is insufficient: V8 API method Signatures validate the
+  // receiver through FunctionTemplate inheritance. A prototype-provider-only
+  // implementation can look exact above while every parent operation throws
+  // `TypeError: Illegal invocation`.
+  CSSStyleDeclaration.prototype.setProperty.call(
+    element.style,
+    'background-color',
+    'rgb(1, 2, 3)',
+  );
+  testing.expectEqual(
+    'rgb(1, 2, 3)',
+    CSSStyleDeclaration.prototype.getPropertyValue.call(
+      element.style,
+      'background-color',
+    ),
+  );
+  testing.expectEqual(
+    'rgb(1, 2, 3)',
+    CSSStyleDeclaration.prototype.getPropertyValue.call(
+      getComputedStyle(element),
+      'background-color',
+    ),
+  );
+
+  const unknownSvg = document.createElementNS(
+    'http://www.w3.org/2000/svg',
+    'chrome149-unknown-element',
+  );
+  expectTransparentImplementation(unknownSvg, SVGElement, 'SVGElement');
+  unknownSvg.setAttribute('data-transparent-receiver', 'pass');
+  testing.expectEqual(
+    'pass',
+    Element.prototype.getAttribute.call(
+      unknownSvg,
+      'data-transparent-receiver',
+    ),
+  );
+
+  // The implementation names remain absent after instances have been wrapped;
+  // creating a wrapper must not lazily export their hidden FunctionTemplates.
+  testing.expectEqual('undefined', typeof window.CSSStyleProperties);
+  testing.expectEqual('undefined', typeof window.SVGGenericElement);
+</script>

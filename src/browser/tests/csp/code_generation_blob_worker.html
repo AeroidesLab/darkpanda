@@ -1,0 +1,41 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<meta http-equiv="Content-Security-Policy"
+      content="script-src 'unsafe-inline' blob:; worker-src blob:">
+<script id="csp-blob-worker">
+  // Give non-runner browsers an assertion associated with this concrete
+  // parser script; async observations use testing.js's generic browser ID.
+  testing.expectTrue(true);
+  (async () => {
+    const state = await testing.async();
+    const workerSource = `
+      const capture = callback => {
+        try {
+          callback();
+          return null;
+        } catch (error) {
+          return {name: error.name, message: error.message};
+        }
+      };
+      const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+      postMessage({
+        eval: capture(() => eval('1 + 1')),
+        wasm: capture(() => new WebAssembly.Module(bytes)),
+      });
+    `;
+    const url = URL.createObjectURL(new Blob([workerSource], {
+      type: 'text/javascript',
+    }));
+    const worker = new Worker(url);
+    worker.onmessage = event => state.resolve(event.data);
+    worker.onerror = event => state.resolve({error: event.message});
+
+    await state.done(result => {
+      worker.terminate();
+      URL.revokeObjectURL(url);
+      testing.expectEqual(undefined, result.error);
+      testing.expectEqual('EvalError', result.eval && result.eval.name);
+      testing.expectEqual('CompileError', result.wasm && result.wasm.name);
+    });
+  })();
+</script>

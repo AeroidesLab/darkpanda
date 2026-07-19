@@ -1,0 +1,10 @@
+<!doctype html>
+<script src="testing.js"></script>
+<script id="storage_navigation_lifecycle">
+  testing.expectEqual('survives-root-navigation', sessionStorage.getItem('root-value'));
+  testing.expectEqual('true', sessionStorage.getItem('iframe-shared'));
+  testing.expectEqual('true', sessionStorage.getItem('popup-isolated'));
+  testing.expectEqual('shared-across-top-levels', localStorage.getItem('local-value'));
+  sessionStorage.clear();
+  localStorage.clear();
+</script>

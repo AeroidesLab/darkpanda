@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<head id="the_head">
+  <meta charset="UTF-8">
+  <title>Test Document Title</title>
+  <script src="../testing.js"></script>
+</head>
+
+<body id=the_body>
+</body>
+
+<script id=document>
+  testing.expectEqual(10, document.childNodes[0].nodeType);
+  testing.expectEqual(null, document.parentNode);
+  testing.expectEqual(undefined, document.getCurrentScript);
+  testing.expectEqual(location.href, document.URL);
+  testing.expectEqual(window, document.defaultView);
+  testing.expectEqual(false, document.hidden);
+  testing.expectEqual("visible", document.visibilityState);
+  testing.expectEqual(false, document.prerendering);
+  testing.expectEqual(undefined, Document.prerendering);
+  // characterSet should return canonical encoding name
+  testing.expectEqual("UTF-8", document.characterSet);
+  testing.expectEqual("UTF-8", document.charset);
+  testing.expectEqual("UTF-8", document.inputEncoding);
+</script>
+
+<script id=headAndbody>
+  testing.expectEqual($('#the_head'), document.head);
+  testing.expectEqual($('#the_body'), document.body);
+</script>
+
+<script id=documentElement>
+  testing.expectEqual($('#the_body').parentNode, document.documentElement);
+  testing.expectEqual(document.documentElement, document.scrollingElement);
+</script>
+
+<script id=title>
+  testing.expectEqual('Test Document Title', document.title);
+  document.title = 'New Title';
+  testing.expectEqual('New Title', document.title);
+  document.title = '';
+  testing.expectEqual('', document.title);
+</script>
+
+<script id=createTextNode>
+  const textNode = document.createTextNode('Hello World');
+  testing.expectEqual(3, textNode.nodeType);
+  testing.expectEqual('Hello World', textNode.nodeValue);
+  testing.expectEqual('Hello World', textNode.textContent);
+
+  const emptyText = document.createTextNode('');
+  testing.expectEqual('', emptyText.nodeValue);
+</script>
+
+<script id=document_metadata>
+  // Test document metadata properties on HTML document
+  testing.expectEqual('text/html', document.contentType);
+  testing.expectEqual('UTF-8', document.characterSet);
+  testing.expectEqual('UTF-8', document.charset);
+  testing.expectEqual('UTF-8', document.inputEncoding);
+  testing.expectEqual('CSS1Compat', document.compatMode);
+  testing.expectEqual(document.URL, document.documentURI);
+  testing.expectEqual('', document.referrer);
+  testing.expectEqual(testing.HOST, document.domain);
+
+  document.domain = testing.HOST;
+  testing.expectEqual(testing.HOST, document.domain);
+  testing.expectError('SecurityError', () => { document.domain = 'example.org'; });
+  testing.expectError('SecurityError', () => { document.domain = 'com'; });
+  testing.expectError('SecurityError', () => { document.domain = ''; });
+  // Rejected assignments must not have changed the domain.
+  testing.expectEqual(testing.HOST, document.domain);
+</script>
+
+<script id=programmatic_document_metadata>
+  // Test document metadata properties on programmatically created document
+  const doc = new Document();
+  testing.expectEqual('application/xml', doc.contentType);
+  testing.expectEqual('UTF-8', doc.characterSet);
+  testing.expectEqual('UTF-8', doc.charset);
+  testing.expectEqual('UTF-8', doc.inputEncoding);
+  testing.expectEqual('CSS1Compat', doc.compatMode);
+  testing.expectEqual('', doc.referrer);
+  // Programmatic document should have empty domain (no URL/origin)
+  testing.expectEqual('', doc.domain);
+</script>
+
+<script id=document_state_accessors_chrome149>
+  const implementedPrototypeNames = [
+    'implementation',
+    'URL',
+    'documentURI',
+    'compatMode',
+    'characterSet',
+    'charset',
+    'inputEncoding',
+    'contentType',
+    'doctype',
+    'documentElement',
+    'domain',
+    'referrer',
+    'cookie',
+    'readyState',
+    'title',
+    'dir',
+    'body',
+    'head',
+    'images',
+    'embeds',
+    'plugins',
+    'links',
+    'forms',
+    'scripts',
+    'currentScript',
+    'defaultView',
+    'anchors',
+    'applets',
+    'all',
+    'scrollingElement',
+    'hidden',
+    'visibilityState',
+    'prerendering',
+    'onselectionchange',
+    'children',
+    'firstElementChild',
+    'lastElementChild',
+    'childElementCount',
+    'activeElement',
+    'styleSheets',
+    'adoptedStyleSheets',
+    'fonts',
+    'adoptNode',
+    'append',
+    'close',
+    'createAttribute',
+    'createAttributeNS',
+    'createCDATASection',
+    'createComment',
+    'createDocumentFragment',
+    'createElement',
+    'createElementNS',
+    'createEvent',
+    'createExpression',
+    'createNSResolver',
+    'createNodeIterator',
+    'createProcessingInstruction',
+    'createRange',
+    'createTextNode',
+    'createTreeWalker',
+    'elementFromPoint',
+    'elementsFromPoint',
+    'evaluate',
+    'getElementById',
+    'getElementsByClassName',
+    'getElementsByName',
+    'getElementsByTagName',
+    'getElementsByTagNameNS',
+    'getSelection',
+    'hasFocus',
+    'importNode',
+    'moveBefore',
+    'open',
+    'prepend',
+    'querySelector',
+    'querySelectorAll',
+    'replaceChildren',
+    'write',
+    'writeln',
+  ];
+  const implementedPrototypeSet = new Set(implementedPrototypeNames);
+  testing.expectEqual(
+    implementedPrototypeNames,
+    Reflect.ownKeys(Document.prototype).filter(key => implementedPrototypeSet.has(key)),
+  );
+  testing.expectFalse(Object.hasOwn(Document.prototype, 'location'));
+  testing.expectFalse(Object.hasOwn(HTMLDocument.prototype, 'location'));
+
+  const stateNames = [
+    'compatMode',
+    'referrer',
+    'hidden',
+    'visibilityState',
+    'prerendering',
+  ];
+
+  for (const name of stateNames) {
+    const descriptor = Object.getOwnPropertyDescriptor(Document.prototype, name);
+    testing.expectEqual('function', typeof descriptor.get);
+    testing.expectEqual(`get ${name}`, descriptor.get.name);
+    testing.expectEqual(0, descriptor.get.length);
+    testing.expectEqual(undefined, descriptor.set);
+    testing.expectTrue(descriptor.enumerable);
+    testing.expectTrue(descriptor.configurable);
+    testing.expectEqual(
+      `function get ${name}() { [native code] }`,
+      Function.prototype.toString.call(descriptor.get),
+    );
+  }
+
+  const detached = new Document();
+  testing.expectTrue(detached.hidden);
+  testing.expectEqual('hidden', detached.visibilityState);
+  testing.expectFalse(detached.prerendering);
+  testing.expectEqual('', detached.referrer);
+
+  const detachedHTML = document.implementation.createHTMLDocument('detached');
+  testing.expectTrue(detachedHTML.hidden);
+  testing.expectEqual('hidden', detachedHTML.visibilityState);
+  testing.expectEqual('CSS1Compat', detachedHTML.compatMode);
+</script>
+
+<script id=document_location_legacy_unforgeable_chrome149>
+  function checkLocationOwnProperty(target, expectedValue) {
+    testing.expectEqual(['location'], Reflect.ownKeys(target));
+    testing.expectEqual(expectedValue, target.location);
+
+    const descriptor = Object.getOwnPropertyDescriptor(target, 'location');
+    testing.expectEqual('function', typeof descriptor.get);
+    testing.expectEqual('get location', descriptor.get.name);
+    testing.expectEqual(0, descriptor.get.length);
+    testing.expectEqual('function get location() { [native code] }', Function.prototype.toString.call(descriptor.get));
+    testing.expectEqual('function', typeof descriptor.set);
+    testing.expectEqual('set location', descriptor.set.name);
+    testing.expectEqual(1, descriptor.set.length);
+    testing.expectEqual('function set location() { [native code] }', Function.prototype.toString.call(descriptor.set));
+    testing.expectTrue(descriptor.enumerable);
+    testing.expectFalse(descriptor.configurable);
+  }
+
+  checkLocationOwnProperty(document, window.location);
+  checkLocationOwnProperty(new Document(), null);
+  checkLocationOwnProperty(document.implementation.createHTMLDocument('location'), null);
+</script>
+
+<script id=html_document_illegal_constructor_chrome149>
+  testing.withError(error => {
+    testing.expectEqual('Illegal constructor', error.message);
+    testing.expectEqual('TypeError: Illegal constructor', String(error));
+  }, () => HTMLDocument());
+
+  testing.withError(error => {
+    testing.expectEqual("Failed to construct 'HTMLDocument': Illegal constructor", error.message);
+    testing.expectEqual("TypeError: Failed to construct 'HTMLDocument': Illegal constructor", String(error));
+    testing.expectEqual('TypeError: Illegal constructor', String(error.stack).split('\n')[0]);
+  }, () => new HTMLDocument());
+</script>
+
+<script id=document_compatibility_mode_chrome149>
+  const parser = new DOMParser();
+  const quirks = parser.parseFromString('<p>no doctype</p>', 'text/html');
+  testing.expectEqual('BackCompat', quirks.compatMode);
+  testing.expectEqual(quirks.body, quirks.scrollingElement);
+
+  const standards = parser.parseFromString('<!doctype html><p>standards</p>', 'text/html');
+  testing.expectEqual('CSS1Compat', standards.compatMode);
+  testing.expectEqual(standards.documentElement, standards.scrollingElement);
+  standards.doctype.remove();
+  // Compatibility mode is fixed by parsing; it is not derived live from the
+  // current doctype node.
+  testing.expectEqual('CSS1Compat', standards.compatMode);
+
+  const invalidName = parser.parseFromString('<!doctype nothtml><p>x</p>', 'text/html');
+  testing.expectEqual('BackCompat', invalidName.compatMode);
+
+  const legacyQuirks = parser.parseFromString(
+    '<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"><p>x</p>',
+    'text/html',
+  );
+  testing.expectEqual('BackCompat', legacyQuirks.compatMode);
+
+  const limitedQuirks = parser.parseFromString(
+    '<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd"><p>x</p>',
+    'text/html',
+  );
+  testing.expectEqual('CSS1Compat', limitedQuirks.compatMode);
+  testing.expectEqual(limitedQuirks.documentElement, limitedQuirks.scrollingElement);
+</script>
+
+<script id=document_srcdoc_compatibility_mode_chrome149>
+  const srcdocCases = [
+    '<p>no doctype</p>',
+    '<!doctype html><p>standards</p>',
+    '<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"><p>legacy quirks</p>',
+    '<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd"><p>limited quirks</p>',
+    '<!doctype nothtml><p>force quirks</p>',
+  ];
+
+  for (const source of srcdocCases) {
+    const iframe = document.createElement('iframe');
+    iframe.srcdoc = source;
+    document.body.append(iframe);
+    testing.expectEqual('CSS1Compat', iframe.contentDocument.compatMode);
+    testing.expectEqual(iframe.contentDocument.documentElement, iframe.contentDocument.scrollingElement);
+    iframe.remove();
+  }
+
+  const rewritten = document.createElement('iframe');
+  rewritten.srcdoc = '<p>initial</p>';
+  document.body.append(rewritten);
+  rewritten.contentDocument.open();
+  rewritten.contentDocument.write('<p>rewritten without a doctype</p>');
+  rewritten.contentDocument.close();
+  testing.expectEqual('CSS1Compat', rewritten.contentDocument.compatMode);
+  testing.expectEqual(rewritten.contentDocument.documentElement, rewritten.contentDocument.scrollingElement);
+  rewritten.remove();
+</script>
+
+<script id=document_iframe_referrer_policy_chrome149>
+  const iframeReferrerPrototype = HTMLIFrameElement.prototype;
+  const iframeReferrerDescriptor = Object.getOwnPropertyDescriptor(
+    iframeReferrerPrototype,
+    'referrerPolicy',
+  );
+  testing.expectEqual('function', typeof iframeReferrerDescriptor.get);
+  testing.expectEqual('function', typeof iframeReferrerDescriptor.set);
+  testing.expectTrue(iframeReferrerDescriptor.enumerable);
+  testing.expectTrue(iframeReferrerDescriptor.configurable);
+
+  const reflectionProbe = document.createElement('iframe');
+  testing.expectEqual('', reflectionProbe.referrerPolicy);
+  reflectionProbe.setAttribute('referrerpolicy', 'No-Referrer');
+  testing.expectEqual('no-referrer', reflectionProbe.referrerPolicy);
+  reflectionProbe.setAttribute('referrerpolicy', 'not-a-policy');
+  testing.expectEqual('', reflectionProbe.referrerPolicy);
+
+  const expectedParentOrigin = `${new URL(document.URL).origin}/`;
+  const expectedParentURL = document.URL.split('#', 1)[0];
+  const srcdocReferrerCases = [
+    ['', expectedParentOrigin],
+    ['no-referrer', ''],
+    ['unsafe-url', expectedParentURL],
+    ['origin', expectedParentOrigin],
+  ];
+  for (const [policy, expectedReferrer] of srcdocReferrerCases) {
+    const policyFrame = document.createElement('iframe');
+    policyFrame.referrerPolicy = policy;
+    policyFrame.srcdoc = '<!doctype html><body>referrer policy</body>';
+    document.body.append(policyFrame);
+    testing.expectEqual('about:srcdoc', policyFrame.contentDocument.URL);
+    testing.expectEqual(expectedReferrer, policyFrame.contentDocument.referrer);
+    policyFrame.remove();
+  }
+
+  // Initial about:blank is a special synchronous commit: it ignores the
+  // iframe policy and exposes the immediate creator URL verbatim.
+  const policyBlank = document.createElement('iframe');
+  policyBlank.referrerPolicy = 'no-referrer';
+  policyBlank.src = 'about:blank';
+  document.body.append(policyBlank);
+  testing.expectEqual(document.URL, policyBlank.contentDocument.referrer);
+
+  const nestedInBlank = policyBlank.contentDocument.createElement('iframe');
+  nestedInBlank.src = 'about:blank';
+  policyBlank.contentDocument.body.append(nestedInBlank);
+  testing.expectEqual('about:blank', nestedInBlank.contentDocument.referrer);
+
+  const srcdocParent = document.createElement('iframe');
+  srcdocParent.srcdoc = '<!doctype html><body>srcdoc parent</body>';
+  document.body.append(srcdocParent);
+  const nestedInSrcdoc = srcdocParent.contentDocument.createElement('iframe');
+  nestedInSrcdoc.src = 'about:blank';
+  srcdocParent.contentDocument.body.append(nestedInSrcdoc);
+  testing.expectEqual('about:srcdoc', nestedInSrcdoc.contentDocument.referrer);
+
+  policyBlank.remove();
+  srcdocParent.remove();
+</script>
+
+<script id=document_redirect_referrer_selection_chrome149 type=module>
+  const state = await testing.async();
+
+  async function navigateReferrerFrame(url) {
+    const frame = document.createElement('iframe');
+    const result = new Promise(resolve => {
+      function receive(event) {
+        if (event.source !== frame.contentWindow) return;
+        window.removeEventListener('message', receive);
+        resolve(event.data);
+      }
+      window.addEventListener('message', receive);
+    });
+    frame.src = url;
+    document.body.append(frame);
+    const value = await result;
+    frame.remove();
+    return value;
+  }
+
+  const crossRedirect = await navigateReferrerFrame('/referrer/redirect-cross-origin');
+  const policyRedirect = await navigateReferrerFrame('/referrer/redirect-no-referrer');
+
+  state.resolve({ crossRedirect, policyRedirect });
+  await state.done(({ crossRedirect, policyRedirect }) => {
+    testing.expectEqual('/referrer/final-cross-origin', crossRedirect.kind);
+    testing.expectEqual(`${new URL(document.URL).origin}/`, crossRedirect.referrer);
+    testing.expectEqual('/referrer/final-no-referrer', policyRedirect.kind);
+    testing.expectEqual('', policyRedirect.referrer);
+  });
+</script>
+
+<script id=document_about_blank_referrer_and_visibility>
+  const iframe = document.createElement('iframe');
+  document.body.append(iframe);
+  const childDocument = iframe.contentDocument;
+
+  testing.expectEqual('about:blank', childDocument.URL);
+  testing.expectEqual(document.URL, childDocument.referrer);
+  testing.expectEqual('BackCompat', childDocument.compatMode);
+  testing.expectFalse(childDocument.hidden);
+  testing.expectEqual('visible', childDocument.visibilityState);
+
+  iframe.remove();
+  testing.expectTrue(childDocument.hidden);
+  testing.expectEqual('hidden', childDocument.visibilityState);
+  testing.expectEqual('', childDocument.referrer);
+</script>
+
+<!-- Test anchors and links -->
+<a id="link1" href="/page1">Link 1</a>
+<a id="link2" href="/page2">Link 2</a>
+<a id="anchor1" name="section1">Anchor 1</a>
+<a id="anchor2" name="section2">Anchor 2</a>
+<a id="both" href="/page3" name="section3">Both href and name</a>
+<a id="no_attrs">No attributes</a>
+
+<script id=document_links>
+  {
+    // document.links should only include <a> elements with href attribute
+    const links = document.links;
+    testing.expectEqual('HTMLCollection', links.constructor.name);
+    testing.expectEqual(3, links.length);
+
+    // Should include link1, link2, and both
+    testing.expectEqual($('#link1'), links[0]);
+    testing.expectEqual($('#link2'), links[1]);
+    testing.expectEqual($('#both'), links[2]);
+
+    // Indexed access
+    testing.expectEqual($('#link1'), links.item(0));
+    testing.expectEqual($('#link2'), links.item(1));
+    testing.expectEqual($('#both'), links.item(2));
+    testing.expectEqual(null, links.item(3));
+  }
+</script>
+
+<script id=document_anchors>
+  {
+    // document.anchors should only include <a> elements with name attribute
+    const anchors = document.anchors;
+    testing.expectEqual('HTMLCollection', anchors.constructor.name);
+    testing.expectEqual(3, anchors.length);
+
+    // Should include anchor1, anchor2, and both
+    testing.expectEqual($('#anchor1'), anchors[0]);
+    testing.expectEqual($('#anchor2'), anchors[1]);
+    testing.expectEqual($('#both'), anchors[2]);
+
+    // Indexed access
+    testing.expectEqual($('#anchor1'), anchors.item(0));
+    testing.expectEqual($('#anchor2'), anchors.item(1));
+    testing.expectEqual($('#both'), anchors.item(2));
+    testing.expectEqual(null, anchors.item(3));
+  }
+</script>
+
+<script id=links_live_collection>
+  {
+    // Test that document.links is a live collection
+    const links = document.links;
+    const initialLength = links.length;
+
+    // Add a new link
+    const newLink = document.createElement('a');
+    newLink.href = '/new-page';
+    newLink.textContent = 'New Link';
+    document.body.appendChild(newLink);
+
+    testing.expectEqual(initialLength + 1, links.length);
+    testing.expectEqual(newLink, links[links.length - 1]);
+
+    // Remove href attribute - should no longer be in links
+    newLink.removeAttribute('href');
+    testing.expectEqual(initialLength, links.length);
+
+    // Add it back
+    newLink.href = '/another-page';
+    testing.expectEqual(initialLength + 1, links.length);
+
+    // Remove the element
+    newLink.remove();
+    testing.expectEqual(initialLength, links.length);
+  }
+</script>
+
+<script id=anchors_live_collection>
+  // Test that document.anchors is a live collection
+  const anchors = document.anchors;
+  const initialLength = anchors.length;
+
+  // Add a new anchor
+  const newAnchor = document.createElement('a');
+  newAnchor.name = 'new-section';
+  newAnchor.textContent = 'New Anchor';
+  document.body.appendChild(newAnchor);
+
+  testing.expectEqual(initialLength + 1, anchors.length);
+  testing.expectEqual(newAnchor, anchors[anchors.length - 1]);
+
+  // Remove name attribute - should no longer be in anchors
+  newAnchor.removeAttribute('name');
+  testing.expectEqual(initialLength, anchors.length);
+
+  // Add it back
+  newAnchor.name = 'another-section';
+  testing.expectEqual(initialLength + 1, anchors.length);
+
+  // Remove the element
+  newAnchor.remove();
+  testing.expectEqual(initialLength, anchors.length);
+</script>
+
+<script id=cookie_basic>
+  // Basic cookie operations
+  document.cookie = 'testbasic1=Oeschger';
+  testing.expectEqual(true, document.cookie.includes('testbasic1=Oeschger'));
+
+  document.cookie = 'testbasic2=tripe';
+  testing.expectEqual(true, document.cookie.includes('testbasic1=Oeschger'));
+  testing.expectEqual(true, document.cookie.includes('testbasic2=tripe'));
+
+  // HttpOnly should be ignored from JavaScript
+  const beforeHttp = document.cookie;
+  document.cookie = 'IgnoreMy=Ghost; HttpOnly';
+  testing.expectEqual(false, document.cookie.includes('IgnoreMy=Ghost'));
+
+  // Clean up
+  document.cookie = 'testbasic1=; Max-Age=0';
+  document.cookie = 'testbasic2=; Max-Age=0';
+</script>
+
+<script id=cookie_special_chars>
+  // Test special characters in cookie values
+  document.cookie = 'testspaces=hello world';
+  testing.expectEqual(true, document.cookie.includes('testspaces=hello world'));
+  document.cookie = 'testspaces=; Max-Age=0';
+
+  // Test various allowed special characters
+  document.cookie = 'testspecial=!#$%&\'()*+-./';
+  testing.expectEqual(true, document.cookie.includes('testspecial='));
+  document.cookie = 'testspecial=; Max-Age=0';
+
+  // Semicolon terminates the cookie value
+  document.cookie = 'testsemi=before;after';
+  testing.expectEqual(true, document.cookie.includes('testsemi=before'));
+  testing.expectEqual(false, document.cookie.includes('after'));
+  document.cookie = 'testsemi=; Max-Age=0';
+</script>
+
+<script id=cookie_empty_name>
+  // Cookie with empty name (just a value)
+  document.cookie = 'teststandalone';
+  testing.expectEqual(true, document.cookie.includes('teststandalone'));
+  document.cookie = 'teststandalone; Max-Age=0';
+</script>
+
+<script id=cookie_whitespace>
+  // Names and values should be trimmed
+  document.cookie = '  testtrim  =  trimmed_value  ';
+  testing.expectEqual(true, document.cookie.includes('testtrim=trimmed_value'));
+  document.cookie = 'testtrim=; Max-Age=0';
+</script>
+
+<script id=cookie_max_age>
+  // Max-Age=0 should immediately delete
+  document.cookie = 'testtemp0=value; Max-Age=0';
+  testing.expectEqual(false, document.cookie.includes('testtemp0=value'));
+
+  // Negative Max-Age should also delete
+  document.cookie = 'testinstant=value';
+  testing.expectEqual(true, document.cookie.includes('testinstant=value'));
+  document.cookie = 'testinstant=value; Max-Age=-1';
+  testing.expectEqual(false, document.cookie.includes('testinstant=value'));
+
+  // Positive Max-Age should keep cookie
+  document.cookie = 'testkept=value; Max-Age=3600';
+  testing.expectEqual(true, document.cookie.includes('testkept=value'));
+  document.cookie = 'testkept=; Max-Age=0';
+</script>
+
+<script id=cookie_overwrite>
+  // Setting a cookie with the same name should overwrite
+  document.cookie = 'testoverwrite=first';
+  testing.expectEqual(true, document.cookie.includes('testoverwrite=first'));
+
+  document.cookie = 'testoverwrite=second';
+  testing.expectEqual(true, document.cookie.includes('testoverwrite=second'));
+  testing.expectEqual(false, document.cookie.includes('testoverwrite=first'));
+
+  document.cookie = 'testoverwrite=; Max-Age=0';
+</script>
+
+<script id=cookie_path>
+  // Path attribute
+  document.cookie = 'testpath1=value; Path=/';
+  testing.expectEqual(true, document.cookie.includes('testpath1=value'));
+
+  // Different path cookie should coexist
+  document.cookie = 'testpath2=value2; Path=/src';
+  testing.expectEqual(true, document.cookie.includes('testpath1=value'));
+
+  document.cookie = 'testpath1=; Max-Age=0; Path=/';
+  document.cookie = 'testpath2=; Max-Age=0; Path=/src';
+</script>
+
+<script id=cookie_invalid_chars>
+  // Control characters (< 32 or > 126) should be rejected
+  const beforeBad = document.cookie;
+
+  document.cookie = 'testbad1\x00=value';
+  testing.expectEqual(false, document.cookie.includes('testbad1'));
+
+  document.cookie = 'testbad2\x1F=value';
+  testing.expectEqual(false, document.cookie.includes('testbad2'));
+
+  document.cookie = 'testbad3=val\x7F';
+  testing.expectEqual(false, document.cookie.includes('testbad3'));
+</script>
+
+<script id=createAttribute>
+  {
+    var attr = document.createAttribute('hello');
+    testing.expectEqual('hello', attr.name);
+    testing.expectEqual('', attr.value);
+
+    testing.withError((err) => {
+      testing.expectEqual(5, err.code);
+      testing.expectEqual("InvalidCharacterError", err.name);
+    }, () => document.createAttribute(''));
+
+    testing.withError((err) => {
+      testing.expectEqual(5, err.code);
+      testing.expectEqual("InvalidCharacterError", err.name);
+    }, () => document.createAttribute('.over'));
+  }
+</script>
+
+<script id=append>
+{
+  const doc = new Document();
+  const html = doc.createElement('html');
+  const body = doc.createElement('body');
+  const div1 = doc.createElement('div');
+  const div2 = doc.createElement('div');
+
+  doc.append(html);
+  testing.expectEqual(1, doc.childNodes.length);
+  testing.expectEqual(html, doc.childNodes[0]);
+
+  html.append(body);
+  testing.expectEqual(1, html.childNodes.length);
+  testing.expectEqual(body, html.childNodes[0]);
+
+  body.append(div1, div2);
+  testing.expectEqual(2, body.childNodes.length);
+  testing.expectEqual(div1, body.childNodes[0]);
+  testing.expectEqual(div2, body.childNodes[1]);
+
+  body.append('text node');
+  testing.expectEqual(3, body.childNodes.length);
+  testing.expectEqual(3, body.childNodes[2].nodeType);
+  testing.expectEqual('text node', body.childNodes[2].textContent);
+}
+</script>
+
+<script id=prepend>
+{
+  const doc = new Document();
+  const html = doc.createElement('html');
+  const body = doc.createElement('body');
+  const div1 = doc.createElement('div');
+  const div2 = doc.createElement('div');
+  const div3 = doc.createElement('div');
+
+  doc.prepend(html);
+  testing.expectEqual(1, doc.childNodes.length);
+  testing.expectEqual(html, doc.childNodes[0]);
+
+  html.prepend(body);
+  testing.expectEqual(1, html.childNodes.length);
+  testing.expectEqual(body, html.childNodes[0]);
+
+  body.append(div1);
+  body.prepend(div2, div3);
+  testing.expectEqual(3, body.childNodes.length);
+  testing.expectEqual(div2, body.childNodes[0]);
+  testing.expectEqual(div3, body.childNodes[1]);
+  testing.expectEqual(div1, body.childNodes[2]);
+
+  body.prepend('text node');
+  testing.expectEqual(4, body.childNodes.length);
+  testing.expectEqual(3, body.childNodes[0].nodeType);
+  testing.expectEqual('text node', body.childNodes[0].textContent);
+}
+</script>
+
+<script id=children>
+  testing.expectEqual(1, document.children.length);
+  testing.expectEqual('HTML', document.children.item(0).nodeName)
+  testing.expectEqual('HTML', document.firstElementChild.nodeName);
+  testing.expectEqual('HTML', document.lastElementChild.nodeName);
+  testing.expectEqual(1, document.childElementCount);
+
+  let nd = new Document();
+  testing.expectEqual(0, nd.children.length);
+  testing.expectEqual(null, nd.children.item(0));
+  testing.expectEqual(null, nd.firstElementChild);
+  testing.expectEqual(null, nd.lastElementChild);
+  testing.expectEqual(0, nd.childElementCount);
+</script>
+
+<script id=adoptNode>
+{
+  // Adopting a Document throws NotSupportedError
+  testing.withError((err) => {
+    testing.expectEqual(9, err.code);
+    testing.expectEqual("NotSupportedError", err.name);
+  }, () => document.adoptNode(document));
+
+  // Same-document adopt: returns the node, clears parent, owner unchanged
+  const el = document.createElement('div');
+  const child = document.createElement('span');
+  el.appendChild(child);
+  document.body.appendChild(el);
+  testing.expectEqual(document.body, el.parentNode);
+  testing.expectEqual(document, el.ownerDocument);
+  testing.expectEqual(document, child.ownerDocument);
+
+  testing.expectEqual(el, document.adoptNode(el));
+  testing.expectEqual(null, el.parentNode);
+  testing.expectEqual(child, el.firstChild);
+  testing.expectEqual(document, el.ownerDocument);
+  testing.expectEqual(document, child.ownerDocument);
+
+  // Cross-document adopt: node + descendants retarget to the new document
+  const otherDoc = new Document();
+  testing.expectEqual(el, otherDoc.adoptNode(el));
+  testing.expectEqual(null, el.parentNode);
+  testing.expectEqual(child, el.firstChild);
+  testing.expectEqual(otherDoc, el.ownerDocument);
+  testing.expectEqual(otherDoc, child.ownerDocument);
+
+  // Round-trip back to the main document
+  testing.expectEqual(el, document.adoptNode(el));
+  testing.expectEqual(document, el.ownerDocument);
+  testing.expectEqual(document, child.ownerDocument);
+
+  // Adopt across documents removes the node from its old parent
+  const orphan = document.createElement('p');
+  document.body.appendChild(orphan);
+  testing.expectEqual(document.body, orphan.parentNode);
+  const otherDoc2 = new Document();
+  testing.expectEqual(orphan, otherDoc2.adoptNode(orphan));
+  testing.expectEqual(null, orphan.parentNode);
+  testing.expectEqual(otherDoc2, orphan.ownerDocument);
+
+  // Adoption is shadow-including: the attached ShadowRoot and its descendants
+  // retarget even though they are absent from the host's light child list.
+  const shadowHost = document.createElement('section');
+  const shadowRoot = shadowHost.attachShadow({mode: 'open'});
+  const shadowChild = document.createElement('em');
+  const lightChild = document.createElement('strong');
+  shadowRoot.appendChild(shadowChild);
+  shadowHost.appendChild(lightChild);
+  const otherDoc3 = new Document();
+  testing.expectEqual(shadowHost, otherDoc3.adoptNode(shadowHost));
+  testing.expectEqual(otherDoc3, shadowHost.ownerDocument);
+  testing.expectEqual(otherDoc3, shadowRoot.ownerDocument);
+  testing.expectEqual(otherDoc3, shadowChild.ownerDocument);
+  testing.expectEqual(otherDoc3, lightChild.ownerDocument);
+}
+</script>
+
+<script id=adoptedStyleSheets>
+  {
+    const acss = document.adoptedStyleSheets;
+    testing.expectEqual(0, acss.length);
+    acss.push(new CSSStyleSheet());
+    testing.expectEqual(1, acss.length);
+  }
+</script>

@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=navigator>
+  // Navigator should be accessible from window
+  testing.expectEqual(navigator, window.navigator);
+  testing.expectEqual(true, navigator.userAgent.length > 0);
+  const isChrome149 = navigator.userAgentData.brands.some((entry) => entry.brand === 'Google Chrome');
+  testing.expectEqual(
+    true,
+    isChrome149 ? navigator.userAgent.includes('Chrome/149.0.0.0') : navigator.userAgent.includes('Lightpanda'),
+  );
+  testing.expectEqual('Netscape', navigator.appName);
+  testing.expectEqual(
+    isChrome149 ? navigator.userAgent.replace(/^Mozilla\//, '') : '1.0',
+    navigator.appVersion,
+  );
+  testing.expectEqual(true, navigator.platform.length > 0);
+
+  // Platform should be one of the known values
+  const validPlatforms = ['MacIntel', 'Win32', 'Linux x86_64', 'FreeBSD', 'Unknown'];
+  testing.expectEqual(true, validPlatforms.includes(navigator.platform));
+  testing.expectEqual('en-US', navigator.language);
+  testing.expectEqual(true, Array.isArray(navigator.languages));
+  testing.expectEqual(2, navigator.languages.length);
+  testing.expectEqual('en-US', navigator.languages[0]);
+  testing.expectEqual('en', navigator.languages[1]);
+  testing.expectEqual(
+    navigator.language,
+    new Intl.NumberFormat().resolvedOptions().locale,
+  );
+  // The Chrome catalog resolves Etc/UTC before ICU starts. ICU exposes its
+  // canonical spelling (UTC); legacy non-catalog targets remain host-derived.
+  const defaultTimeZone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+  testing.expectEqual('string', typeof defaultTimeZone);
+  testing.expectEqual(true, defaultTimeZone.length > 0);
+  if (isChrome149) testing.expectEqual('UTC', defaultTimeZone);
+  testing.expectEqual(true, navigator.onLine);
+  testing.expectEqual(true, navigator.cookieEnabled);
+  testing.expectEqual(true, navigator.hardwareConcurrency > 0);
+  testing.expectEqual(isChrome149 ? 8 : 4, navigator.hardwareConcurrency);
+  testing.expectEqual(0, navigator.maxTouchPoints);
+  testing.expectEqual(isChrome149 ? 'Google Inc.' : '', navigator.vendor);
+  testing.expectEqual('Gecko', navigator.product);
+  testing.expectEqual(false, navigator.javaEnabled());
+  testing.expectEqual(false, navigator.webdriver);
+
+  testing.expectEqual(null, navigator.doNotTrack);
+  testing.expectEqual('', navigator.vendorSub);
+  testing.expectEqual('20030107', navigator.productSub);
+  testing.expectEqual(false, 'globalPrivacyControl' in navigator);
+  testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(
+    Navigator.prototype,
+    'globalPrivacyControl',
+  ));
+  testing.expectEqual([], Reflect.ownKeys(navigator));
+
+  // Every Navigator attribute must be a native accessor on the prototype
+  for (const name of [
+    'vendorSub', 'productSub',
+    'userAgent', 'appName', 'appCodeName', 'appVersion', 'platform',
+    'language', 'languages', 'onLine', 'cookieEnabled', 'hardwareConcurrency',
+    'deviceMemory', 'maxTouchPoints', 'vendor', 'product', 'webdriver',
+    'plugins', 'doNotTrack',
+  ]) {
+    const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, name);
+    testing.expectEqual('function', typeof desc.get); // accessor on prototype
+    testing.expectEqual(undefined, desc.value);        // not a data property
+    testing.expectEqual(undefined, desc.set);
+    testing.expectEqual(true, desc.enumerable);
+    testing.expectEqual(true, desc.configurable);
+    testing.expectEqual(`get ${name}`, desc.get.name);
+    testing.expectEqual(0, desc.get.length);
+    testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(navigator, name)); // not own
+    testing.expectEqual(true, desc.get.toString().includes('[native code]'));
+    testing.expectError('TypeError: Illegal invocation', () => desc.get.call({}));
+    testing.expectError('TypeError: Illegal invocation', () => desc.get.call(null));
+  }
+</script>
+
+<script id=userActivation>
+  const activation = navigator.userActivation;
+  testing.expectEqual(true, activation === navigator.userActivation);
+  testing.expectEqual('[object UserActivation]', Object.prototype.toString.call(activation));
+  testing.expectEqual(true, activation instanceof UserActivation);
+  testing.expectEqual(false, activation.isActive);
+  testing.expectEqual(false, activation.hasBeenActive);
+  testing.expectEqual([], Reflect.ownKeys(activation));
+  testing.expectEqual(
+    ['hasBeenActive', 'isActive', 'constructor', Symbol.toStringTag],
+    Reflect.ownKeys(UserActivation.prototype),
+  );
+
+  const navigatorDescriptor = Object.getOwnPropertyDescriptor(
+    Navigator.prototype,
+    'userActivation',
+  );
+  testing.expectEqual('get userActivation', navigatorDescriptor.get.name);
+  testing.expectEqual(0, navigatorDescriptor.get.length);
+  testing.expectEqual(undefined, navigatorDescriptor.set);
+  testing.expectEqual(true, navigatorDescriptor.enumerable);
+  testing.expectEqual(true, navigatorDescriptor.configurable);
+  testing.expectError('TypeError: Illegal invocation', () => navigatorDescriptor.get.call({}));
+
+  for (const name of ['hasBeenActive', 'isActive']) {
+    const descriptor = Object.getOwnPropertyDescriptor(UserActivation.prototype, name);
+    testing.expectEqual(`get ${name}`, descriptor.get.name);
+    testing.expectEqual(0, descriptor.get.length);
+    testing.expectEqual(undefined, descriptor.set);
+    testing.expectEqual(true, descriptor.enumerable);
+    testing.expectEqual(true, descriptor.configurable);
+    testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(activation, name));
+    testing.expectError('TypeError: Illegal invocation', () => descriptor.get.call({}));
+  }
+  testing.withError(error => {
+    testing.expectEqual(
+      "TypeError: Failed to construct 'UserActivation': Illegal constructor",
+      String(error),
+    );
+    testing.expectEqual(
+      "Failed to construct 'UserActivation': Illegal constructor",
+      error.message,
+    );
+    testing.expectEqual('TypeError: Illegal constructor', error.stack.split('\n')[0]);
+  }, () => new UserActivation());
+</script>
+
+<script id=userActivation_cross_frame_receiver_identity type=module>
+{
+  const state = await testing.async();
+  const iframe = document.createElement('iframe');
+  iframe.onload = state.resolve;
+  iframe.srcdoc = '<!doctype html><title>navigator receiver child</title>';
+  document.body.appendChild(iframe);
+
+  await state.done(() => {
+    const child = iframe.contentWindow;
+    const childNavigator = child.navigator;
+    const rootActivation = navigator.userActivation;
+    const childActivation = childNavigator.userActivation;
+
+    // Navigator and its live UserActivation view are per Window.  A native
+    // receiver must never collapse the embedded state to a process/static
+    // singleton just because both wrappers use the same interface template.
+    testing.expectEqual(false, childNavigator === navigator);
+    testing.expectEqual(false, childActivation === rootActivation);
+    testing.expectEqual(true, childActivation === childNavigator.userActivation);
+    testing.expectEqual(true, rootActivation === navigator.userActivation);
+    testing.expectEqual(false, childActivation.isActive);
+    testing.expectEqual(false, childActivation.hasBeenActive);
+
+    testing.expectEqual(child.Navigator.prototype,
+      Object.getPrototypeOf(childNavigator));
+    testing.expectEqual(child.UserActivation.prototype,
+      Object.getPrototypeOf(childActivation));
+    testing.expectEqual([], Reflect.ownKeys(childNavigator));
+    testing.expectEqual([], Reflect.ownKeys(childActivation));
+
+    const navigatorDescriptor = Object.getOwnPropertyDescriptor(
+      child.Navigator.prototype,
+      'userActivation',
+    );
+    testing.expectEqual('get userActivation', navigatorDescriptor.get.name);
+    testing.expectEqual(0, navigatorDescriptor.get.length);
+    testing.expectEqual(undefined, navigatorDescriptor.set);
+    testing.expectEqual(true, navigatorDescriptor.enumerable);
+    testing.expectEqual(true, navigatorDescriptor.configurable);
+    testing.expectEqual(undefined,
+      Object.getOwnPropertyDescriptor(childNavigator, 'userActivation'));
+
+    for (const name of ['hasBeenActive', 'isActive']) {
+      const descriptor = Object.getOwnPropertyDescriptor(
+        child.UserActivation.prototype,
+        name,
+      );
+      testing.expectEqual(`get ${name}`, descriptor.get.name);
+      testing.expectEqual(0, descriptor.get.length);
+      testing.expectEqual(undefined, descriptor.set);
+      testing.expectEqual(true, descriptor.enumerable);
+      testing.expectEqual(true, descriptor.configurable);
+      testing.expectEqual(undefined,
+        Object.getOwnPropertyDescriptor(childActivation, name));
+    }
+
+    iframe.remove();
+  });
+}
+</script>
+
+<script id=navigator_native_descriptor_walk>
+  // Mirror the bot-detection fingerprint: read every navigator property's
+  // descriptor and call toString() on its value/getter. This must not throw.
+  let obj = navigator;
+  do {
+    for (const name of Object.getOwnPropertyNames(obj)) {
+      const d = Object.getOwnPropertyDescriptor(obj, name);
+      if (d.value !== undefined) { d.value.toString(); }
+      else if (d.get !== undefined) { d.get.toString(); }
+    }
+  } while (obj = Object.getPrototypeOf(obj));
+  testing.expectEqual(null, navigator.doNotTrack);
+</script>
+
+<script id=permission_query type=module>
+  {
+    const state = await testing.async();
+    const p = navigator.permissions.query({ name: 'notifications' });
+    testing.expectTrue(p instanceof Promise);
+    const status = await p;
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual('prompt', status.state);
+      testing.expectEqual('notifications', status.name);
+    });
+  }
+</script>
+
+<script id=storage_estimate type=module>
+  {
+    const state = await testing.async();
+
+    const p = navigator.storage.estimate();
+    testing.expectTrue(p instanceof Promise);
+
+    const estimate = await p;
+    state.resolve();
+
+    await state.done(() =>{
+      testing.expectEqual(Object.prototype, Object.getPrototypeOf(estimate));
+      testing.expectEqual('Object', estimate.constructor.name);
+      testing.expectEqual('[object Object]', Object.prototype.toString.call(estimate));
+      testing.expectEqual(['quota', 'usage', 'usageDetails'], Reflect.ownKeys(estimate));
+      for (const key of Reflect.ownKeys(estimate)) {
+        const descriptor = Object.getOwnPropertyDescriptor(estimate, key);
+        testing.expectEqual(true, descriptor.writable);
+        testing.expectEqual(true, descriptor.enumerable);
+        testing.expectEqual(true, descriptor.configurable);
+      }
+      testing.expectEqual(0, estimate.usage);
+      testing.expectEqual(1024 * 1024 * 1024, estimate.quota);
+      testing.expectEqual('number', typeof estimate.usage);
+      testing.expectEqual('number', typeof estimate.quota);
+      testing.expectEqual(Object.prototype, Object.getPrototypeOf(estimate.usageDetails));
+      testing.expectEqual([], Reflect.ownKeys(estimate.usageDetails));
+    });
+  }
+</script>
+
+<script id=deviceMemory>
+  testing.expectEqual(8, navigator.deviceMemory);
+</script>
+
+<script id=userAgentData>
+  testing.expectEqual(true, navigator.userAgentData !== undefined);
+  testing.expectEqual(false, navigator.userAgentData.mobile);
+  testing.expectEqual(true, navigator.userAgentData.platform.length > 0);
+
+  const validUAPlatforms = ['macOS', 'Windows', 'Linux', 'FreeBSD', 'Unknown'];
+  testing.expectEqual(true, validUAPlatforms.includes(navigator.userAgentData.platform));
+
+  testing.expectEqual(true, navigator.userAgentData.brands.length > 0);
+  for (const brand of navigator.userAgentData.brands) {
+    testing.expectEqual('string', typeof brand.brand);
+    testing.expectEqual('string', typeof brand.version);
+  }
+
+  // Same instance returned on repeated access
+  testing.expectEqual(true, navigator.userAgentData === navigator.userAgentData);
+
+  const json = navigator.userAgentData.toJSON();
+  testing.expectEqual(false, json.mobile);
+  testing.expectEqual(navigator.userAgentData.platform, json.platform);
+  testing.expectEqual(true, Array.isArray(json.brands));
+  testing.expectEqual(navigator.userAgentData.brands, json.brands);
+</script>
+
+<script id=userAgentData_highEntropy type=module>
+  {
+    const state = await testing.async();
+    const p = navigator.userAgentData.getHighEntropyValues([
+      'architecture', 'platformVersion', 'fullVersionList', 'uaFullVersion',
+      'wow64', 'formFactors',
+    ]);
+    testing.expectTrue(p instanceof Promise);
+    const v = await p;
+    const low = await navigator.userAgentData.getHighEntropyValues([]);
+    const unknown = await navigator.userAgentData.getHighEntropyValues(['notARealHint']);
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(false, v.mobile);
+      testing.expectEqual(navigator.userAgentData.platform, v.platform);
+      testing.expectEqual(true, Array.isArray(v.brands));
+      testing.expectEqual(true, Array.isArray(v.fullVersionList));
+      testing.expectEqual(v.brands.map((entry) => entry.brand), v.fullVersionList.map((entry) => entry.brand));
+      testing.expectEqual(v.fullVersionList[0].version, v.uaFullVersion);
+      testing.expectEqual(false, v.wow64);
+      testing.expectEqual(true, Array.isArray(v.formFactors));
+      testing.expectEqual('Desktop', v.formFactors[0]);
+
+      testing.expectEqual(['brands', 'mobile', 'platform'], Object.keys(low).sort());
+      testing.expectEqual(['brands', 'mobile', 'platform'], Object.keys(unknown).sort());
+    });
+  }
+</script>
+
+<script id=getBattery type=module>
+  // Like Firefox, we don't expose navigator.getBattery. Sites already
+  // have to handle it being undefined, so this is a real-browser shape
+  // rather than a stub that always rejects.
+  testing.expectEqual('undefined', typeof navigator.getBattery);
+</script>
+

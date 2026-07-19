@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<script src="../testing.js"></script>
+
+<script id=TextEncoder>
+  var encoder = new TextEncoder();
+  testing.expectEqual('utf-8', encoder.encoding);
+  testing.expectEqual([], Array.from(encoder.encode()));
+  testing.expectEqual([110, 117, 108, 108], Array.from(encoder.encode(null)));
+  testing.expectEqual([], Array.from(encoder.encode(undefined)));
+  testing.expectEqual([226, 130, 172], Array.from(encoder.encode('€')));
+  testing.expectEqual([111,118,101,114,32,57,48,48,48], encoder.encode("over 9000"));
+</script>
+
+<script id=text_encoder_prototype_surface>
+  {
+  testing.expectEqual(
+    ['encoding', 'encode', 'encodeInto', 'constructor', 'Symbol(Symbol.toStringTag)'],
+    Reflect.ownKeys(TextEncoder.prototype).map(String),
+  );
+  testing.expectEqual([], Reflect.ownKeys(new TextEncoder()));
+  testing.expectEqual(0, TextEncoder.length);
+  testing.expectEqual(0, TextEncoder.prototype.encode.length);
+  testing.expectEqual(2, TextEncoder.prototype.encodeInto.length);
+
+  const encodingDescriptor = Object.getOwnPropertyDescriptor(TextEncoder.prototype, 'encoding');
+  testing.expectEqual('get encoding', encodingDescriptor.get.name);
+  testing.expectEqual(undefined, encodingDescriptor.set);
+  testing.expectEqual(true, encodingDescriptor.enumerable);
+  testing.expectEqual(true, encodingDescriptor.configurable);
+
+  for (const name of ['encode', 'encodeInto']) {
+    const descriptor = Object.getOwnPropertyDescriptor(TextEncoder.prototype, name);
+    testing.expectEqual(true, descriptor.writable);
+    testing.expectEqual(true, descriptor.enumerable);
+    testing.expectEqual(true, descriptor.configurable);
+  }
+  }
+</script>
+
+<script id=text_encoder_encode_into>
+  {
+  const encoder = new TextEncoder();
+  const check = (source, size, expectedResult, expectedBytes) => {
+    const destination = new Uint8Array(size);
+    destination.fill(99);
+    const result = encoder.encodeInto(source, destination);
+    testing.expectEqual(expectedResult, result);
+    testing.expectEqual(expectedBytes, Array.from(destination));
+    testing.expectEqual(['read', 'written'], Reflect.ownKeys(result));
+    for (const name of ['read', 'written']) {
+      const descriptor = Object.getOwnPropertyDescriptor(result, name);
+      testing.expectEqual(true, descriptor.writable);
+      testing.expectEqual(true, descriptor.enumerable);
+      testing.expectEqual(true, descriptor.configurable);
+    }
+  };
+
+  check('abc', 2, {read: 2, written: 2}, [97, 98]);
+  check('\u20ac', 2, {read: 0, written: 0}, [99, 99]);
+  check('\u20ac', 3, {read: 1, written: 3}, [226, 130, 172]);
+  check('\ud83d\udca9', 3, {read: 0, written: 0}, [99, 99, 99]);
+  check('\ud83d\udca9', 4, {read: 2, written: 4}, [240, 159, 146, 169]);
+  check('A\ud83d\udca9B', 5, {read: 3, written: 5}, [65, 240, 159, 146, 169]);
+  check('\ud800', 2, {read: 0, written: 0}, [99, 99]);
+  check('\ud800', 3, {read: 1, written: 3}, [239, 191, 189]);
+  }
+</script>
+
+<script id=text_encoder_webidl_errors>
+  {
+  const encoder = new TextEncoder();
+  const capture = fn => {
+    try {
+      fn();
+    } catch (error) {
+      return error;
+    }
+    testing.fail('expected a TypeError');
+  };
+  const verify = (error, message, stack) => {
+    testing.expectEqual('TypeError', error.name);
+    testing.expectEqual(message, error.message);
+    testing.expectEqual(stack, String(error.stack).split('\n')[0]);
+    testing.expectEqual(
+      {value: message, writable: true, enumerable: true, configurable: true},
+      Object.getOwnPropertyDescriptor(error, 'message'),
+    );
+  };
+
+  verify(
+    capture(() => encoder.encodeInto()),
+    "Failed to execute 'encodeInto' on 'TextEncoder': 2 arguments required, but only 0 present.",
+    'TypeError: 2 arguments required, but only 0 present.',
+  );
+  verify(
+    capture(() => encoder.encodeInto('x')),
+    "Failed to execute 'encodeInto' on 'TextEncoder': 2 arguments required, but only 1 present.",
+    'TypeError: 2 arguments required, but only 1 present.',
+  );
+  for (const destination of [{}, new Uint8ClampedArray(2), new DataView(new ArrayBuffer(2))]) {
+    verify(
+      capture(() => encoder.encodeInto('x', destination)),
+      "Failed to execute 'encodeInto' on 'TextEncoder': parameter 2 is not of type 'Uint8Array'.",
+      "TypeError: parameter 2 is not of type 'Uint8Array'.",
+    );
+  }
+  verify(
+    capture(() => encoder.encode(Symbol('x'))),
+    "Failed to execute 'encode' on 'TextEncoder': Cannot convert a Symbol value to a string",
+    'TypeError: Cannot convert a Symbol value to a string',
+  );
+  verify(
+    capture(() => encoder.encodeInto(Symbol('x'), new Uint8Array(4))),
+    "Failed to execute 'encodeInto' on 'TextEncoder': Cannot convert a Symbol value to a string",
+    'TypeError: Cannot convert a Symbol value to a string',
+  );
+
+  const order = [];
+  const source = {toString() { order.push('source'); return 'x'; }};
+  capture(() => encoder.encodeInto(source, {}));
+  testing.expectEqual(['source'], order);
+
+  const memory = new WebAssembly.Memory({initial: 1});
+  const detached = new Uint8Array(memory.buffer);
+  memory.grow(1);
+  testing.expectEqual(0, detached.byteLength);
+  testing.expectEqual({read: 0, written: 0}, encoder.encodeInto('x', detached));
+  }
+</script>

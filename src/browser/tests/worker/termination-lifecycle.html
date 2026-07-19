@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+
+<script id="worker_immediate_blob_terminate_is_silent" type="module">
+  const state = await testing.async();
+  const events = [];
+  const url = URL.createObjectURL(new Blob([
+    "postMessage('entry-ran')",
+  ], { type: 'text/javascript' }));
+  const worker = new Worker(url);
+  worker.addEventListener('message', event => {
+    events.push({ type: event.type, data: event.data });
+  });
+  worker.addEventListener('error', event => {
+    events.push({ type: event.type, message: event.message });
+  });
+
+  // The blob response is delivered on a later host tick. terminate() must
+  // establish Chrome's AskedToTerminate-style gate before that completion;
+  // neither the entry script nor a synthetic fetch error may escape it.
+  worker.terminate();
+  URL.revokeObjectURL(url);
+  setTimeout(() => state.resolve(events), 100);
+
+  await state.done(observed => {
+    testing.expectEqual(0, observed.length);
+  });
+</script>
+
+<script id="worker_pending_blob_iframe_discard_is_silent" type="module">
+  const state = await testing.async();
+  const events = [];
+  const iframe = document.createElement('iframe');
+  document.body.append(iframe);
+
+  // Create the Worker in the child realm, then discard its browsing context
+  // in the same task, before the synthetic entry response can run. This is a
+  // control for Frame.retireOwner: discard must cancel the pending load and
+  // must not regress while explicit Worker.terminate() is fixed.
+  iframe.contentWindow.__workerDiscardEvents = events;
+  iframe.contentWindow.eval(`
+    const url = URL.createObjectURL(new Blob([
+      "postMessage('entry-ran')",
+    ], { type: 'text/javascript' }));
+    const worker = new Worker(url);
+    worker.addEventListener('message', event => {
+      __workerDiscardEvents.push({ type: event.type, data: event.data });
+    });
+    worker.addEventListener('error', event => {
+      __workerDiscardEvents.push({ type: event.type, message: event.message });
+    });
+  `);
+  iframe.remove();
+  setTimeout(() => state.resolve(events), 100);
+
+  await state.done(observed => {
+    testing.expectEqual(0, observed.length);
+  });
+</script>

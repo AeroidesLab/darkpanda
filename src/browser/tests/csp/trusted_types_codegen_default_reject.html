@@ -1,0 +1,24 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<script id="trusted-types-codegen-default-reject">
+  const expectedMessage =
+    "Evaluating a string as JavaScript violates this document's Trusted Type assignment requirements.";
+  const expectBlocked = callback => {
+    let error = null;
+    try { callback(); } catch (caught) { error = caught; }
+    testing.expectEqual('EvalError', error && error.name);
+    testing.expectEqual(expectedMessage, error && error.message);
+  };
+
+  trustedTypes.createPolicy('default', {
+    createScript(input) {
+      if (input === 'nullcase') return null;
+      if (input === 'throwcase') throw new RangeError('author sentinel');
+      return `${input} changed`;
+    },
+  });
+  expectBlocked(() => eval('nullcase'));
+  expectBlocked(() => eval('throwcase'));
+  expectBlocked(() => eval('changedcase'));
+  expectBlocked(() => Function('return 1')());
+</script>

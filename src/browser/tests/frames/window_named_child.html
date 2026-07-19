@@ -1,0 +1,127 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="window_named_child_browsing_context_chrome149">
+{
+  const baseline = window.length;
+
+  const named = document.createElement('iframe');
+  named.name = 'namedChild';
+  named.id = 'idOnlyChild';
+  document.body.appendChild(named);
+  testing.expectEqual(named.contentWindow, window.namedChild);
+  // Blink's FrameTree named lookup uses the browsing-context name, not id.
+  // id-only access falls through to the document named getter and is an
+  // HTMLIFrameElement rather than its WindowProxy.
+  testing.expectEqual(named, window.idOnlyChild);
+
+  testing.expectTrue('namedChild' in window);
+  testing.expectFalse(Object.hasOwn(window, 'namedChild'));
+  testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(window, 'namedChild'));
+  testing.expectFalse(Object.getOwnPropertyNames(window).includes('namedChild'));
+  testing.expectFalse(Object.keys(window).includes('namedChild'));
+
+  const clobber = document.createElement('div');
+  clobber.id = 'frameBeatsElement';
+  const priorityFrame = document.createElement('iframe');
+  priorityFrame.name = 'frameBeatsElement';
+  document.body.append(clobber, priorityFrame);
+  testing.expectEqual(priorityFrame.contentWindow, window.frameBeatsElement);
+
+  const first = document.createElement('iframe');
+  first.name = 'duplicateFrameName';
+  const second = document.createElement('iframe');
+  second.name = 'duplicateFrameName';
+  document.body.append(first, second);
+  testing.expectEqual(first.contentWindow, window.duplicateFrameName);
+
+  const host = document.createElement('div');
+  const shadow = host.attachShadow({mode: 'open'});
+  const shadowFrame = document.createElement('iframe');
+  shadowFrame.name = 'shadowNamedFrame';
+  shadowFrame.id = 'shadowIdFrame';
+  shadow.appendChild(shadowFrame);
+  document.body.appendChild(host);
+  testing.expectEqual(undefined, window.shadowNamedFrame);
+  testing.expectEqual(undefined, window.shadowIdFrame);
+
+  const renamed = document.createElement('iframe');
+  renamed.name = 'ownerAttributeName';
+  document.body.appendChild(renamed);
+  renamed.contentWindow.name = 'scriptBrowsingContextName';
+  testing.expectEqual(renamed.contentWindow, window.scriptBrowsingContextName);
+  // Changing the owner attribute later does not rename an existing browsing
+  // context; window.name remains the FrameTree name authority.
+  renamed.name = 'laterOwnerAttributeName';
+  testing.expectEqual(renamed.contentWindow, window.scriptBrowsingContextName);
+
+  named.remove();
+  clobber.remove();
+  priorityFrame.remove();
+  first.remove();
+  second.remove();
+  host.remove();
+  renamed.remove();
+  testing.expectEqual(baseline, window.length);
+}
+</script>
+
+<script id="window_named_child_name_survives_navigation_chrome149" type="module">
+{
+  const state = await testing.async();
+  const iframe = document.createElement('iframe');
+  iframe.name = 'ownerNameBeforeNavigation';
+  document.body.appendChild(iframe);
+  const proxy = iframe.contentWindow;
+  proxy.name = 'namePreservedAcrossNavigation';
+  iframe.onload = state.resolve;
+  iframe.srcdoc = '<!doctype html><title>replacement</title>';
+
+  await state.done(() => {
+    testing.expectEqual(proxy, iframe.contentWindow);
+    testing.expectEqual('namePreservedAcrossNavigation', iframe.contentWindow.name);
+    testing.expectEqual(proxy, window.namePreservedAcrossNavigation);
+    iframe.remove();
+  });
+}
+</script>
+
+<script id="cross_origin_window_named_child_chrome149" type="module">
+{
+  const state = await testing.async();
+  const iframe = document.createElement('iframe');
+  iframe.onload = state.resolve;
+  iframe.src = testing.BASE_URL.replace('127.0.0.1', 'localhost') +
+    'frames/support/window-named-cross-origin.html';
+  document.body.appendChild(iframe);
+
+  await state.done(() => {
+    const target = iframe.contentWindow;
+    testing.expectEqual(target[0], target.crossOriginNamedChild);
+    // Cross-origin built-ins mask child names, but the special `then`
+    // undefined fallback does not mask a real child browsing context.
+    testing.expectEqual(target[1], target.then);
+
+    const descriptor = Object.getOwnPropertyDescriptor(target, 'crossOriginNamedChild');
+    testing.expectEqual(target[0], descriptor.value);
+    testing.expectFalse(descriptor.writable);
+    testing.expectFalse(descriptor.enumerable);
+    testing.expectTrue(descriptor.configurable);
+    testing.expectEqual(target[1], Object.getOwnPropertyDescriptor(target, 'then').value);
+    testing.expectFalse(Object.getOwnPropertyNames(target).includes('crossOriginNamedChild'));
+
+    // Cross-origin document named access remains forbidden, including an
+    // iframe exposed only by id. Querying even an allowed named child through
+    // [[HasProperty]] also follows Chrome's SecurityError path.
+    testing.withError(error => {
+      testing.expectEqual('SecurityError', error.name);
+    }, () => target.crossOriginIdOnly);
+    testing.withError(error => {
+      testing.expectEqual('SecurityError', error.name);
+    }, () => 'crossOriginNamedChild' in target);
+    iframe.remove();
+  });
+}
+</script>

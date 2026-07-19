@@ -1,0 +1,820 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Chrome iframe discard lifecycle parity</title>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="dismissal_cluster_runs_before_terminal_iframe_discard" type="module">
+{
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+  const child = iframe.contentWindow;
+  const childDocument = child.document;
+  const events = [];
+  const snapshots = [];
+
+  const record = label => event => {
+    events.push(label);
+    const timerId = child.setTimeout(
+      () => events.push(`discarded-timer:${label}`),
+      0,
+    );
+    child.queueMicrotask(() => events.push(`micro:${label}`));
+    let storage = 'available';
+    if (label === 'pagehide-property') {
+      child.localStorage.setItem('pagehide-lifecycle-probe', 'ok');
+      storage = child.localStorage.getItem('pagehide-lifecycle-probe');
+      child.localStorage.removeItem('pagehide-lifecycle-probe');
+    } else {
+      // Access, not the current length, is the lifecycle assertion.
+      void child.localStorage.length;
+    }
+    snapshots.push({
+      label,
+      type: event.type,
+      trusted: event.isTrusted,
+      persisted: event.persisted,
+      target: event.target === childDocument,
+      currentTarget:
+        event.currentTarget === child ? 'window' :
+        event.currentTarget === childDocument ? 'document' : 'other',
+      phase: event.eventPhase,
+      bubbles: event.bubbles,
+      cancelable: event.cancelable,
+      composed: event.composed,
+      closed: child.closed,
+      parent: child.parent === window,
+      top: child.top === window,
+      frameElement: child.frameElement === iframe,
+      defaultView: childDocument.defaultView === child,
+      hidden: childDocument.hidden,
+      visibilityState: childDocument.visibilityState,
+      storage,
+      timerId,
+    });
+  };
+
+  // Property handlers occupy the listener-list position established by their
+  // first non-null assignment. Register them first so the expected order is
+  // deterministic in both Chrome 149 and DarkPanda.
+  child.onpagehide = record('pagehide-property');
+  child.addEventListener('pagehide', record('pagehide-listener'));
+  childDocument.onvisibilitychange = record('visibility-property');
+  childDocument.addEventListener(
+    'visibilitychange',
+    record('visibility-listener'),
+  );
+  child.addEventListener(
+    'visibilitychange',
+    record('visibility-window-capture'),
+    true,
+  );
+  child.onunload = record('unload-property');
+  child.addEventListener('unload', record('unload-listener'));
+
+  iframe.remove();
+  events.push('after-remove');
+
+  const syncOrder = [
+    'pagehide-property',
+    'pagehide-listener',
+    'visibility-window-capture',
+    'visibility-property',
+    'visibility-listener',
+    'unload-property',
+    'unload-listener',
+    'after-remove',
+  ];
+  testing.expectEqual(syncOrder.join(','), events.join(','));
+  testing.expectEqual(7, snapshots.length);
+  for (const snapshot of snapshots) {
+    testing.expectTrue(snapshot.trusted);
+    testing.expectTrue(snapshot.target);
+    testing.expectFalse(snapshot.composed);
+    testing.expectFalse(snapshot.closed);
+    testing.expectTrue(snapshot.parent);
+    testing.expectTrue(snapshot.top);
+    testing.expectTrue(snapshot.frameElement);
+    testing.expectTrue(snapshot.defaultView);
+    testing.expectTrue(snapshot.timerId > 0);
+    testing.expectTrue(
+      snapshot.storage === 'available' || snapshot.storage === 'ok',
+    );
+
+    if (snapshot.type === 'pagehide') {
+      testing.expectEqual('window', snapshot.currentTarget);
+      testing.expectEqual(2, snapshot.phase);
+      testing.expectTrue(snapshot.bubbles);
+      testing.expectTrue(snapshot.cancelable);
+      testing.expectFalse(snapshot.persisted);
+      testing.expectFalse(snapshot.hidden);
+      testing.expectEqual('visible', snapshot.visibilityState);
+    } else if (snapshot.type === 'visibilitychange') {
+      const capture = snapshot.label === 'visibility-window-capture';
+      testing.expectEqual(capture ? 'window' : 'document', snapshot.currentTarget);
+      testing.expectEqual(capture ? 1 : 2, snapshot.phase);
+      testing.expectTrue(snapshot.bubbles);
+      testing.expectFalse(snapshot.cancelable);
+      testing.expectTrue(snapshot.hidden);
+      testing.expectEqual('hidden', snapshot.visibilityState);
+    } else {
+      testing.expectEqual('unload', snapshot.type);
+      testing.expectEqual('window', snapshot.currentTarget);
+      testing.expectEqual(2, snapshot.phase);
+      testing.expectFalse(snapshot.bubbles);
+      testing.expectFalse(snapshot.cancelable);
+      testing.expectTrue(snapshot.hidden);
+      testing.expectEqual('hidden', snapshot.visibilityState);
+    }
+  }
+
+  testing.expectTrue(child.closed);
+  testing.expectTrue(childDocument.hidden);
+  testing.expectEqual('hidden', childDocument.visibilityState);
+  testing.expectEqual(null, childDocument.defaultView);
+
+  await Promise.resolve();
+  testing.expectEqual(
+    syncOrder.concat(syncOrder.slice(0, -1).map(label => `micro:${label}`)).join(','),
+    events.join(','),
+  );
+  await new Promise(resolve => setTimeout(resolve, 10));
+  testing.expectFalse(events.some(label => label.startsWith('discarded-timer:')));
+}
+</script>
+
+<script id="discard_keeps_realm_but_closes_browsing_context">
+{
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+
+  const child = iframe.contentWindow;
+  const childDocument = child.document;
+  const childLocation = child.location;
+  const childEval = child.eval;
+  const attachedAncestors = childLocation.ancestorOrigins;
+  const childDOMException = child.DOMException;
+
+  iframe.remove();
+
+  testing.expectEqual(null, iframe.contentWindow);
+  testing.expectEqual(null, iframe.contentDocument);
+  testing.expectTrue(child.closed);
+  testing.expectEqual(child, child.window);
+  testing.expectEqual(child, child.self);
+  testing.expectEqual(null, child.parent);
+  testing.expectEqual(null, child.top);
+  testing.expectEqual(null, child.frameElement);
+  testing.expectEqual(0, child.length);
+  testing.expectEqual(childDocument, child.document);
+  testing.expectEqual(null, childDocument.defaultView);
+  testing.expectEqual('about:blank', childLocation.href);
+  testing.expectEqual(2, childEval('1 + 1'));
+
+  const detachedAncestors = childLocation.ancestorOrigins;
+  testing.expectFalse(detachedAncestors === attachedAncestors);
+  testing.expectEqual(0, detachedAncestors.length);
+  testing.expectEqual(detachedAncestors, childLocation.ancestorOrigins);
+
+  testing.expectEqual('', childDocument.domain);
+  let domainError = null;
+  try {
+    childDocument.domain = '';
+  } catch (error) {
+    domainError = error;
+  }
+  testing.expectEqual('SecurityError', domainError && domainError.name);
+  testing.expectEqual(
+    "Failed to set the 'domain' property on 'Document': A browsing context " +
+      'is required to set a domain.',
+    domainError && domainError.message,
+  );
+  testing.expectTrue(domainError instanceof childDOMException);
+
+  // A retained Document can still be rewritten, but it must never borrow the
+  // caller's active Frame/parser. Inline script in a detached Document is inert.
+  testing.expectEqual(childDocument, childDocument.open());
+  childDocument.write(
+    '<!doctype html><body><div id="detached-write-probe">old</div>' +
+      '<script>window.__detachedWriteScript = true<\/script>',
+  );
+  childDocument.close();
+  testing.expectTrue(!!childDocument.getElementById('detached-write-probe'));
+  testing.expectFalse(!!document.getElementById('detached-write-probe'));
+  testing.expectEqual(undefined, child.__detachedWriteScript);
+}
+</script>
+
+<script id="discard_stops_tasks_but_not_microtasks" type="module">
+{
+  const state = await testing.async();
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+  const child = iframe.contentWindow;
+  const childSetTimeout = child.setTimeout;
+  const childSetInterval = child.setInterval;
+  const childQueueMicrotask = child.queueMicrotask;
+  const ChildPromise = child.Promise;
+  const events = [];
+
+  childSetTimeout(() => events.push('pre-timeout'), 0);
+  iframe.remove();
+
+  const timeoutId = childSetTimeout(() => events.push('post-timeout'), 0);
+  const intervalId = childSetInterval(() => events.push('post-interval'), 1);
+  childQueueMicrotask(() => events.push('microtask'));
+  ChildPromise.resolve().then(() => events.push('promise'));
+
+  await new Promise(resolve => setTimeout(resolve, 30));
+  state.resolve({timeoutId, intervalId, events: events.join(',')});
+  await state.done(result => {
+    testing.expectEqual(0, result.timeoutId);
+    testing.expectEqual(0, result.intervalId);
+    testing.expectEqual('microtask,promise', result.events);
+  });
+}
+</script>
+
+<script id="discard_network_and_worker_errors" type="module">
+{
+  const state = await testing.async();
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+  const child = iframe.contentWindow;
+  const childFetch = child.fetch;
+  const ChildTypeError = child.TypeError;
+  const ChildDOMException = child.DOMException;
+  const ChildWorker = child.Worker;
+  const xhr = new child.XMLHttpRequest();
+  xhr.open('GET', 'data:text/plain,x');
+
+  iframe.remove();
+
+  let fetchError = null;
+  try {
+    await childFetch('data:text/plain,x');
+  } catch (error) {
+    fetchError = error;
+  }
+
+  let workerError = null;
+  try {
+    new ChildWorker('data:text/javascript,');
+  } catch (error) {
+    workerError = error;
+  }
+
+  let xhrError = null;
+  try {
+    xhr.send();
+  } catch (error) {
+    xhrError = error;
+  }
+
+  state.resolve({fetchError, workerError, xhrError});
+  await state.done(result => {
+    testing.expectEqual('TypeError', result.fetchError && result.fetchError.name);
+    testing.expectEqual(
+      "Failed to execute 'fetch' on 'Window': The global scope is shutting down.",
+      result.fetchError && result.fetchError.message,
+    );
+    testing.expectTrue(result.fetchError instanceof ChildTypeError);
+
+    testing.expectEqual('InvalidAccessError', result.workerError && result.workerError.name);
+    testing.expectEqual(
+      "Failed to construct 'Worker': The context provided is invalid.",
+      result.workerError && result.workerError.message,
+    );
+    testing.expectTrue(result.workerError instanceof ChildDOMException);
+
+    testing.expectEqual('NetworkError', result.xhrError && result.xhrError.name);
+    testing.expectEqual(
+      "Failed to execute 'send' on 'XMLHttpRequest': Failed to load " +
+        "'data:text/plain,x': Document is already detached.",
+      result.xhrError && result.xhrError.message,
+    );
+    testing.expectTrue(result.xhrError instanceof ChildDOMException);
+  });
+}
+</script>
+
+<script id="discard_storage_history_cookie_and_idb" type="module">
+{
+  const state = await testing.async();
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+  const child = iframe.contentWindow;
+  const ChildDOMException = child.DOMException;
+  const ChildTypeError = child.TypeError;
+  const ChildPromise = child.Promise;
+  const local = child.localStorage;
+  const session = child.sessionStorage;
+  const history = child.history;
+  const cookies = child.cookieStore;
+  const idb = child.indexedDB;
+
+  iframe.remove();
+
+  const capture = callback => {
+    try {
+      return {value: callback(), error: null};
+    } catch (error) {
+      return {value: undefined, error};
+    }
+  };
+  const localGet = capture(() => local.getItem('x'));
+  const localLength = capture(() => local.length);
+  const sessionSet = capture(() => session.setItem('x', 'y'));
+  const historyLength = capture(() => history.length);
+  const historyPush = capture(() => history.pushState(null, ''));
+  const idbMissing = capture(() => idb.open());
+  const idbSymbolName = capture(() => idb.open(Symbol('name')));
+  const idbSymbolVersion = capture(() => idb.open('discard-probe', Symbol('version')));
+  const idbBigIntVersion = capture(() => idb.open('discard-probe', 1n));
+  const idbZeroVersion = capture(() => idb.open('discard-probe', 0));
+  const idbNegativeVersion = capture(() => idb.open('discard-probe', -1));
+  const idbDeleteSymbol = capture(() => idb.deleteDatabase(Symbol('name')));
+  const idbNameCoercion = [];
+  const idbVersionCoercion = [];
+  const idbBoxedBigIntCoercion = [];
+  const idbFailedCoercion = [];
+  const idbObjectSymbolName = capture(() => idb.open({
+    toString() {
+      idbFailedCoercion.push('name.toString');
+      return Symbol('name');
+    },
+  }));
+  const idbObjectSymbolVersion = capture(() => idb.open('discard-probe', {
+    valueOf() {
+      idbFailedCoercion.push('version.symbol');
+      return Symbol('version');
+    },
+  }));
+  const idbObjectBigIntVersion = capture(() => idb.open('discard-probe', {
+    valueOf() {
+      idbFailedCoercion.push('version.bigint');
+      return 1n;
+    },
+  }));
+  const idbDeleteObjectSymbol = capture(() => idb.deleteDatabase({
+    toString() {
+      idbFailedCoercion.push('delete.toString');
+      return Symbol('name');
+    },
+  }));
+  const idbBoxedBigIntVersionError = capture(
+    () => idb.open('discard-probe', child.Object(1n)),
+  );
+  const boxedBigIntVersion = child.Object(1n);
+  boxedBigIntVersion.valueOf = () => {
+    idbBoxedBigIntCoercion.push('boxedBigInt.valueOf');
+    return 2.9;
+  };
+
+  let cookieError = null;
+  try {
+    await cookies.get('x');
+  } catch (error) {
+    cookieError = error;
+  }
+
+  const idbDatabasesPromise = idb.databases();
+  let idbDatabasesOutcome = 'pending';
+  idbDatabasesPromise.then(
+    () => { idbDatabasesOutcome = 'resolved'; },
+    () => { idbDatabasesOutcome = 'rejected'; },
+  );
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  state.resolve({
+    localGetter: child.localStorage,
+    sessionGetter: child.sessionStorage,
+    localGet,
+    localLength,
+    sessionSet,
+    historyLength,
+    historyPush,
+    cookieGetterStable: child.cookieStore === cookies,
+    cookieError,
+    idbGetterStable: child.indexedDB === idb,
+    idbOpenLength: idb.open.length,
+    idbDeleteLength: idb.deleteDatabase.length,
+    idbDatabasesLength: idb.databases.length,
+    idbDatabasesIsChildPromise: idbDatabasesPromise instanceof ChildPromise,
+    idbDatabasesOutcome,
+    idbOpen: idb.open('discard-probe'),
+    idbOpenUndefined: idb.open('discard-probe', undefined),
+    idbOpenObjectName: idb.open({
+      toString() {
+        idbNameCoercion.push('name.toString');
+        return 'discard-object-name';
+      },
+    }),
+    idbOpenObjectVersion: idb.open('discard-probe', {
+      valueOf() {
+        idbVersionCoercion.push('version.valueOf');
+        return 2;
+      },
+    }),
+    idbOpenBoxedBigIntVersion: idb.open('discard-probe', boxedBigIntVersion),
+    idbDelete: idb.deleteDatabase('discard-probe'),
+    idbCmp: idb.cmp(1, 2),
+    idbMissing,
+    idbSymbolName,
+    idbSymbolVersion,
+    idbBigIntVersion,
+    idbZeroVersion,
+    idbNegativeVersion,
+    idbDeleteSymbol,
+    idbObjectSymbolName,
+    idbObjectSymbolVersion,
+    idbObjectBigIntVersion,
+    idbDeleteObjectSymbol,
+    idbBoxedBigIntVersionError,
+    idbNameCoercion: idbNameCoercion.join(','),
+    idbVersionCoercion: idbVersionCoercion.join(','),
+    idbBoxedBigIntCoercion: idbBoxedBigIntCoercion.join(','),
+    idbFailedCoercion: idbFailedCoercion.join(','),
+  });
+
+  await state.done(result => {
+    testing.expectEqual(null, result.localGetter);
+    testing.expectEqual(null, result.sessionGetter);
+
+    testing.expectEqual('SecurityError', result.localGet.error.name);
+    testing.expectEqual(
+      "Failed to execute 'getItem' on 'Storage': Access is denied for this document.",
+      result.localGet.error.message,
+    );
+    testing.expectTrue(result.localGet.error instanceof ChildDOMException);
+
+    testing.expectEqual('SecurityError', result.localLength.error.name);
+    testing.expectEqual(
+      "Failed to read the 'length' property from 'Storage': Access is denied for this document.",
+      result.localLength.error.message,
+    );
+    testing.expectTrue(result.localLength.error instanceof ChildDOMException);
+
+    testing.expectEqual('SecurityError', result.sessionSet.error.name);
+    testing.expectEqual(
+      "Failed to execute 'setItem' on 'Storage': Access is denied for this document.",
+      result.sessionSet.error.message,
+    );
+
+    testing.expectEqual('SecurityError', result.historyLength.error.name);
+    testing.expectEqual(
+      "Failed to read the 'length' property from 'History': May not use a " +
+        'History object associated with a Document that is not fully active',
+      result.historyLength.error.message,
+    );
+    testing.expectEqual('SecurityError', result.historyPush.error.name);
+    testing.expectEqual(
+      "Failed to execute 'pushState' on 'History': May not use a History " +
+        'object associated with a Document that is not fully active',
+      result.historyPush.error.message,
+    );
+
+    testing.expectTrue(result.cookieGetterStable);
+    testing.expectEqual('InvalidStateError', result.cookieError.name);
+    testing.expectEqual(
+      "Failed to execute 'get' on 'CookieStore': CookieStore backend went away",
+      result.cookieError.message,
+    );
+    testing.expectTrue(result.cookieError instanceof ChildDOMException);
+
+    testing.expectTrue(result.idbGetterStable);
+    testing.expectEqual(1, result.idbOpenLength);
+    testing.expectEqual(1, result.idbDeleteLength);
+    testing.expectEqual(0, result.idbDatabasesLength);
+    testing.expectTrue(result.idbDatabasesIsChildPromise);
+    testing.expectEqual('pending', result.idbDatabasesOutcome);
+    testing.expectEqual(null, result.idbOpen);
+    testing.expectEqual(null, result.idbOpenUndefined);
+    testing.expectEqual(null, result.idbOpenObjectName);
+    testing.expectEqual(null, result.idbOpenObjectVersion);
+    testing.expectEqual(null, result.idbOpenBoxedBigIntVersion);
+    testing.expectEqual(null, result.idbDelete);
+    testing.expectEqual(-1, result.idbCmp);
+    testing.expectEqual('name.toString', result.idbNameCoercion);
+    testing.expectEqual('version.valueOf', result.idbVersionCoercion);
+    testing.expectEqual('boxedBigInt.valueOf', result.idbBoxedBigIntCoercion);
+    testing.expectEqual(
+      'name.toString,version.symbol,version.bigint,delete.toString',
+      result.idbFailedCoercion,
+    );
+
+    const expectChildTypeError = (captured, message) => {
+      testing.expectEqual('TypeError', captured.error && captured.error.name);
+      testing.expectEqual(message, captured.error && captured.error.message);
+      testing.expectTrue(captured.error instanceof ChildTypeError);
+    };
+    expectChildTypeError(
+      result.idbMissing,
+      "Failed to execute 'open' on 'IDBFactory': 1 argument required, but only 0 present.",
+    );
+    expectChildTypeError(
+      result.idbSymbolName,
+      "Failed to execute 'open' on 'IDBFactory': Cannot convert a Symbol value to a string",
+    );
+    expectChildTypeError(
+      result.idbSymbolVersion,
+      "Failed to execute 'open' on 'IDBFactory': Cannot convert a Symbol value to a number",
+    );
+    expectChildTypeError(
+      result.idbBigIntVersion,
+      "Failed to execute 'open' on 'IDBFactory': Cannot convert a BigInt value to a number",
+    );
+    expectChildTypeError(
+      result.idbZeroVersion,
+      "Failed to execute 'open' on 'IDBFactory': The version provided must not be 0.",
+    );
+    expectChildTypeError(
+      result.idbNegativeVersion,
+      "Failed to execute 'open' on 'IDBFactory': Value is outside the " +
+        "'unsigned long long' value range.",
+    );
+    expectChildTypeError(
+      result.idbDeleteSymbol,
+      "Failed to execute 'deleteDatabase' on 'IDBFactory': Cannot convert a " +
+        'Symbol value to a string',
+    );
+    expectChildTypeError(
+      result.idbObjectSymbolName,
+      "Failed to execute 'open' on 'IDBFactory': Cannot convert a Symbol value to a string",
+    );
+    expectChildTypeError(
+      result.idbObjectSymbolVersion,
+      "Failed to execute 'open' on 'IDBFactory': Cannot convert a Symbol value to a number",
+    );
+    expectChildTypeError(
+      result.idbObjectBigIntVersion,
+      "Failed to execute 'open' on 'IDBFactory': Cannot convert a BigInt value to a number",
+    );
+    expectChildTypeError(
+      result.idbDeleteObjectSymbol,
+      "Failed to execute 'deleteDatabase' on 'IDBFactory': Cannot convert a " +
+        'Symbol value to a string',
+    );
+    expectChildTypeError(
+      result.idbBoxedBigIntVersionError,
+      "Failed to execute 'open' on 'IDBFactory': Cannot convert a BigInt value to a number",
+    );
+  });
+}
+</script>
+
+<!-- Blink closes an IDBDatabase's backend connection when its ExecutionContext
+     is destroyed. The retained wrapper must synchronously throw in its old
+     realm instead of scheduling work on the stopped child task runner. -->
+<script id="discard_retained_idb_database_transaction" type="module">
+{
+  const state = await testing.async();
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+  const child = iframe.contentWindow;
+  const ChildDOMException = child.DOMException;
+  const transact = child.eval(`database => {
+    try {
+      return {value: database.transaction('records'), error: null};
+    } catch (error) {
+      return {value: null, error};
+    }
+  }`);
+
+  const request = child.indexedDB.open('discard-retained-idb-database', 1);
+  request.onupgradeneeded = event => {
+    event.target.result.createObjectStore('records');
+  };
+  request.onerror = () => {
+    state.resolve({openError: request.error});
+  };
+  request.onsuccess = event => {
+    const database = event.target.result;
+
+    // Let OpenContext release the origin gate before retiring its owner. This
+    // isolates the retained-database path from active-callback gate handoff.
+    setTimeout(() => {
+      iframe.remove();
+      const captured = transact(database);
+      state.resolve({
+        openError: null,
+        value: captured.value,
+        name: captured.error && captured.error.name,
+        message: captured.error && captured.error.message,
+        isChildDOMException: captured.error instanceof ChildDOMException,
+      });
+    }, 0);
+  };
+
+  await state.done(result => {
+    testing.expectEqual(null, result.openError);
+    testing.expectEqual(null, result.value);
+    testing.expectEqual('InvalidStateError', result.name);
+    testing.expectEqual(
+      "Failed to execute 'transaction' on 'IDBDatabase': The database connection is closed.",
+      result.message,
+    );
+    testing.expectTrue(result.isChildDOMException);
+  });
+}
+</script>
+
+<!-- Removing an iframe from an active IDB callback re-enters Frame.retire while
+     its Open/Delete context still owns the origin's sqlite gate. The current
+     owner must unwind before the next iframe is woken. -->
+<script id="discard_inside_active_idb_callbacks" type="module">
+{
+  const state = await testing.async();
+  const events = [];
+
+  const upgradeFrame = document.createElement('iframe');
+  document.body.appendChild(upgradeFrame);
+  const upgradeRequest = upgradeFrame.contentWindow.indexedDB.open(
+    'discard-active-upgrade-owner-db',
+    1,
+  );
+  upgradeRequest.onupgradeneeded = () => {
+    events.push('upgrade-remove:upgrade');
+    upgradeFrame.remove();
+  };
+  upgradeRequest.onsuccess = event => {
+    events.push('upgrade-remove:unexpected-success');
+    event.target.result.close();
+  };
+  upgradeRequest.onerror = () => events.push('upgrade-remove:unexpected-error');
+
+  // This request parks behind the first one. It proves detach did not wake it
+  // in the middle of the first callback/sqlite bracket, but did hand off once
+  // that native task returned.
+  const successFrame = document.createElement('iframe');
+  document.body.appendChild(successFrame);
+  const successRequest = successFrame.contentWindow.indexedDB.open(
+    'discard-active-success-owner-db',
+    1,
+  );
+  successRequest.onupgradeneeded = () => events.push('success-remove:upgrade');
+  successRequest.onsuccess = event => {
+    events.push('success-remove:success');
+    event.target.result.close();
+    successFrame.remove();
+
+    // DeleteContext has the same active-owner lifetime rule. Queue it from a
+    // fresh realm while OpenContext is still unwinding its success handler.
+    const deleteFrame = document.createElement('iframe');
+    document.body.appendChild(deleteFrame);
+    const deleteRequest = deleteFrame.contentWindow.indexedDB.deleteDatabase(
+      'discard-active-success-owner-db',
+    );
+    deleteRequest.onsuccess = () => {
+      events.push('delete-remove:success');
+      deleteFrame.remove();
+    };
+    deleteRequest.onerror = () => events.push('delete-remove:unexpected-error');
+  };
+  successRequest.onerror = () => events.push('success-remove:unexpected-error');
+
+  setTimeout(() => state.resolve(events.join(',')), 100);
+  await state.done(result => {
+    testing.expectEqual(
+      'upgrade-remove:upgrade,success-remove:upgrade,' +
+        'success-remove:success,delete-remove:success',
+      result,
+    );
+  });
+}
+</script>
+
+<script id="discard_messaging_is_inert" type="module">
+{
+  const state = await testing.async();
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+  const child = iframe.contentWindow;
+  const childBC = new child.BroadcastChannel('iframe-discard-probe');
+  const parentBC = new BroadcastChannel('iframe-discard-probe');
+  const channel = new child.MessageChannel();
+  const received = [];
+  parentBC.onmessage = event => received.push(event.data);
+  channel.port2.onmessage = event => received.push(event.data);
+  channel.port2.start();
+
+  iframe.remove();
+
+  let broadcastError = null;
+  let portError = null;
+  let invalidOriginError = null;
+  let windowCloneError = null;
+  try {
+    childBC.postMessage(() => {});
+  } catch (error) {
+    broadcastError = error;
+  }
+  try {
+    channel.port1.postMessage(() => {});
+  } catch (error) {
+    portError = error;
+  }
+  try {
+    child.postMessage('ignored', '%%%');
+  } catch (error) {
+    invalidOriginError = error;
+  }
+  try {
+    child.postMessage(() => {}, '*');
+  } catch (error) {
+    windowCloneError = error;
+  }
+
+  await new Promise(resolve => setTimeout(resolve, 30));
+  parentBC.close();
+  channel.port2.close();
+  state.resolve({
+    broadcastError,
+    portError,
+    invalidOriginError,
+    windowCloneError,
+    received: received.join(','),
+  });
+
+  await state.done(result => {
+    // BroadcastChannel and MessagePort stop before structured serialization
+    // once their owner context is gone.
+    testing.expectEqual(null, result.broadcastError);
+    testing.expectEqual(null, result.portError);
+    testing.expectEqual('', result.received);
+
+    // Window.postMessage first clones the message, then observes the detached
+    // target before parsing targetOrigin.
+    testing.expectEqual(null, result.invalidOriginError);
+    testing.expectEqual('DataCloneError', result.windowCloneError.name);
+  });
+}
+</script>
+
+<script id="discard_websocket_is_inert_after_validation">
+{
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+  const child = iframe.contentWindow;
+  const ChildWebSocket = child.WebSocket;
+  const ChildDOMException = child.DOMException;
+  const childWebSocketPrototype = child.WebSocket.prototype;
+  iframe.remove();
+
+  const socket = new ChildWebSocket('http://example.com/socket');
+  testing.expectEqual(childWebSocketPrototype, Object.getPrototypeOf(socket));
+  testing.expectEqual('ws://example.com/socket', socket.url);
+  testing.expectEqual(0, socket.readyState);
+  testing.expectEqual('', socket.protocol);
+  testing.expectEqual('', socket.extensions);
+  testing.expectEqual(0, socket.bufferedAmount);
+
+  // The second argument is one sequence<DOMString>, not a rest container;
+  // later JavaScript arguments are ignored by Web IDL overload resolution.
+  const sequenceSocket = new ChildWebSocket(
+    'http://example.com/sequence',
+    ['alpha'],
+    'ignored-third',
+  );
+  testing.expectEqual(childWebSocketPrototype, Object.getPrototypeOf(sequenceSocket));
+  testing.expectEqual('ws://example.com/sequence', sequenceSocket.url);
+  testing.expectEqual(0, sequenceSocket.readyState);
+
+  // An explicitly supplied undefined selects the IDL default empty protocol
+  // list just like an omitted second argument.
+  const undefinedSocket = new ChildWebSocket(
+    'http://example.com/undefined',
+    undefined,
+    'ignored-third',
+  );
+  testing.expectEqual(childWebSocketPrototype, Object.getPrototypeOf(undefinedSocket));
+  testing.expectEqual('ws://example.com/undefined', undefinedSocket.url);
+  testing.expectEqual(0, undefinedSocket.readyState);
+
+  testing.withError(error => {
+    const reason = 'Cannot convert a Symbol value to a string';
+    testing.expectEqual('TypeError', error.name);
+    testing.expectEqual(
+      `Failed to construct 'WebSocket': ${reason}`,
+      error.message,
+    );
+    testing.expectEqual(`TypeError: ${reason}`, String(error.stack).split('\n')[0]);
+  }, () => new ChildWebSocket(
+    'http://example.com/symbol',
+    Symbol('cannot stringify'),
+  ));
+
+  let invalidError = null;
+  try {
+    new ChildWebSocket('ws://[');
+  } catch (error) {
+    invalidError = error;
+  }
+  testing.expectEqual('SyntaxError', invalidError && invalidError.name);
+  testing.expectEqual(
+    "Failed to construct 'WebSocket': The URL 'ws://[' is invalid.",
+    invalidError && invalidError.message,
+  );
+  testing.expectTrue(invalidError instanceof ChildDOMException);
+}
+</script>

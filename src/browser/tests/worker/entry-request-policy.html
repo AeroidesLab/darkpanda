@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+
+<script id="worker_entry_request_policy" type="module">
+  const state = await testing.async();
+  const workers = [];
+  const specs = [
+    ['./entry-policy-classic-omit.js', { credentials: 'omit' }],
+    ['./entry-policy-module-omit.js', { type: 'module', credentials: 'omit' }],
+    ['./entry-policy-module-default.js', { type: 'module' }],
+    ['./entry-policy-module-same-origin.js', { type: 'module', credentials: 'same-origin' }],
+    ['./entry-policy-module-include.js', { type: 'module', credentials: 'include' }],
+  ];
+
+  const pending = specs.map(([url, options]) => new Promise((resolve, reject) => {
+    const worker = new Worker(url, options);
+    workers.push(worker);
+    worker.onmessage = event => event.data === 'ready'
+      ? resolve()
+      : reject(new Error(`unexpected worker message: ${String(event.data)}`));
+    worker.onerror = event => reject(new Error(event.message || `failed to load ${url}`));
+  }));
+
+  Promise.all(pending).then(
+    () => state.resolve({ ok: true }),
+    error => state.resolve({ ok: false, message: String(error) }),
+  );
+
+  await state.done(result => {
+    testing.expectTrue(result.ok, result.message || 'Worker entry request failed');
+  });
+  workers.forEach(worker => worker.terminate());
+</script>

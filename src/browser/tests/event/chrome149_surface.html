@@ -1,0 +1,83 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id=event_timestamp_and_legacy_unforgeable>
+{
+  const event = new Event('surface');
+  const own = Object.getOwnPropertyDescriptor(event, 'isTrusted');
+
+  testing.expectEqual('number', typeof event.timeStamp);
+  testing.expectEqual(true, Number.isFinite(event.timeStamp));
+  testing.expectEqual(true, event.timeStamp >= 0);
+  testing.expectEqual(true, Math.abs(performance.now() - event.timeStamp) < 100);
+
+  testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(Event.prototype, 'isTrusted'));
+  testing.expectEqual('function', typeof own.get);
+  testing.expectEqual(undefined, own.set);
+  testing.expectEqual(true, own.enumerable);
+  testing.expectEqual(false, own.configurable);
+  testing.expectEqual('get isTrusted', own.get.name);
+  testing.expectEqual(true, Object.keys(event).includes('isTrusted'));
+  testing.expectEqual(false, delete event.isTrusted);
+  testing.expectEqual(false, event.isTrusted);
+
+  const second = new Event('second');
+  testing.expectEqual(
+    Object.getOwnPropertyDescriptor(event, 'isTrusted').get,
+    Object.getOwnPropertyDescriptor(second, 'isTrusted').get
+  );
+}
+</script>
+
+<script id=cross_realm_timestamp_and_unforgeable_getter>
+{
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+  const child = iframe.contentWindow;
+  const event = new child.Event('child');
+
+  testing.expectEqual('number', typeof event.timeStamp);
+  testing.expectEqual(true, Math.abs(child.performance.now() - event.timeStamp) < 100);
+  testing.expectEqual(true, Object.hasOwn(event, 'isTrusted'));
+  testing.expectEqual(false,
+    Object.getOwnPropertyDescriptor(new Event('parent'), 'isTrusted').get ===
+    Object.getOwnPropertyDescriptor(event, 'isTrusted').get
+  );
+  iframe.remove();
+}
+</script>
+
+<script id=input_device_capabilities_and_uievent_dictionary>
+{
+  testing.expectEqual('function', typeof InputDeviceCapabilities);
+  testing.expectEqual(0, InputDeviceCapabilities.length);
+
+  const descriptor = Object.getOwnPropertyDescriptor(
+    InputDeviceCapabilities.prototype,
+    'firesTouchEvents'
+  );
+  testing.expectEqual('function', typeof descriptor.get);
+  testing.expectEqual(undefined, descriptor.set);
+  testing.expectEqual(true, descriptor.enumerable);
+  testing.expectEqual(true, descriptor.configurable);
+
+  const noTouch = new InputDeviceCapabilities();
+  const touch = new InputDeviceCapabilities({firesTouchEvents: true});
+  testing.expectEqual(false, noTouch.firesTouchEvents);
+  testing.expectEqual(true, touch.firesTouchEvents);
+
+  testing.expectEqual(null, new UIEvent('ui').sourceCapabilities);
+  testing.expectEqual(null, new MouseEvent('mouse').sourceCapabilities);
+  testing.expectEqual(null, new PointerEvent('pointer').sourceCapabilities);
+  testing.expectEqual(null, new InputEvent('input').sourceCapabilities);
+  testing.expectEqual(null, new UIEvent('ui').view);
+  testing.expectEqual(null, new MouseEvent('mouse').view);
+  testing.expectEqual(null, new PointerEvent('pointer').view);
+  testing.expectEqual(null, new InputEvent('input').view);
+  testing.expectEqual(touch, new UIEvent('ui', {sourceCapabilities: touch}).sourceCapabilities);
+  testing.expectEqual(touch, new MouseEvent('mouse', {sourceCapabilities: touch}).sourceCapabilities);
+  testing.expectEqual(touch, new PointerEvent('pointer', {sourceCapabilities: touch}).sourceCapabilities);
+  testing.expectEqual(touch, new InputEvent('input', {sourceCapabilities: touch}).sourceCapabilities);
+}
+</script>

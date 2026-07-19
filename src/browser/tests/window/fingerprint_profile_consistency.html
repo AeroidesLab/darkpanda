@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=fingerprint_profile_consistency type=module>
+  {
+    const state = await testing.async();
+    const ua = navigator.userAgentData;
+    const high = await ua.getHighEntropyValues([
+      'architecture', 'bitness', 'platformVersion', 'uaFullVersion',
+      'fullVersionList', 'wow64', 'formFactors',
+    ]);
+
+    testing.expectEqual([], Reflect.ownKeys(navigator));
+    testing.expectEqual([], Reflect.ownKeys(ua));
+    testing.expectEqual([], Reflect.ownKeys(screen));
+
+    testing.expectTrue(navigator.userAgent.includes('Chrome/149.0.0.0'));
+    testing.expectEqual(navigator.userAgent.replace(/^Mozilla\//, ''), navigator.appVersion);
+    testing.expectEqual('Win32', navigator.platform);
+    testing.expectEqual('en-US', navigator.language);
+    testing.expectEqual(['en-US', 'en'], navigator.languages);
+    testing.expectEqual(8, navigator.deviceMemory);
+    testing.expectEqual(8, navigator.hardwareConcurrency);
+    testing.expectEqual(0, navigator.maxTouchPoints);
+
+    testing.expectEqual('Windows', ua.platform);
+    testing.expectEqual(false, ua.mobile);
+    testing.expectEqual('149.0.7827.203', high.uaFullVersion);
+    testing.expectEqual('149.0.7827.203', high.fullVersionList[0].version);
+    testing.expectEqual('x86', high.architecture);
+    testing.expectEqual('64', high.bitness);
+    testing.expectEqual('19.0.0', high.platformVersion);
+    testing.expectEqual(false, high.wow64);
+    testing.expectEqual(['Desktop'], high.formFactors);
+
+    testing.expectEqual(1920, screen.width);
+    testing.expectEqual(1080, screen.height);
+    testing.expectEqual(1920, screen.availWidth);
+    testing.expectEqual(1040, screen.availHeight);
+    testing.expectEqual(24, screen.colorDepth);
+    testing.expectEqual(24, screen.pixelDepth);
+    testing.expectEqual(1280, innerWidth);
+    testing.expectEqual(720, innerHeight);
+    testing.expectEqual(1296, outerWidth);
+    testing.expectEqual(839, outerHeight);
+    testing.expectEqual(-1920, screenX);
+    testing.expectEqual(0, screenY);
+    testing.expectEqual(screenX, screenLeft);
+    testing.expectEqual(screenY, screenTop);
+    testing.expectEqual(1, devicePixelRatio);
+    testing.expectEqual(innerWidth, visualViewport.width);
+    testing.expectEqual(innerHeight, visualViewport.height);
+
+    testing.expectEqual(navigator.language, new Intl.NumberFormat().resolvedOptions().locale);
+    testing.expectEqual('UTC', new Intl.DateTimeFormat().resolvedOptions().timeZone);
+
+    for (const name of [
+      'screenX', 'screenY', 'screenLeft', 'screenTop',
+      'outerWidth', 'outerHeight', 'innerWidth', 'innerHeight',
+      'devicePixelRatio',
+    ]) {
+      const descriptor = Object.getOwnPropertyDescriptor(window, name);
+      testing.expectEqual('function', typeof descriptor.get);
+      testing.expectEqual('function', typeof descriptor.set);
+      testing.expectEqual(true, descriptor.enumerable);
+      testing.expectEqual(true, descriptor.configurable);
+      testing.expectEqual(false, Object.prototype.hasOwnProperty.call(Window.prototype, name));
+    }
+
+    for (const name of [
+      'platform', 'language', 'languages', 'deviceMemory',
+      'hardwareConcurrency', 'maxTouchPoints',
+    ]) {
+      const descriptor = Object.getOwnPropertyDescriptor(Navigator.prototype, name);
+      testing.expectEqual('function', typeof descriptor.get);
+      testing.expectEqual(undefined, descriptor.set);
+      testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(navigator, name));
+    }
+
+    const worker = new Worker('./fingerprint-profile-worker.js');
+    worker.onerror = (event) => state.reject(new Error(event.message || 'worker error'));
+    worker.onmessage = (event) => state.resolve(event.data);
+
+    await state.done((workerProfile) => {
+      testing.expectEqual(undefined, workerProfile.error);
+      testing.expectEqual([], workerProfile.ownKeys);
+      testing.expectEqual(navigator.userAgent, workerProfile.userAgent);
+      testing.expectEqual(navigator.appVersion, workerProfile.appVersion);
+      testing.expectEqual(navigator.platform, workerProfile.platform);
+      testing.expectEqual(navigator.language, workerProfile.language);
+      testing.expectEqual(navigator.languages, workerProfile.languages);
+      testing.expectEqual(navigator.deviceMemory, workerProfile.deviceMemory);
+      testing.expectEqual(navigator.hardwareConcurrency, workerProfile.hardwareConcurrency);
+      // maxTouchPoints is [Exposed=Window] in Chrome; WorkerNavigator must not
+      // inherit the Window-only Navigator member.
+      testing.expectEqual(undefined, workerProfile.maxTouchPoints);
+      testing.expectEqual(ua.brands, workerProfile.brands);
+      testing.expectEqual(ua.mobile, workerProfile.mobile);
+      testing.expectEqual(ua.platform, workerProfile.uaPlatform);
+      testing.expectEqual(high, workerProfile.high);
+    });
+    worker.terminate();
+  }
+</script>

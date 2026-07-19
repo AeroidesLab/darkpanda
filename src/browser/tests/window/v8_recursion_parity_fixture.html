@@ -1,0 +1,55 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>V8 recursion parity fixture</title>
+<script src="v8_recursion_shapes.js?rev=2026-07-15-1"></script>
+<script>
+  // This script is intentionally parser-inserted.  The Window measurement is
+  // completed while document.readyState is still "loading", before either
+  // comparison side evaluates a result through CDP/direct ABI.
+  (() => {
+    const parserReadyState = document.readyState;
+    const requestedRounds = Number(new URL(location.href).searchParams.get('rounds')) || 5;
+    const windowProbe = window.__runV8RecursionShapes(requestedRounds);
+    const worker = new Worker('v8_recursion_parity_worker.js?rev=2026-07-15-1');
+
+    const workerProbe = new Promise(resolve => {
+      const timeout = setTimeout(() => {
+        worker.terminate();
+        resolve({probe: null, error: {name: 'TimeoutError', message: 'worker probe timed out'}});
+      }, 30000);
+
+      worker.onmessage = event => {
+        clearTimeout(timeout);
+        worker.terminate();
+        if (event.data && event.data.ok) {
+          resolve({probe: event.data.probe, error: null});
+        } else {
+          resolve({
+            probe: null,
+            error: event.data && event.data.error
+              ? event.data.error
+              : {name: 'Error', message: 'worker returned an invalid result'},
+          });
+        }
+      };
+      worker.onerror = event => {
+        clearTimeout(timeout);
+        worker.terminate();
+        resolve({
+          probe: null,
+          error: {name: 'WorkerError', message: event.message || 'worker script failed'},
+        });
+      };
+      worker.postMessage({rounds: requestedRounds});
+    });
+
+    window.__v8RecursionProbe = workerProbe.then(workerResult => ({
+      schemaVersion: 2,
+      fixtureUrl: location.href,
+      parserReadyState,
+      window: windowProbe,
+      worker: workerResult.probe,
+      workerError: workerResult.error,
+    }));
+  })();
+</script>

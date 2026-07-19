@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id=window>
+  testing.expectEqual(window, globalThis);
+  testing.expectEqual(window, self);
+  testing.expectEqual(window, window.self);
+  testing.expectEqual(null, window.opener);
+
+  const hasChrome149Profile = navigator.userAgentData.brands.some(
+    (entry) => entry.brand === 'Google Chrome',
+  );
+  testing.expectEqual(hasChrome149Profile ? 720 : 1080, innerHeight);
+  testing.expectEqual(hasChrome149Profile ? 1280 : 1920, innerWidth);
+  testing.expectEqual(hasChrome149Profile ? 1296 : 1920, outerWidth);
+  testing.expectEqual(hasChrome149Profile ? 839 : 1080, outerHeight);
+  testing.expectEqual(hasChrome149Profile ? -1920 : 0, screenX);
+  testing.expectEqual(0, screenY);
+  testing.expectEqual(screenX, screenLeft);
+  testing.expectEqual(screenY, screenTop);
+  testing.expectEqual(1, devicePixelRatio);
+</script>
+
+<script id=load>
+  let call1 = 0;
+  let call2 = 0;
+  window.onload = function(e) {
+    testing.expectEqual(false, true); // should not be called
+  }
+
+  const fn = function(e) {
+    call1 += 1;
+    testing.expectEqual(window, this);
+    testing.expectEqual(document, e.target);
+    testing.expectEqual(window, e.currentTarget);
+  };
+  window.onload = fn;
+  testing.expectEqual(fn, window.onload);
+
+  window.addEventListener('load', (e) => {
+    call2 += 1;
+    testing.expectEqual(window, this);
+    testing.expectEqual(document, e.target);
+    testing.expectEqual(window, e.currentTarget);
+  });
+
+  window.addEventListener('load', function(e) {
+    call2 += 1;
+    testing.expectEqual(window, this);
+    testing.expectEqual(document, e.target);
+    testing.expectEqual(window, e.currentTarget);
+  });
+
+  // noop
+  window.removeEventListener('load', fn);
+  testing.onload(() => {
+    testing.expectEqual(1, call1);
+    testing.expectEqual(2, call2);
+  });
+</script>
+
+<script id=btoa>
+  testing.expectEqual('SGVsbG8gV29ybGQh', btoa('Hello World!'));
+  testing.expectEqual('', btoa(''));
+  testing.expectEqual('IA==', btoa(' '));
+  testing.expectEqual('YQ==', btoa('a'));
+  testing.expectEqual('YWI=', btoa('ab'));
+  testing.expectEqual('YWJj', btoa('abc'));
+  testing.expectEqual('MDEyMzQ1Njc4OQ==', btoa('0123456789'));
+  testing.expectEqual('VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZw==', btoa('The quick brown fox jumps over the lazy dog'));
+</script>
+
+<script id=atob>
+  testing.expectEqual('Hello World!', atob('SGVsbG8gV29ybGQh'));
+  testing.expectEqual('', atob(''));
+
+  // atob must trim input
+  testing.expectEqual('', atob(' '));
+  testing.expectEqual(' ', atob('IA=='));
+  testing.expectEqual(' ', atob(' IA=='));
+  testing.expectEqual(' ', atob('IA== '));
+
+  testing.expectEqual('a', atob('YQ=='));
+  testing.expectEqual('ab', atob('YWI='));
+  testing.expectEqual('abc', atob('YWJj'));
+  testing.expectEqual('0123456789', atob('MDEyMzQ1Njc4OQ=='));
+  testing.expectEqual('The quick brown fox jumps over the lazy dog', atob('VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZw=='));
+
+  // atob must accept unpadded base64 (forgiving-base64 decode per HTML spec)
+  testing.expectEqual('a', atob('YQ'));      // 2 chars, len%4==2, needs '=='
+  testing.expectEqual('ab', atob('YWI'));    // 3 chars, len%4==3, needs '='
+  testing.expectEqual('ceil', atob('Y2VpbA'));  // 6 chars, len%4==2, needs '=='
+
+  // length % 4 == 1 must still throw
+  testing.expectError('InvalidCharacterError', () => {
+    atob('Y');
+  });
+</script>
+
+<script id=atob_binary_string>
+  // atob must produce a "binary string": each output byte (0-255) becomes
+  // a JS string character whose codepoint equals that byte. High-bit bytes
+  // must NOT be folded through UTF-8 (which would replace them with U+FFFD).
+
+  // /w== decodes to a single 0xFF byte.
+  const ff = atob('/w==');
+  testing.expectEqual(1, ff.length);
+  testing.expectEqual(0xff, ff.charCodeAt(0));
+
+  // 0x00..0x07
+  const lo = atob('AAECAwQFBgc=');
+  testing.expectEqual(8, lo.length);
+  for (let i = 0; i < 8; i++) testing.expectEqual(i, lo.charCodeAt(i));
+
+  // 0xFC 0xFD 0xFE 0xFF — the bytes that previously turned into U+FFFD.
+  const hi = atob('/P3+/w==');
+  testing.expectEqual(4, hi.length);
+  testing.expectEqual(0xfc, hi.charCodeAt(0));
+  testing.expectEqual(0xfd, hi.charCodeAt(1));
+  testing.expectEqual(0xfe, hi.charCodeAt(2));
+  testing.expectEqual(0xff, hi.charCodeAt(3));
+
+  // Boundary at 0x7F/0x80.
+  const boundary = atob('f4A=');
+  testing.expectEqual(2, boundary.length);
+  testing.expectEqual(0x7f, boundary.charCodeAt(0));
+  testing.expectEqual(0x80, boundary.charCodeAt(1));
+
+  // Ensure the result is usable as input to a Uint8Array, the way recaptcha
+  // and many libraries decode binary blobs.
+  const bytes = new Uint8Array(hi.length);
+  for (let i = 0; i < hi.length; i++) bytes[i] = hi.charCodeAt(i);
+  testing.expectEqual(0xfc, bytes[0]);
+  testing.expectEqual(0xfd, bytes[1]);
+  testing.expectEqual(0xfe, bytes[2]);
+  testing.expectEqual(0xff, bytes[3]);
+</script>
+
+<script id=btoa_binary_string>
+  // btoa must accept a "binary string": each char's codepoint (0-255) is one
+  // input byte. Chars > 0xFF must throw InvalidCharacterError.
+
+  testing.expectEqual('/w==', btoa(String.fromCharCode(0xff)));
+  testing.expectEqual('/P3+/w==', btoa(String.fromCharCode(0xfc, 0xfd, 0xfe, 0xff)));
+  testing.expectEqual('AAECAwQFBgc=', btoa(String.fromCharCode(0, 1, 2, 3, 4, 5, 6, 7)));
+  testing.expectEqual('f4A=', btoa(String.fromCharCode(0x7f, 0x80)));
+
+  // Codepoints above 0xFF are not representable as a binary string.
+  testing.expectError('InvalidCharacterError', () => {
+    btoa(String.fromCharCode(0x100));
+  });
+  testing.expectError('InvalidCharacterError', () => {
+    btoa('a' + String.fromCharCode(0x1ff) + 'b');
+  });
+</script>
+
+<script id=btoa_atob_binary_roundtrip>
+  // Roundtrip every byte value 0..255.
+  let all = '';
+  for (let i = 0; i < 256; i++) all += String.fromCharCode(i);
+  const encoded = btoa(all);
+  const decoded = atob(encoded);
+  testing.expectEqual(256, decoded.length);
+  for (let i = 0; i < 256; i++) testing.expectEqual(i, decoded.charCodeAt(i));
+</script>
+
+<script id=btoa_atob_roundtrip>
+  const testStrings = [
+    'Hello World!',
+    'Test 123',
+    '',
+    'a',
+    'The quick brown fox jumps over the lazy dog',
+    '!@#$%^&*()',
+  ];
+
+  for (const str of testStrings) {
+    testing.expectEqual(str, atob(btoa(str)));
+  }
+
+  const testEncoded = [
+    'SGVsbG8gV29ybGQh',
+    'VGVzdCAxMjM=',
+    '',
+    'YQ==',
+    'VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZw==',
+    'IUAjJCVeJiooKQ==',
+  ];
+
+  for (const enc of testEncoded) {
+    testing.expectEqual(enc, btoa(atob(enc)));
+  }
+</script>
+
+<script id=screen>
+  testing.expectEqual(1920, screen.width);
+  testing.expectEqual(1080, screen.height);
+  testing.expectEqual(1920, screen.availWidth);
+  testing.expectEqual(1040, screen.availHeight);
+  testing.expectEqual(24, screen.colorDepth);
+  testing.expectEqual(24, screen.pixelDepth);
+  testing.expectEqual(screen, window.screen);
+  testing.expectEqual(true, innerWidth <= outerWidth);
+  testing.expectEqual(true, innerHeight <= outerHeight);
+  testing.expectEqual(true, screen.availWidth <= screen.width);
+  testing.expectEqual(true, screen.availHeight <= screen.height);
+
+  // Every value remains a prototype accessor; resolving a profile must not
+  // introduce instance-owned fingerprint fields.
+  testing.expectEqual([], Reflect.ownKeys(screen));
+  for (const name of ['width', 'height', 'availWidth', 'availHeight', 'colorDepth', 'pixelDepth']) {
+    const descriptor = Object.getOwnPropertyDescriptor(Screen.prototype, name);
+    testing.expectEqual('function', typeof descriptor.get);
+    testing.expectEqual(undefined, descriptor.set);
+    testing.expectEqual(true, descriptor.enumerable);
+    testing.expectEqual(true, descriptor.configurable);
+    testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(screen, name));
+  }
+</script>
+
+<script id=structuredClone>
+  // Basic types
+  testing.expectEqual(42, structuredClone(42));
+  testing.expectEqual('hello', structuredClone('hello'));
+  testing.expectEqual(true, structuredClone(true));
+  testing.expectEqual(null, structuredClone(null));
+  testing.expectEqual(undefined, structuredClone(undefined));
+
+  // Objects and arrays (these work with JSON too, but verify they're cloned)
+  const obj = { a: 1, b: { c: 2 } };
+  const clonedObj = structuredClone(obj);
+  testing.expectEqual(1, clonedObj.a);
+  testing.expectEqual(2, clonedObj.b.c);
+  clonedObj.b.c = 999;
+  testing.expectEqual(2, obj.b.c); // original unchanged
+
+  const arr = [1, [2, 3]];
+  const clonedArr = structuredClone(arr);
+  testing.expectEqual(1, clonedArr[0]);
+  testing.expectEqual(2, clonedArr[1][0]);
+  clonedArr[1][0] = 999;
+  testing.expectEqual(2, arr[1][0]); // original unchanged
+
+  // Date - JSON would stringify to ISO string
+  const date = new Date('2024-01-15T12:30:00Z');
+  const clonedDate = structuredClone(date);
+  testing.expectEqual(true, clonedDate instanceof Date);
+  testing.expectEqual(date.getTime(), clonedDate.getTime());
+  testing.expectEqual(date.toISOString(), clonedDate.toISOString());
+
+  // RegExp - JSON would stringify to {}
+  const regex = /test\d+/gi;
+  const clonedRegex = structuredClone(regex);
+  testing.expectEqual(true, clonedRegex instanceof RegExp);
+  testing.expectEqual(regex.source, clonedRegex.source);
+  testing.expectEqual(regex.flags, clonedRegex.flags);
+  testing.expectEqual(true, clonedRegex.test('test123'));
+
+  // Map - JSON can't handle
+  const map = new Map([['a', 1], ['b', 2]]);
+  const clonedMap = structuredClone(map);
+  testing.expectEqual(true, clonedMap instanceof Map);
+  testing.expectEqual(2, clonedMap.size);
+  testing.expectEqual(1, clonedMap.get('a'));
+  testing.expectEqual(2, clonedMap.get('b'));
+
+  // Set - JSON can't handle
+  const set = new Set([1, 2, 3]);
+  const clonedSet = structuredClone(set);
+  testing.expectEqual(true, clonedSet instanceof Set);
+  testing.expectEqual(3, clonedSet.size);
+  testing.expectEqual(true, clonedSet.has(1));
+  testing.expectEqual(true, clonedSet.has(2));
+  testing.expectEqual(true, clonedSet.has(3));
+
+  // ArrayBuffer
+  const buffer = new ArrayBuffer(8);
+  const view = new Uint8Array(buffer);
+  view[0] = 42;
+  view[7] = 99;
+  const clonedBuffer = structuredClone(buffer);
+  testing.expectEqual(true, clonedBuffer instanceof ArrayBuffer);
+  testing.expectEqual(8, clonedBuffer.byteLength);
+  const clonedView = new Uint8Array(clonedBuffer);
+  testing.expectEqual(42, clonedView[0]);
+  testing.expectEqual(99, clonedView[7]);
+
+  // TypedArray
+  const typedArr = new Uint32Array([100, 200, 300]);
+  const clonedTypedArr = structuredClone(typedArr);
+  testing.expectEqual(true, clonedTypedArr instanceof Uint32Array);
+  testing.expectEqual(3, clonedTypedArr.length);
+  testing.expectEqual(100, clonedTypedArr[0]);
+  testing.expectEqual(200, clonedTypedArr[1]);
+  testing.expectEqual(300, clonedTypedArr[2]);
+
+  // Special number values - JSON can't preserve these
+  testing.expectEqual(true, Number.isNaN(structuredClone(NaN)));
+  testing.expectEqual(Infinity, structuredClone(Infinity));
+  testing.expectEqual(-Infinity, structuredClone(-Infinity));
+
+  // Object with undefined value - JSON would omit it
+  const objWithUndef = { a: 1, b: undefined, c: 3 };
+  const clonedObjWithUndef = structuredClone(objWithUndef);
+  testing.expectEqual(1, clonedObjWithUndef.a);
+  testing.expectEqual(undefined, clonedObjWithUndef.b);
+  testing.expectEqual(true, 'b' in clonedObjWithUndef);
+  testing.expectEqual(3, clonedObjWithUndef.c);
+
+  // Error objects
+  const error = new Error('test error');
+  const clonedError = structuredClone(error);
+  testing.expectEqual(true, clonedError instanceof Error);
+  testing.expectEqual('test error', clonedError.message);
+
+  // TypeError
+  const typeError = new TypeError('type error');
+  const clonedTypeError = structuredClone(typeError);
+  testing.expectEqual(true, clonedTypeError instanceof TypeError);
+  testing.expectEqual('type error', clonedTypeError.message);
+
+  // BigInt
+  const bigInt = BigInt('9007199254740993');
+  const clonedBigInt = structuredClone(bigInt);
+  testing.expectEqual(bigInt, clonedBigInt);
+
+  // Circular references ARE supported by structuredClone (unlike JSON)
+  const circular = { a: 1 };
+  circular.self = circular;
+  const clonedCircular = structuredClone(circular);
+  testing.expectEqual(1, clonedCircular.a);
+  testing.expectEqual(clonedCircular, clonedCircular.self); // circular ref preserved
+
+  // Functions cannot be cloned - should throw
+  {
+    let threw = false;
+    try {
+      structuredClone(() => {});
+    } catch (err) {
+      threw = true;
+      // Just verify an error was thrown - V8's message format may vary
+    }
+    testing.expectEqual(true, threw);
+  }
+
+  // Symbols cannot be cloned - should throw
+  {
+    let threw = false;
+    try {
+      structuredClone(Symbol('test'));
+    } catch (err) {
+      threw = true;
+    }
+    testing.expectEqual(true, threw);
+  }
+
+  // Host objects (DOM elements) cannot be cloned - should throw, not crash
+  {
+    let threw = false;
+    try {
+      structuredClone(document.body);
+    } catch (err) {
+      threw = true;
+    }
+    testing.expectEqual(true, threw);
+  }
+
+  // Objects containing host objects cannot be cloned - should throw, not crash
+  {
+    let threw = false;
+    try {
+      structuredClone({ element: document.body });
+    } catch (err) {
+      threw = true;
+    }
+    testing.expectEqual(true, threw);
+  }
+
+  // StructuredSerializeWithTransfer: ownership really moves.  Every view over
+  // the source observes detachment and references in the clone share the one
+  // destination ArrayBuffer.
+  {
+    const source = new ArrayBuffer(4);
+    const sourceView = new Uint8Array(source);
+    sourceView.set([1, 2, 3, 4]);
+    const cloned = structuredClone({ source, sourceView, again: source }, {
+      transfer: [source],
+    });
+    testing.expectEqual(0, source.byteLength);
+    testing.expectEqual(0, sourceView.byteLength);
+    testing.expectEqual(0, sourceView.length);
+    testing.expectEqual([1, 2, 3, 4], Array.from(cloned.sourceView));
+    testing.expectEqual(true, cloned.source === cloned.again);
+    testing.expectEqual(true, cloned.source === cloned.sourceView.buffer);
+  }
+
+  // A transfer entry need not occur in the serialized graph, but is still
+  // detached after successful serialization.
+  {
+    const source = new ArrayBuffer(2);
+    testing.expectEqual({ value: 7 }, structuredClone({ value: 7 }, { transfer: [source] }));
+    testing.expectEqual(0, source.byteLength);
+  }
+
+  // Conversion and validation happen before serializing the value; detachment
+  // happens only after serialization succeeds.
+  {
+    const order = [];
+    const source = new ArrayBuffer(1);
+    const value = { get value() { order.push('value'); return 1; } };
+    const options = {
+      get transfer() {
+        order.push('transfer');
+        return {
+          [Symbol.iterator]() {
+            order.push('iterator');
+            let done = false;
+            return {
+              next() {
+                order.push(done ? 'done' : 'next');
+                if (done) return { done: true };
+                done = true;
+                return { done: false, value: source };
+              },
+            };
+          },
+        };
+      },
+    };
+    structuredClone(value, options);
+    testing.expectEqual(['transfer', 'iterator', 'next', 'done', 'value'], order);
+    testing.expectEqual(0, source.byteLength);
+
+    const retained = new ArrayBuffer(1);
+    try {
+      structuredClone({ get bad() { throw new Error('serialize boom'); } }, {
+        transfer: [retained],
+      });
+      testing.fail('serialization getter must throw');
+    } catch (error) {
+      testing.expectEqual('serialize boom', error.message);
+    }
+    testing.expectEqual(1, retained.byteLength);
+  }
+
+  {
+    const duplicate = new ArrayBuffer(1);
+    try {
+      structuredClone(1, { transfer: [duplicate, duplicate] });
+      testing.fail('duplicate ArrayBuffer must throw');
+    } catch (error) {
+      testing.expectEqual('DataCloneError', error.name);
+      testing.expectEqual(
+        "Failed to execute 'structuredClone' on 'Window': ArrayBuffer at index 1 is a duplicate of an earlier ArrayBuffer.",
+        error.message,
+      );
+    }
+    testing.expectEqual(1, duplicate.byteLength);
+
+    const detached = new ArrayBuffer(1);
+    structuredClone(0, { transfer: [detached] });
+    try {
+      structuredClone(1, { transfer: [detached] });
+      testing.fail('detached ArrayBuffer must throw');
+    } catch (error) {
+      testing.expectEqual(
+        "Failed to execute 'structuredClone' on 'Window': ArrayBuffer at index 0 is already detached.",
+        error.message,
+      );
+    }
+
+    try {
+      structuredClone(1, { transfer: [{}] });
+      testing.fail('non-transferable must throw');
+    } catch (error) {
+      testing.expectEqual(
+        "Failed to execute 'structuredClone' on 'Window': Value at index 0 does not have a transferable type.",
+        error.message,
+      );
+    }
+  }
+
+  // MessagePort uses the same transfer list: the result is a fresh wrapper,
+  // the source is neutered, and a second transfer reports Blink's exact error.
+  {
+    const channel = new MessageChannel();
+    const original = channel.port1;
+    const cloned = structuredClone({ port: original }, { transfer: [original] });
+    testing.expectEqual(true, cloned.port instanceof MessagePort);
+    testing.expectEqual(false, cloned.port === original);
+    try {
+      structuredClone(1, { transfer: [original] });
+      testing.fail('neutered MessagePort must throw');
+    } catch (error) {
+      testing.expectEqual(
+        "Failed to execute 'structuredClone' on 'Window': Port at index 0 is already neutered.",
+        error.message,
+      );
+    }
+    cloned.port.close();
+    channel.port2.close();
+  }
+</script>
+
+<script id=cached_getter_wrong_this>
+  // Test that extracting a cached property getter and calling it with wrong `this`
+  // doesn't crash (V8 internal field out of bounds). V8's Signature validation
+  // should throw "Illegal invocation" for wrong receiver types.
+  const documentGetter = Object.getOwnPropertyDescriptor(window, 'document').get;
+
+  // Verify we get an error with wrong this values
+  let errorCount = 0;
+  const testValues = [{}, null, undefined, 42, 'string', [], () => {}];
+  for (const val of testValues) {
+    try {
+      documentGetter.call(val);
+    } catch (e) {
+      if (e.message.includes('Illegal invocation')) {
+        errorCount++;
+      }
+    }
+  }
+  // At least some should throw (null/undefined/primitives get coerced in sloppy mode)
+  testing.expectEqual(true, errorCount > 0);
+
+  // Calling with correct this should still work
+  testing.expectEqual(document, documentGetter.call(window));
+</script>
+
+<script id=unhandled_rejection>
+  {
+    let unhandledCalled = 0;
+    window.onunhandledrejection = function(e) {
+      testing.expectEqual(true, e instanceof PromiseRejectionEvent);
+      testing.expectEqual({x: 'Fail'}, e.reason);
+      testing.expectEqual('unhandledrejection', e.type);
+      testing.expectEqual(window, e.target);
+      testing.expectEqual(window, e.srcElement);
+      testing.expectEqual(window, e.currentTarget);
+      unhandledCalled += 1;
+    }
+
+    window.addEventListener('unhandledrejection', function(e) {
+      testing.expectEqual(true, e instanceof PromiseRejectionEvent);
+      testing.expectEqual({x: 'Fail'}, e.reason);
+      testing.expectEqual('unhandledrejection', e.type);
+      testing.expectEqual(window, e.target);
+      testing.expectEqual(window, e.srcElement);
+      testing.expectEqual(window, e.currentTarget);
+      unhandledCalled += 1;
+    });
+    Promise.reject({x: 'Fail'});
+    testing.onload(() => testing.expectEqual(2, unhandledCalled));
+  }
+</script>
+
+<iframe id=iframe></iframe>
+<script id=window>
+  {
+    const iframe = $('#iframe');
+    testing.expectEqual(null, window.frameElement);
+    testing.expectEqual(iframe, iframe.contentWindow.frameElement);
+  }
+</script>
+
+<script id=global_flattening_own_props>
+  // WebIDL [Global] flattening: members declared by Window are OWN properties
+  // of the global object. Inherited EventTarget operations remain on
+  // EventTarget.prototype, matching Chrome 149. Otherwise a
+  // top-level `var navigator = ...` shadows the inherited accessor with an own
+  // `undefined` (CreateGlobalVarBinding only skips when the name is already own).
+  const hop = Object.prototype.hasOwnProperty;
+  testing.expectEqual(true, hop.call(globalThis, 'navigator'));   // Window attribute
+  testing.expectEqual(true, hop.call(globalThis, 'document'));    // Window attribute
+  testing.expectEqual(true, hop.call(globalThis, 'location'));    // Window attribute
+  testing.expectEqual(false, hop.call(globalThis, 'addEventListener'));
+
+  const addDescriptor = Object.getOwnPropertyDescriptor(EventTarget.prototype, 'addEventListener');
+  testing.expectEqual(true, addDescriptor.writable);
+  testing.expectEqual(true, addDescriptor.enumerable);
+  testing.expectEqual(true, addDescriptor.configurable);
+  testing.expectEqual('addEventListener', addDescriptor.value.name);
+  testing.expectEqual(2, addDescriptor.value.length);
+
+  // They still work when invoked on the global.
+  testing.expectEqual(document, globalThis.document);
+  testing.expectEqual(navigator, globalThis.navigator);
+</script>
+
+<script id=global_flattening_var_navigator>
+  // Reproduces the espn.com breakage: a top-level (sloppy-mode) classic script
+  // doing `var navigator = window.navigator || {}`. With flattening, the `var`
+  // declaration is a no-op (navigator is already own) and the assignment to the
+  // read-only accessor silently fails, so navigator is preserved instead of
+  // being clobbered with `{}`.
+  var navigator = window.navigator || {};
+  testing.expectEqual(true, navigator === window.navigator);
+  testing.expectEqual(true, typeof navigator.userAgent === 'string');
+  testing.expectEqual(true, navigator.userAgent.length > 0);
+</script>

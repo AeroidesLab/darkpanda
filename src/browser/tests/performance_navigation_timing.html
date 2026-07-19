@@ -1,0 +1,230 @@
+<!doctype html>
+<script src="testing.js"></script>
+
+<script id="navigation_entry_parser_surface">
+{
+  const entries = performance.getEntriesByType("navigation");
+  const entry = entries[0];
+  const prototype = Object.getPrototypeOf(entry);
+
+  testing.expectEqual("function", typeof PerformanceNavigationTiming);
+  testing.expectEqual(1, entries.length);
+  testing.expectEqual(true, entry instanceof PerformanceNavigationTiming);
+  testing.expectEqual(true, entry instanceof PerformanceResourceTiming);
+  testing.expectEqual(true, entry instanceof PerformanceEntry);
+  testing.expectEqual(PerformanceNavigationTiming.prototype, prototype);
+  testing.expectEqual(PerformanceResourceTiming.prototype, Object.getPrototypeOf(prototype));
+  testing.expectEqual(PerformanceEntry.prototype, Object.getPrototypeOf(Object.getPrototypeOf(prototype)));
+  testing.expectEqual("navigation", entry.entryType);
+  testing.expectEqual("navigation", entry.initiatorType);
+  testing.expectEqual("navigate", entry.type);
+  testing.expectEqual(0, entry.startTime);
+  testing.expectEqual(0, entry.duration);
+  testing.expectEqual(0, entry.loadEventEnd);
+  testing.expectEqual(null, entry.confidence);
+  testing.expectEqual(entry, performance.getEntries().find((item) => item.entryType === "navigation"));
+  testing.expectEqual([
+    "name", "entryType", "startTime", "duration", "toJSON", "constructor",
+    "Symbol(Symbol.toStringTag)",
+  ], Reflect.ownKeys(PerformanceEntry.prototype).map(String));
+  testing.expectEqual([
+    "initiatorType", "nextHopProtocol", "deliveryType", "workerStart",
+    "redirectStart", "redirectEnd", "fetchStart", "domainLookupStart",
+    "domainLookupEnd", "connectStart", "connectEnd", "secureConnectionStart",
+    "requestStart", "responseStart", "responseEnd", "transferSize",
+    "encodedBodySize", "decodedBodySize", "serverTiming", "responseStatus",
+    "finalResponseHeadersStart", "firstInterimResponseStart", "toJSON",
+    "workerRouterEvaluationStart", "workerCacheLookupStart",
+    "workerMatchedSourceType", "workerFinalSourceType", "renderBlockingStatus",
+    "contentType", "contentEncoding", "constructor", "Symbol(Symbol.toStringTag)",
+  ], Reflect.ownKeys(PerformanceResourceTiming.prototype).map(String));
+  testing.expectEqual([
+    "unloadEventStart", "unloadEventEnd", "domInteractive",
+    "domContentLoadedEventStart", "domContentLoadedEventEnd", "domComplete",
+    "loadEventStart", "loadEventEnd", "type", "redirectCount",
+    "criticalCHRestart", "activationStart", "toJSON", "confidence",
+    "constructor", "notRestoredReasons", "Symbol(Symbol.toStringTag)",
+  ], Reflect.ownKeys(PerformanceNavigationTiming.prototype).map(String));
+  testing.expectEqual([
+    "randomizedTriggerRate", "value", "toJSON", "constructor",
+    "Symbol(Symbol.toStringTag)",
+  ], Reflect.ownKeys(PerformanceTimingConfidence.prototype).map(String));
+
+  const typeDescriptor =
+    Object.getOwnPropertyDescriptor(PerformanceNavigationTiming.prototype, "type");
+  const jsonDescriptor =
+    Object.getOwnPropertyDescriptor(PerformanceNavigationTiming.prototype, "toJSON");
+  testing.expectEqual(true, typeDescriptor.configurable);
+  testing.expectEqual(true, typeDescriptor.enumerable);
+  testing.expectEqual("function", typeof typeDescriptor.get);
+  testing.expectEqual(undefined, typeDescriptor.set);
+  testing.expectEqual(true, jsonDescriptor.configurable);
+  testing.expectEqual(true, jsonDescriptor.enumerable);
+  testing.expectEqual(true, jsonDescriptor.writable);
+  testing.expectEqual(0, jsonDescriptor.value.length);
+}
+</script>
+
+<script id="navigation_observer_lifecycle" type="module">
+  const state = await testing.async();
+  const initial = performance.getEntriesByType("navigation")[0];
+  const seen = {
+    comboNavigation: 0,
+    comboResource: 0,
+    earlyBufferedNavigation: 0,
+    earlyUnbufferedNavigation: 0,
+    lateBufferedNavigation: 0,
+    lateUnbufferedNavigation: 0,
+    identities: [],
+  };
+  window.__performanceNavigationTimingTest = {
+    seen,
+    callbacksSatisfied: false,
+    assertionsRan: false,
+  };
+
+  let lateCreated = false;
+  let fetchDone = false;
+  let settled = false;
+
+  const maybeDone = () => {
+    if (settled ||
+        !lateCreated ||
+        !fetchDone ||
+        seen.comboNavigation < 1 ||
+        seen.comboResource < 1 ||
+        seen.earlyBufferedNavigation < 2 ||
+        seen.earlyUnbufferedNavigation < 1 ||
+        seen.lateBufferedNavigation < 1) {
+      return;
+    }
+    settled = true;
+    window.__performanceNavigationTimingTest.callbacksSatisfied = true;
+    setTimeout(() => state.resolve(), 0);
+  };
+
+  const combo = new PerformanceObserver((list) => {
+    seen.comboNavigation += list.getEntriesByType("navigation").length;
+    seen.comboResource += list.getEntriesByType("resource").length;
+    for (const entry of list.getEntriesByType("navigation")) {
+      seen.identities.push(entry === initial);
+    }
+    maybeDone();
+  });
+  combo.observe({ entryTypes: ["resource", "navigation"] });
+
+  const earlyBuffered = new PerformanceObserver((list) => {
+    seen.earlyBufferedNavigation += list.getEntriesByType("navigation").length;
+    for (const entry of list.getEntriesByType("navigation")) {
+      seen.identities.push(entry === initial);
+    }
+    maybeDone();
+  });
+  earlyBuffered.observe({ type: "navigation", buffered: true });
+
+  const earlyUnbuffered = new PerformanceObserver((list) => {
+    seen.earlyUnbufferedNavigation += list.getEntriesByType("navigation").length;
+    for (const entry of list.getEntriesByType("navigation")) {
+      seen.identities.push(entry === initial);
+    }
+    maybeDone();
+  });
+  earlyUnbuffered.observe({ type: "navigation" });
+
+  fetch(testing.ORIGIN + "/xhr")
+    .then((response) => response.text())
+    .then(() => {
+      fetchDone = true;
+      maybeDone();
+    });
+
+  window.addEventListener("load", () => {
+    setTimeout(() => {
+      const lateBuffered = new PerformanceObserver((list) => {
+        seen.lateBufferedNavigation += list.getEntriesByType("navigation").length;
+        for (const entry of list.getEntriesByType("navigation")) {
+          seen.identities.push(entry === initial);
+        }
+        lateBuffered.disconnect();
+        maybeDone();
+      });
+      lateBuffered.observe({ type: "navigation", buffered: true });
+
+      const lateUnbuffered = new PerformanceObserver((list) => {
+        seen.lateUnbufferedNavigation += list.getEntriesByType("navigation").length;
+      });
+      lateUnbuffered.observe({ type: "navigation" });
+      lateCreated = true;
+      maybeDone();
+    }, 0);
+  });
+
+  await state.done(() => {
+    window.__performanceNavigationTimingTest.assertionsRan = true;
+    const entry = performance.getEntriesByType("navigation")[0];
+    const json = entry.toJSON();
+    const confidenceA = entry.confidence;
+    const confidenceB = entry.confidence;
+    const expectedJSONKeys = [
+      "name", "entryType", "startTime", "duration", "initiatorType",
+      "deliveryType", "nextHopProtocol", "renderBlockingStatus", "contentType",
+      "contentEncoding", "workerStart", "workerRouterEvaluationStart",
+      "workerCacheLookupStart", "workerMatchedSourceType", "workerFinalSourceType",
+      "redirectStart", "redirectEnd", "fetchStart", "domainLookupStart",
+      "domainLookupEnd", "connectStart", "secureConnectionStart", "connectEnd",
+      "requestStart", "responseStart", "firstInterimResponseStart",
+      "finalResponseHeadersStart", "responseEnd", "transferSize",
+      "encodedBodySize", "decodedBodySize", "responseStatus", "serverTiming",
+      "unloadEventStart", "unloadEventEnd", "domInteractive",
+      "domContentLoadedEventStart", "domContentLoadedEventEnd", "domComplete",
+      "loadEventStart", "loadEventEnd", "type", "redirectCount",
+      "activationStart", "criticalCHRestart", "notRestoredReasons", "confidence",
+    ];
+
+    testing.expectEqual(1, performance.getEntriesByType("navigation").length);
+    testing.expectEqual(true, seen.comboNavigation >= 1);
+    testing.expectEqual(true, seen.comboResource >= 1);
+    testing.expectEqual(true, seen.earlyBufferedNavigation >= 2);
+    testing.expectEqual(1, seen.earlyUnbufferedNavigation);
+    testing.expectEqual(1, seen.lateBufferedNavigation);
+    testing.expectEqual(0, seen.lateUnbufferedNavigation);
+    testing.expectEqual(true, seen.identities.every(Boolean));
+
+    testing.expectEqual(0, entry.startTime);
+    testing.expectEqual("navigation", entry.entryType);
+    testing.expectEqual("navigation", entry.initiatorType);
+    testing.expectEqual("navigate", entry.type);
+    testing.expectEqual(200, entry.responseStatus);
+    testing.expectEqual(true, entry.fetchStart <= entry.domainLookupStart);
+    testing.expectEqual(true, entry.domainLookupStart <= entry.domainLookupEnd);
+    testing.expectEqual(true, entry.domainLookupEnd <= entry.connectStart);
+    testing.expectEqual(true, entry.connectStart <= entry.connectEnd);
+    testing.expectEqual(true, entry.connectEnd <= entry.requestStart);
+    testing.expectEqual(true, entry.requestStart <= entry.responseStart);
+    testing.expectEqual(true, entry.responseStart <= entry.responseEnd);
+    testing.expectEqual(true, entry.responseEnd <= entry.domInteractive);
+    testing.expectEqual(true, entry.domInteractive <= entry.domContentLoadedEventStart);
+    testing.expectEqual(true, entry.domContentLoadedEventStart <= entry.domContentLoadedEventEnd);
+    testing.expectEqual(true, entry.domContentLoadedEventEnd <= entry.domComplete);
+    testing.expectEqual(true, entry.domComplete <= entry.loadEventStart);
+    testing.expectEqual(true, entry.loadEventStart <= entry.loadEventEnd);
+    testing.expectEqual(true, entry.loadEventEnd > 0);
+    testing.expectEqual(entry.loadEventEnd, entry.duration);
+    testing.expectEqual(expectedJSONKeys, Object.keys(json));
+    testing.expectEqual(null, json.notRestoredReasons);
+    testing.expectEqual("function", typeof PerformanceTimingConfidence);
+    testing.expectEqual(true, confidenceA instanceof PerformanceTimingConfidence);
+    testing.expectEqual(true, confidenceB instanceof PerformanceTimingConfidence);
+    testing.expectEqual(false, confidenceA === confidenceB);
+    testing.expectEqual(0.4994798, confidenceA.randomizedTriggerRate);
+    testing.expectEqual(confidenceA.value, confidenceB.value);
+    testing.expectEqual(true, ["high", "low"].includes(confidenceA.value));
+    testing.expectEqual(true, json.confidence instanceof PerformanceTimingConfidence);
+    testing.expectEqual(confidenceA.toJSON(), json.confidence.toJSON());
+    testing.expectEqual(true, Array.isArray(json.serverTiming));
+
+    combo.disconnect();
+    earlyBuffered.disconnect();
+    earlyUnbuffered.disconnect();
+  });
+</script>

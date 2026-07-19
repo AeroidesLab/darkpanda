@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Blob Worker regression</title>
+<script src="../testing.js"></script>
+<div id="result" data-status="pending">pending</div>
+<script id="blob_worker_immediate_revoke" type="module">
+  const state = await testing.async();
+  const result = document.querySelector('#result');
+  let directDone = false;
+  let crossGlobalDone = false;
+  let settled = false;
+  let consumer = null;
+
+  const finish = outcome => {
+    if (settled) return;
+    settled = true;
+    result.dataset.status = outcome.ok ? 'pass' : 'fail';
+    result.textContent = outcome.ok ? 'blob-worker-pass' : outcome.error;
+    state.resolve(outcome);
+  };
+  const fail = reason => finish({ ok: false, error: String(reason) });
+  const maybePass = () => {
+    if (directDone && crossGlobalDone) finish({ ok: true });
+  };
+
+  // Worker construction must resolve the immutable Blob entry before the
+  // asynchronous script fetch. Revoking the public URL immediately after
+  // construction must therefore not invalidate this already-started load.
+  const directUrl = URL.createObjectURL(new Blob([
+    "postMessage('direct-blob-worker')"
+  ], { type: 'text/javascript' }));
+  const direct = new Worker(directUrl);
+  URL.revokeObjectURL(directUrl);
+  direct.onerror = event => fail('direct: ' + (event.message || 'error'));
+  direct.onmessage = event => {
+    if (event.data !== 'direct-blob-worker') {
+      fail('direct: unexpected message');
+      return;
+    }
+    directDone = true;
+    direct.terminate();
+    maybePass();
+  };
+
+  // The object URL store is shared by globals in the same storage/page
+  // scope. A URL created in a DedicatedWorker must be consumable by its
+  // owning Window, including the same immediate-revoke pattern.
+  const creator = new Worker('./cross-global-blob-url-worker.js');
+  creator.onerror = event => fail('creator: ' + (event.message || 'error'));
+  creator.onmessage = event => {
+    const crossGlobalUrl = event.data;
+    consumer = new Worker(crossGlobalUrl);
+    URL.revokeObjectURL(crossGlobalUrl);
+    consumer.onerror = errorEvent => {
+      fail('consumer: ' + (errorEvent.message || 'error'));
+    };
+    consumer.onmessage = messageEvent => {
+      if (messageEvent.data !== 'cross-global-blob-worker') {
+        fail('consumer: unexpected message');
+        return;
+      }
+      crossGlobalDone = true;
+      consumer.terminate();
+      creator.terminate();
+      maybePass();
+    };
+  };
+
+  const timeout = setTimeout(() => fail('timeout'), 5000);
+
+  await state.done(outcome => {
+    testing.expectTrue(outcome.ok, outcome.error || 'Blob Worker regression failed');
+    testing.expectEqual('pass', result.dataset.status);
+    testing.expectEqual('blob-worker-pass', result.textContent);
+  });
+
+  clearTimeout(timeout);
+  direct.terminate();
+  consumer?.terminate();
+  creator.terminate();
+</script>

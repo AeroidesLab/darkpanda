@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=text_decoder_stream_encoding>
+  {
+    const tds = new TextDecoderStream();
+    testing.expectEqual('utf-8', tds.encoding);
+    testing.expectEqual('object', typeof tds.readable);
+    testing.expectEqual('object', typeof tds.writable);
+    testing.expectEqual(false, tds.fatal);
+    testing.expectEqual(false, tds.ignoreBOM);
+  }
+</script>
+
+<script id=text_decoder_stream_with_label>
+  {
+    const tds = new TextDecoderStream('utf-8');
+    testing.expectEqual('utf-8', tds.encoding);
+  }
+</script>
+
+<script id=text_decoder_stream_with_opts>
+  {
+    const tds = new TextDecoderStream('utf-8', { fatal: true, ignoreBOM: true });
+    testing.expectEqual(true, tds.fatal);
+    testing.expectEqual(true, tds.ignoreBOM);
+  }
+</script>
+
+<script id=text_decoder_stream_invalid_label>
+  {
+    let errorThrown = false;
+    try {
+      new TextDecoderStream('x-invalid-encoding');
+    } catch (e) {
+      errorThrown = true;
+      testing.expectEqual('RangeError', e.name);
+      testing.expectEqual(
+        "The encoding label provided ('x-invalid-encoding') is invalid.",
+        e.message,
+      );
+    }
+    testing.expectEqual(true, errorThrown);
+  }
+</script>
+
+<script id=text_decoder_stream_prototype_surface>
+  {
+  testing.expectEqual(
+    ['encoding', 'fatal', 'ignoreBOM', 'readable', 'writable', 'constructor', 'Symbol(Symbol.toStringTag)'],
+    Reflect.ownKeys(TextDecoderStream.prototype).map(String),
+  );
+  testing.expectEqual(0, TextDecoderStream.length);
+
+  const stream = new TextDecoderStream('utf-8', {fatal: true, ignoreBOM: true});
+  testing.expectEqual([], Reflect.ownKeys(stream));
+  testing.expectEqual(true, stream.fatal);
+  testing.expectEqual(true, stream.ignoreBOM);
+  testing.expectEqual(true, stream.readable === stream.readable);
+  testing.expectEqual(true, stream.writable === stream.writable);
+
+  for (const name of ['encoding', 'fatal', 'ignoreBOM', 'readable', 'writable']) {
+    const descriptor = Object.getOwnPropertyDescriptor(TextDecoderStream.prototype, name);
+    testing.expectEqual(`get ${name}`, descriptor.get.name);
+    testing.expectEqual(undefined, descriptor.set);
+    testing.expectEqual(true, descriptor.enumerable);
+    testing.expectEqual(true, descriptor.configurable);
+  }
+  }
+</script>
+
+<script id=text_decoder_stream_encoding_labels>
+  {
+  for (const label of ['utf-8', ' UTF8 ', 'unicode-1-1-utf-8']) {
+    testing.expectEqual('utf-8', new TextDecoderStream(label).encoding);
+  }
+  testing.expectEqual('windows-1252', new TextDecoderStream('windows-1252').encoding);
+  testing.expectEqual('windows-1252', new TextDecoderStream('latin1').encoding);
+  testing.expectEqual('utf-16le', new TextDecoderStream('utf-16le').encoding);
+  testing.expectEqual('utf-16be', new TextDecoderStream('utf-16be').encoding);
+
+  const reads = [];
+  const options = {
+    get fatal() { reads.push('fatal'); return 1; },
+    get ignoreBOM() { reads.push('ignoreBOM'); return 1; },
+  };
+  const stream = new TextDecoderStream('utf-8', options);
+  testing.expectEqual(['fatal', 'ignoreBOM'], reads);
+  testing.expectEqual(true, stream.fatal);
+  testing.expectEqual(true, stream.ignoreBOM);
+  }
+</script>
+
+<script id=text_decoder_stream_decode>
+  (async function() {
+    const tds = new TextDecoderStream();
+
+    const writer = tds.writable.getWriter();
+    const reader = tds.readable.getReader();
+
+    // 'hello' in UTF-8 bytes
+    const bytes = new Uint8Array([104, 101, 108, 108, 111]);
+    await writer.write(bytes);
+    await writer.close();
+
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual('hello', result.value);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>
+
+<script id=text_decoder_stream_empty_chunk>
+  (async function() {
+    const tds = new TextDecoderStream();
+    const writer = tds.writable.getWriter();
+    const reader = tds.readable.getReader();
+
+    // Write an empty chunk followed by real data
+    await writer.write(new Uint8Array([]));
+    await writer.write(new Uint8Array([104, 105]));
+    await writer.close();
+
+    // Empty chunk should be filtered out; first read gets "hi"
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual('hi', result.value);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>
+
+<script id=text_decoder_stream_stateful_cross_chunk_and_flush>
+  (async function() {
+    async function decode(label, options, chunks) {
+      const input = new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(chunk);
+          controller.close();
+        },
+      });
+      const reader = input.pipeThrough(new TextDecoderStream(label, options)).getReader();
+      const output = [];
+      for (;;) {
+        const result = await reader.read();
+        if (result.done) return output;
+        output.push(result.value);
+      }
+    }
+
+    testing.expectEqual(
+      ['€!'],
+      await decode('utf-8', {}, [
+        new Uint8Array([0xe2]),
+        new Uint8Array([0x82]),
+        new Uint8Array([0xac, 0x21]),
+      ]),
+    );
+    testing.expectEqual(
+      ['�'],
+      await decode('utf-8', {}, [new Uint8Array([0xe2, 0x82])]),
+    );
+    testing.expectEqual(
+      ['あ'],
+      await decode('iso-2022-jp', {}, [
+        new Uint8Array([0x1b, 0x24]),
+        new Uint8Array([0x42, 0x24]),
+        new Uint8Array([0x22, 0x1b, 0x28, 0x42]),
+      ]),
+    );
+    testing.expectEqual(
+      ['😀!'],
+      await decode('utf-16le', {}, [
+        new Uint8Array([0x3d, 0xd8]),
+        new Uint8Array([0x00, 0xde, 0x21, 0x00]),
+      ]),
+    );
+    testing.expectEqual(
+      ['€', '“'],
+      await decode('latin1', {}, [new Uint8Array([0x80]), new Uint8Array([0x93])]),
+    );
+  })();
+</script>
+
+<script id=text_decoder_stream_bom_and_buffer_source>
+  (async function() {
+    async function decode(options, chunks) {
+      const input = new ReadableStream({
+        start(controller) {
+          chunks.forEach(chunk => controller.enqueue(chunk));
+          controller.close();
+        },
+      });
+      const reader = input.pipeThrough(new TextDecoderStream('utf-8', options)).getReader();
+      const output = [];
+      for (;;) {
+        const result = await reader.read();
+        if (result.done) return output;
+        output.push(result.value);
+      }
+    }
+
+    testing.expectEqual(
+      ['A'],
+      await decode({}, [
+        new Uint8Array([0xef]),
+        new Uint8Array([0xbb]),
+        new Uint8Array([0xbf]),
+        new Uint8Array([65]),
+      ]),
+    );
+    testing.expectEqual(
+      ['﻿A'],
+      await decode({ignoreBOM: true}, [
+        new Uint8Array([0xef, 0xbb]),
+        new Uint8Array([0xbf, 65]),
+      ]),
+    );
+
+    const bytes = new Uint8Array([65, 66]);
+    testing.expectEqual(
+      ['AB', 'CD', 'EF'],
+      await decode({}, [
+        bytes.buffer,
+        new DataView(new Uint8Array([67, 68]).buffer),
+        new Uint16Array([0x4645]),
+      ]),
+    );
+
+    const detached = new Uint8Array([65]);
+    structuredClone(detached, {transfer: [detached.buffer]});
+    testing.expectEqual([], await decode({}, [detached]));
+  })();
+</script>
+
+<script id=text_decoder_stream_errors_reject_both_sides>
+  (async function() {
+    async function rejection(chunk, options) {
+      const stream = new TextDecoderStream('utf-8', options);
+      const writer = stream.writable.getWriter();
+      const reader = stream.readable.getReader();
+      let synchronous = true;
+      let writePromise;
+      try {
+        writePromise = writer.write(chunk);
+      } catch (error) {
+        return {synchronousThrow: error};
+      }
+      synchronous = false;
+      let writeError;
+      let readError;
+      await Promise.all([
+        writePromise.catch(error => { writeError = error; }),
+        reader.read().catch(error => { readError = error; }),
+      ]);
+      return {synchronous, writeError, readError};
+    }
+
+    const malformed = await rejection(new Uint8Array([0xff]), {fatal: true});
+    testing.expectEqual(false, malformed.synchronous);
+    testing.expectEqual('TypeError', malformed.writeError.name);
+    testing.expectEqual('The encoded data was not valid.', malformed.writeError.message);
+    testing.expectEqual(true, malformed.writeError === malformed.readError);
+
+    const wrongType = await rejection('not bytes', {});
+    testing.expectEqual(false, wrongType.synchronous);
+    testing.expectEqual('TypeError', wrongType.writeError.name);
+    testing.expectEqual(
+      "The provided value is not of type '(ArrayBuffer or ArrayBufferView)'.",
+      wrongType.writeError.message,
+    );
+    testing.expectEqual(true, wrongType.writeError === wrongType.readError);
+
+    const stream = new TextDecoderStream('utf-8', {fatal: true});
+    const writer = stream.writable.getWriter();
+    const reader = stream.readable.getReader();
+    await writer.write(new Uint8Array([0xe2, 0x82]));
+    let closeError;
+    let readError;
+    await Promise.all([
+      writer.close().catch(error => { closeError = error; }),
+      reader.read().catch(error => { readError = error; }),
+    ]);
+    testing.expectEqual('The encoded data was not valid.', closeError.message);
+    testing.expectEqual(true, closeError === readError);
+  })();
+</script>

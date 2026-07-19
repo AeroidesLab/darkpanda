@@ -1,0 +1,28 @@
+<!doctype html>
+<head><script src="../testing.js"></script></head>
+<body>
+<script id="csp-meta-dynamic">
+  const captureDynamicMeta = callback => {
+    try {
+      callback();
+      return null;
+    } catch (error) {
+      return error;
+    }
+  };
+
+  // CSP meta outside document.head is ignored.
+  const bodyMeta = document.createElement('meta');
+  bodyMeta.httpEquiv = 'Content-Security-Policy';
+  bodyMeta.content = "script-src 'none'";
+  document.body.append(bodyMeta);
+  testing.expectEqual(2, eval('1 + 1'));
+
+  // A connected head meta is processed when its relevant attributes change.
+  const headMeta = document.createElement('meta');
+  document.head.append(headMeta);
+  headMeta.content = "script-src 'unsafe-inline'";
+  headMeta.httpEquiv = 'Content-Security-Policy';
+  testing.expectEqual('EvalError', captureDynamicMeta(() => eval('1')).name);
+</script>
+</body>

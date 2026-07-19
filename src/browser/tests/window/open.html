@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id=basic>
+{
+  // window.open returns a Window-like object.
+  const w = window.open('about:blank');
+  testing.expectEqual(true, w != null);
+  testing.expectEqual(false, w.closed);
+
+  // The popup is a top-level browsing context.
+  testing.expectEqual(w, w.self);
+  testing.expectEqual(w, w.window);
+  testing.expectEqual(w, w.top);
+  testing.expectEqual(w, w.parent);
+
+  // Opener points back at us.
+  testing.expectEqual(window, w.opener);
+
+  w.close();
+  testing.expectEqual(true, w.closed);
+}
+</script>
+
+<script id=main_opener_is_null>
+  testing.expectEqual(null, window.opener);
+</script>
+
+<script id=about_blank_default>
+{
+  // No-arg open defaults to about:blank.
+  const w = window.open();
+  testing.expectEqual(true, w != null);
+  testing.expectEqual(false, w.closed);
+  w.close();
+}
+</script>
+
+<script id=noopener>
+{
+  // noopener returns null.
+  const w = window.open('about:blank', '_blank', 'noopener');
+  testing.expectEqual(null, w);
+}
+</script>
+
+<script id=noreferrer>
+{
+  // noreferrer also returns null (and implies noopener).
+  const w = window.open('about:blank', '_blank', 'noreferrer');
+  testing.expectEqual(null, w);
+}
+</script>
+
+<script id=named_reuse>
+{
+  // Second open with the same name reuses the popup — same Window identity.
+  const a = window.open('about:blank', 'myPopup');
+  testing.expectEqual('myPopup', a.name);
+
+  const b = window.open('about:blank', 'myPopup');
+  testing.expectEqual(a, b);
+
+  a.close();
+}
+</script>
+
+<script id=close_noop_on_main>
+  // close() on a non-popup window is a no-op.
+  window.close();
+  testing.expectEqual(false, window.closed);
+</script>
+
+<script id=double_close>
+{
+  const w = window.open('about:blank');
+  w.close();
+  testing.expectEqual(true, w.closed);
+  // Second close is safe.
+  w.close();
+  testing.expectEqual(true, w.closed);
+}
+</script>
+
+<script id=name_setter>
+{
+  const w = window.open('about:blank');
+  testing.expectEqual('', w.name);
+  w.name = 'renamed';
+  testing.expectEqual('renamed', w.name);
+
+  // Now it can be looked up by name.
+  const again = window.open('about:blank', 'renamed');
+  testing.expectEqual(w, again);
+  w.close();
+}
+</script>
+
+<script id=close_drops_opener>
+{
+  // Closing a popup that was opened from main shouldn't touch window.opener.
+  const w = window.open('about:blank', 'outer');
+  testing.expectEqual(window, w.opener);
+  w.close();
+  testing.expectEqual(true, w.closed);
+  testing.expectEqual(null, window.opener);
+}
+</script>
+
+<script id=stale_window_after_close>
+{
+  // A closed popup's Window is often still referenced by JS. We must NOT tear
+  // the Frame down (free its V8 context / arena / refcounted Location URL)
+  // while that reference is live, or a later access is a use-after-free. The
+  // Frame is kept alive (neutered) until Page.deinit instead.
+  //
+  // Crash condition: do NOT read .location before close(), so the popup's URL
+  // holds only the single internal ref. Pre-fix, the deferred Frame.deinit
+  // released it (refcount -> 0, URL freed) and reading .location afterwards
+  // re-wrapped the dangling Location into a double-free (release overflow).
+  const w = window.open('about:blank');
+  const doc = w.document;
+  const node = doc.createElement('section');
+
+  w.close();
+  testing.expectEqual(true, w.closed);
+
+  // Everything reachable through the stale Window stays valid and inert.
+  testing.expectEqual('about:blank', w.location.href);
+  testing.expectEqual('BODY', doc.body.tagName);
+  testing.expectEqual('SECTION', node.tagName);
+  testing.expectEqual('P', doc.createElement('p').tagName);
+}
+</script>
+
+<script id=popup_self_close type=module>
+{
+  // Popup navigates to a real URL (not about:blank, which takes a synchronous
+  // shortcut) and calls window.close() from inside its own running script.
+  // Regression: synchronous frame teardown here used to destroy the popup's
+  // V8 context mid-eval, panicking on the deferred load-event dispatch.
+  // Receiving the postMessage proves the popup's script ran to completion
+  // (including the close call) without crashing.
+  const state = await testing.async();
+  window.addEventListener('message', (e) => {
+    if (e.data && e.data.from === 'popup_self_close') {
+      state.resolve(e.data);
+    }
+  }, { once: true });
+
+  const w = window.open(testing.BASE_URL + 'window/support/popup_self_close.html');
+  testing.expectTrue(w != null);
+
+  await state.done((data) => {
+    testing.expectEqual('popup_self_close', data.from);
+  });
+}
+</script>
+
+<script id=popup_close_dismissal_cluster type=module>
+{
+  // Use a fully loaded same-origin popup. Chromium does not run the normal
+  // dismissal sequence for every close of its initial empty Document, so an
+  // immediate about:blank close would not be a stable lifecycle oracle.
+  const asyncState = await testing.async();
+  const shared = {
+    events: [],
+    snapshots: [],
+    done: false,
+    afterClose: null,
+  };
+  window.__popupCloseLifecycleState = shared;
+
+  const popup = window.open(
+    testing.BASE_URL +
+      'window/support/popup_close_lifecycle_fixture.html',
+  );
+  testing.expectTrue(popup != null);
+
+  const waitForPopup = () => {
+    if (!shared.done) {
+      setTimeout(waitForPopup, 0);
+      return;
+    }
+
+    // Give any incorrectly retained popup timer ample time to fire before the
+    // result is frozen. Parent timers remain active after the popup is gone.
+    setTimeout(() => asyncState.resolve(shared), 20);
+  };
+  waitForPopup();
+
+  await asyncState.done(result => {
+    delete window.__popupCloseLifecycleState;
+
+    const syncOrder = [
+      'visibility-window-capture',
+      'visibility-property',
+      'visibility-listener',
+      'pagehide-property',
+      'pagehide-listener',
+      'unload-property',
+      'unload-listener',
+      'after-close',
+    ];
+    const microtaskOrder = syncOrder
+      .slice(0, -1)
+      .map(label => `micro:${label}`);
+
+    testing.expectEqual(
+      syncOrder.concat(microtaskOrder).join(','),
+      result.events.join(','),
+    );
+    testing.expectEqual(7, result.snapshots.length);
+    testing.expectTrue(result.afterClose.closed);
+    testing.expectTrue(result.afterClose.hidden);
+    testing.expectEqual('hidden', result.afterClose.visibilityState);
+    testing.expectEqual(null, result.afterClose.defaultView);
+    testing.expectFalse(
+      result.events.some(label => label.startsWith('discarded-timer:')),
+    );
+
+    for (const snapshot of result.snapshots) {
+      testing.expectTrue(snapshot.trusted);
+      testing.expectTrue(snapshot.target);
+      testing.expectFalse(snapshot.composed);
+      testing.expectTrue(snapshot.closed);
+      testing.expectTrue(snapshot.parent);
+      testing.expectTrue(snapshot.top);
+      testing.expectTrue(snapshot.opener);
+      testing.expectTrue(snapshot.frameElement);
+      testing.expectTrue(snapshot.defaultView);
+      testing.expectTrue(snapshot.hidden);
+      testing.expectEqual('hidden', snapshot.visibilityState);
+      testing.expectTrue(snapshot.timerId > 0);
+      testing.expectTrue(
+        snapshot.storage === 'available' || snapshot.storage === 'ok',
+      );
+
+      if (snapshot.type === 'visibilitychange') {
+        const capture = snapshot.label === 'visibility-window-capture';
+        testing.expectEqual(
+          capture ? 'window' : 'document',
+          snapshot.currentTarget,
+        );
+        testing.expectEqual(capture ? 1 : 2, snapshot.phase);
+        testing.expectTrue(snapshot.bubbles);
+        testing.expectFalse(snapshot.cancelable);
+      } else if (snapshot.type === 'pagehide') {
+        testing.expectEqual('window', snapshot.currentTarget);
+        testing.expectEqual(2, snapshot.phase);
+        testing.expectTrue(snapshot.bubbles);
+        testing.expectTrue(snapshot.cancelable);
+        testing.expectFalse(snapshot.persisted);
+      } else {
+        testing.expectEqual('unload', snapshot.type);
+        testing.expectEqual('window', snapshot.currentTarget);
+        testing.expectEqual(2, snapshot.phase);
+        testing.expectFalse(snapshot.bubbles);
+        testing.expectFalse(snapshot.cancelable);
+      }
+    }
+  });
+}
+</script>

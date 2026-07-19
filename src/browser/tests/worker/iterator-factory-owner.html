@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+
+<script id="worker_iterator_factory_owner" type="module">
+  const state = await testing.async();
+  const worker = new Worker('./iterator-factory-owner-worker.js');
+
+  worker.onmessage = event => {
+    const entries = event.data.entries;
+    // terminate() synchronously joins the owner thread. The worker Context
+    // teardown must return standalone iterator objects to the worker-owned
+    // Factory slab, never to Page.factory on the creator thread.
+    worker.terminate();
+    state.resolve({ ok: true, entries });
+  };
+  worker.onerror = event => state.resolve({
+    ok: false,
+    error: event.message || 'worker error',
+  });
+
+  const timeout = setTimeout(
+    () => state.resolve({ ok: false, error: 'timeout' }),
+    2000,
+  );
+
+  await state.done(result => {
+    testing.expectTrue(result.ok, result.error || 'worker iterator failed');
+    testing.expectEqual(
+      [['x-owner', 'dedicated-worker']],
+      result.entries,
+    );
+  });
+
+  clearTimeout(timeout);
+  worker.terminate();
+</script>

@@ -1,0 +1,19 @@
+.{
+    .name = .darkpanda,
+    .version = "1.0.0-dev",
+    .fingerprint = 0xe1263356792ab03f, // DarkPanda package identity.
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .v8 = .{
+            .path = "../zig-v8-fork",
+        },
+        .@"boringssl-zig" = .{
+            .path = "../boringssl-zig-fork",
+        },
+        .sqlite3 = .{
+            .url = "https://github.com/allyourcodebase/sqlite3/archive/8f840560eae88ab66668c6827c64ffbd0d74ef37.tar.gz",
+            .hash = "sqlite3-3.51.0-DMxLWssOAABZ8cAvU_LfBIbp0kZjm824PU8sSLXpEDdr",
+        },
+    },
+    .paths = .{""},
+}

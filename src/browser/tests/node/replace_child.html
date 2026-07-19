@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id=d1><div id=c1></div><div id=c2></div></div>
+<div id=d2><div id=c3></div></div>
+
+<script id=replaceChild>
+  function assertChildren(expected, parent) {
+    const actual = Array.from(parent.childNodes);
+    testing.expectEqual(expected, actual);
+    for (let child of parent.childNodes) {
+      testing.expectEqual(parent, child.parentNode);
+      testing.expectEqual(child, document.getElementById(child.id));
+    }
+  }
+
+  const d1 = $('#d1');
+  const d2 = $('#d2');
+  const c1 = $('#c1');
+  const c2 = $('#c2');
+  const c3 = $('#c3');
+
+  let c4 = document.createElement('div');
+  c4.id = 'c4';
+
+  testing.withError((err) => {
+    testing.expectEqual(3, err.code);
+    testing.expectEqual("HierarchyRequestError", err.name);
+  }, () => d1.replaceChild(c4, c3));
+
+  testing.expectEqual(c2, d1.replaceChild(c4, c2));
+  testing.expectEqual(null, c2.parentNode);
+  assertChildren([c1, c4], d1)
+  assertChildren([c3], d2)
+
+  testing.expectEqual(c1, d1.replaceChild(c3, c1));
+  testing.expectEqual(null, c2.parentNode);
+  assertChildren([c3, c4], d1)
+  assertChildren([], d2)
+
+  testing.expectEqual(c3, d1.replaceChild(c3, c3));
+  assertChildren([c3, c4], d1)
+</script>
+
+<script id=replaceChild_callback_removes_old_child>
+  // Custom element whose connectedCallback removes the old_child
+  // This tests that replaceChild handles mid-operation DOM mutations
+  class RemoverElement extends HTMLElement {
+    connectedCallback() {
+      // Remove the sibling that replaceChild is about to remove
+      const sibling = this.nextSibling;
+      if (sibling) {
+        sibling.remove();
+      }
+    }
+  }
+  customElements.define('remover-element', RemoverElement);
+
+  const parent = document.createElement('div');
+  const oldChild = document.createElement('div');
+  parent.appendChild(oldChild);
+  document.body.appendChild(parent);
+
+  const newChild = document.createElement('remover-element');
+
+  // insertBefore inserts newChild before oldChild, then connectedCallback
+  // fires and removes oldChild. replaceChild should not crash when it
+  // tries to remove the already-removed oldChild.
+  parent.replaceChild(newChild, oldChild);
+
+  testing.expectEqual(newChild, parent.firstChild);
+  testing.expectEqual(null, parent.lastChild.nextSibling);
+  testing.expectEqual(null, oldChild.parentNode);
+</script>

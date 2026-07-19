@@ -1,0 +1,69 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<style>
+  #hidden-wrapper { display: none; }
+  #target.sheet-size { width: 88px; height: 66px; }
+</style>
+<div id="hidden-wrapper"><iframe id="target"></iframe></div>
+
+<script id="computed_style_hidden_iframe_presentation_dimensions">
+{
+  const iframe = document.getElementById('target');
+  const style = getComputedStyle(iframe);
+
+  const expect = (width, height) => {
+    testing.expectEqual(width, style.width);
+    testing.expectEqual(height, style.height);
+    testing.expectEqual(0, iframe.offsetWidth);
+    testing.expectEqual(0, iframe.offsetHeight);
+    testing.expectEqual(0, iframe.getBoundingClientRect().width);
+    testing.expectEqual(0, iframe.getBoundingClientRect().height);
+  };
+
+  // Without layout, default replaced dimensions are not used values.
+  expect('auto', 'auto');
+
+  // HTML width/height are lower-priority presentational hints.
+  iframe.width = '444';
+  iframe.height = '222';
+  expect('444px', '222px');
+
+  iframe.className = 'sheet-size';
+  expect('88px', '66px');
+  iframe.className = '';
+
+  iframe.style.cssText = 'width:111px;height:77px';
+  expect('111px', '77px');
+
+  iframe.style.cssText = 'width:111px';
+  expect('111px', '222px');
+
+  iframe.style.cssText = 'width:auto;height:auto';
+  expect('auto', 'auto');
+  iframe.style.cssText = '';
+
+  // Blink HTMLDimension parsing: zero is valid; signs, empty strings and a
+  // non-numeric prefix do not produce a presentational hint.
+  iframe.width = '0';
+  iframe.height = '0';
+  expect('0px', '0px');
+
+  iframe.width = '-1';
+  iframe.height = '-0';
+  expect('auto', 'auto');
+
+  iframe.width = '';
+  iframe.height = 'invalid';
+  expect('auto', 'auto');
+
+  // Legacy dimension parsing consumes the numeric prefix and recognizes an
+  // immediate percent sign.
+  iframe.width = '12px';
+  iframe.height = '12.5';
+  expect('12px', '12.5px');
+
+  iframe.width = '100%';
+  iframe.height = ' 12 ';
+  expect('100%', '12px');
+}
+</script>

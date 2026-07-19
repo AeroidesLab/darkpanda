@@ -1,0 +1,40 @@
+.{
+    .general =
+    \\usage: {0s} <command> [arguments]
+    \\
+    \\The commands are:
+    \\  help        displays this message
+    \\  serve       starts a WebSocket CDP server
+    \\  version     displays the version of {0s}
+    \\
+    \\Use "{0s} help <command>" for more information about a command.
+    ,
+    .serve =
+    \\usage: {0s} serve [OPTIONS]
+    \\
+    \\Starts a WebSocket CDP server.
+    \\
+    \\options:
+    \\  --host <HOST>
+    \\          Host of the CDP server. Defaults to "127.0.0.1".
+    \\  --port <INT>
+    \\          Port of the CDP server. Defaults to 9222.
+    \\  --profile <PROFILE>
+    \\          Browser/network identity. The supported parity target is chrome149.
+    \\  --timeout <INT>
+    \\          HTTP/navigation timeout in milliseconds. Defaults to 5000.
+    \\  --proxy <URL>
+    \\          HTTP(S) proxy used by the browser transport. Defaults to direct.
+    ,
+    .version =
+    \\usage: {0s} version
+    \\
+    \\Displays the version of {0s}.
+    ,
+    .help =
+    \\usage: {0s} help
+    \\
+    \\Displays help for a command.
+    ,
+    .common_options = "",
+}

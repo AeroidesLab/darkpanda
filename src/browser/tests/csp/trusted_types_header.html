@@ -1,0 +1,227 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+<body>
+<div id="target"></div>
+<div id="outer-parent"><span id="outer-target"></span></div>
+<div id="adjacent-target"></div>
+<div id="shadow-host"></div>
+<template id="template-target"></template>
+<script id="trusted-types-header-fixture">
+testing.onload(() => {
+  const captureTT = callback => {
+    try {
+      callback();
+      return null;
+    } catch (error) {
+      return error;
+    }
+  };
+  const expectTTError = (callback, message) => {
+    const error = captureTT(callback);
+    testing.expectEqual('TypeError', error && error.name);
+    testing.expectEqual(message, error && error.message);
+  };
+
+  const target = document.getElementById('target');
+  expectTTError(
+    () => { target.innerHTML = '<b>blocked</b>'; },
+    "Failed to set the 'innerHTML' property on 'Element': This document requires 'TrustedHTML' assignment.",
+  );
+  testing.expectEqual('', target.innerHTML);
+
+  const outerTarget = document.getElementById('outer-target');
+  expectTTError(
+    () => { outerTarget.outerHTML = '<em>blocked</em>'; },
+    "Failed to set the 'outerHTML' property on 'Element': This document requires 'TrustedHTML' assignment.",
+  );
+  testing.expectEqual(outerTarget, document.getElementById('outer-target'));
+
+  const adjacent = document.getElementById('adjacent-target');
+  expectTTError(
+    () => adjacent.insertAdjacentHTML('beforeend', '<i>blocked</i>'),
+    "Failed to execute 'insertAdjacentHTML' on 'Element': This document requires 'TrustedHTML' assignment.",
+  );
+  testing.expectEqual(0, adjacent.childNodes.length);
+
+  expectTTError(
+    () => target.setHTMLUnsafe('<u>blocked</u>'),
+    "Failed to execute 'setHTMLUnsafe' on 'Element': This document requires 'TrustedHTML' assignment.",
+  );
+  testing.expectEqual('', target.innerHTML);
+
+  const shadow = document.getElementById('shadow-host').attachShadow({ mode: 'open' });
+  expectTTError(
+    () => { shadow.innerHTML = '<b>blocked</b>'; },
+    "Failed to set the 'innerHTML' property on 'ShadowRoot': This document requires 'TrustedHTML' assignment.",
+  );
+  expectTTError(
+    () => shadow.setHTMLUnsafe('<b>blocked</b>'),
+    "Failed to execute 'setHTMLUnsafe' on 'ShadowRoot': This document requires 'TrustedHTML' assignment.",
+  );
+  testing.expectEqual('', shadow.innerHTML);
+
+  const parser = new DOMParser();
+  expectTTError(
+    () => parser.parseFromString('<p>blocked</p>', 'text/html'),
+    "Failed to execute 'parseFromString' on 'DOMParser': This document requires 'TrustedHTML' assignment.",
+  );
+  expectTTError(
+    () => parser.parseFromString('<svg/>', 'image/svg+xml'),
+    "Failed to execute 'parseFromString' on 'DOMParser': This document requires 'TrustedHTML' assignment.",
+  );
+
+  const range = document.createRange();
+  range.selectNodeContents(target);
+  expectTTError(
+    () => range.createContextualFragment('<b>blocked</b>'),
+    "Failed to execute 'createContextualFragment' on 'Range': This document requires 'TrustedHTML' assignment.",
+  );
+
+  const template = document.getElementById('template-target');
+  expectTTError(
+    () => { template.innerHTML = '<b>blocked</b>'; },
+    "Failed to set the 'innerHTML' property on 'Element': This document requires 'TrustedHTML' assignment.",
+  );
+  testing.expectEqual('', template.innerHTML);
+
+  const scriptTarget = document.createElement('script');
+  for (const member of ['innerText', 'text', 'textContent']) {
+    expectTTError(
+      () => { scriptTarget[member] = 'blocked'; },
+      `Failed to set the '${member}' property on 'HTMLScriptElement': This document requires 'TrustedScript' assignment.`,
+    );
+  }
+  testing.expectEqual('', scriptTarget.textContent);
+  expectTTError(
+    () => { scriptTarget.src = '/blocked.js'; },
+    "Failed to set the 'src' property on 'HTMLScriptElement': This document requires 'TrustedScriptURL' assignment.",
+  );
+  testing.expectEqual(null, scriptTarget.getAttribute('src'));
+
+  const scriptTextDescriptor = Object.getOwnPropertyDescriptor(
+    HTMLScriptElement.prototype,
+    'textContent',
+  );
+  testing.expectEqual('function', typeof scriptTextDescriptor.get);
+  testing.expectEqual('function', typeof scriptTextDescriptor.set);
+  testing.expectTrue(scriptTextDescriptor.enumerable);
+  testing.expectTrue(scriptTextDescriptor.configurable);
+
+  const iframeTarget = document.createElement('iframe');
+  expectTTError(
+    () => { iframeTarget.srcdoc = '<p>blocked</p>'; },
+    "Failed to set the 'srcdoc' property on 'HTMLIFrameElement': This document requires 'TrustedHTML' assignment.",
+  );
+  testing.expectEqual(null, iframeTarget.getAttribute('srcdoc'));
+
+  expectTTError(
+    () => iframeTarget.setAttribute('srcdoc', '<p>blocked</p>'),
+    "Failed to execute 'setAttribute' on 'Element': This document requires 'TrustedHTML' assignment.",
+  );
+  expectTTError(
+    () => scriptTarget.setAttribute('src', '/blocked.js'),
+    "Failed to execute 'setAttribute' on 'Element': This document requires 'TrustedScriptURL' assignment.",
+  );
+  expectTTError(
+    () => target.setAttribute('onclick', 'blocked()'),
+    "Failed to execute 'setAttribute' on 'Element': This document requires 'TrustedScript' assignment.",
+  );
+  expectTTError(
+    () => target.setAttributeNS(null, 'onclick', 'blocked()'),
+    "Failed to execute 'setAttributeNS' on 'Element': This document requires 'TrustedScript' assignment.",
+  );
+  testing.expectEqual(null, target.getAttribute('onclick'));
+
+  const functionTimer = setTimeout(() => {}, 1000);
+  clearTimeout(functionTimer);
+  const delaySentinel = new RangeError('delay conversion sentinel');
+  const delayError = captureTT(() => setTimeout('void 0', {
+    valueOf() { throw delaySentinel; },
+  }));
+  testing.expectEqual(delaySentinel, delayError);
+  expectTTError(
+    () => setTimeout('void 0', 1000),
+    "Failed to execute 'setTimeout' on 'Window': This document requires 'TrustedScript' assignment.",
+  );
+  expectTTError(
+    () => setInterval('void 0', 1000),
+    "Failed to execute 'setInterval' on 'Window': This document requires 'TrustedScript' assignment.",
+  );
+
+  // The response allowlist deliberately permits duplicate ordinary names.
+  trustedTypes.createPolicy('repeatable', { createHTML: input => input });
+  trustedTypes.createPolicy('repeatable', { createHTML: input => input });
+  expectTTError(
+    () => trustedTypes.createPolicy('colon:name', {}),
+    'Failed to execute \'createPolicy\' on \'TrustedTypePolicyFactory\': Policy "colon:name" disallowed.',
+  );
+
+  const policy = trustedTypes.createPolicy('fixture-html', {
+    createHTML(input) { return `<strong>${input}</strong>`; },
+  });
+  const scriptPolicy = trustedTypes.createPolicy('fixture-script', {
+    createScript: input => `/*trusted*/${input}`,
+    createScriptURL: input => `/trusted/${input}`,
+  });
+  target.innerHTML = policy.createHTML('native-brand');
+  testing.expectEqual('<strong>native-brand</strong>', target.innerHTML);
+  scriptTarget.text = scriptPolicy.createScript('code');
+  testing.expectEqual('/*trusted*/code', scriptTarget.text);
+  scriptTarget.src = scriptPolicy.createScriptURL('script.js');
+  testing.expectEqual('/trusted/script.js', scriptTarget.getAttribute('src'));
+  iframeTarget.srcdoc = policy.createHTML('frame');
+  testing.expectEqual('<strong>frame</strong>', iframeTarget.getAttribute('srcdoc'));
+  target.setAttribute('onclick', scriptPolicy.createScript('handler'));
+  testing.expectEqual('/*trusted*/handler', target.getAttribute('onclick'));
+  const trustedTimer = setTimeout(scriptPolicy.createScript('void 0'), 1000);
+  clearTimeout(trustedTimer);
+
+  const defaultCalls = [];
+  trustedTypes.createPolicy('default', {
+    createHTML(input, type, sink) {
+      defaultCalls.push([input, type, sink]);
+      return `<mark>${input}</mark>`;
+    },
+    createScript(input, type, sink) {
+      defaultCalls.push([input, type, sink]);
+      return `/*default*/${input}`;
+    },
+    createScriptURL(input, type, sink) {
+      defaultCalls.push([input, type, sink]);
+      return `/default/${input.replace(/^\//, '')}`;
+    },
+  });
+  target.innerHTML = 'default-input';
+  testing.expectEqual('<mark>default-input</mark>', target.innerHTML);
+  scriptTarget.textContent = 'script-input';
+  testing.expectEqual('/*default*/script-input', scriptTarget.textContent);
+  scriptTarget.src = '/url-input.js';
+  testing.expectEqual('/default/url-input.js', scriptTarget.getAttribute('src'));
+  iframeTarget.setAttribute('srcdoc', 'frame-input');
+  testing.expectEqual('<mark>frame-input</mark>', iframeTarget.getAttribute('srcdoc'));
+  target.setAttributeNS(null, 'onclick', 'handler-input');
+  testing.expectEqual('/*default*/handler-input', target.getAttribute('onclick'));
+  const defaultTimeout = setTimeout('void 0', 1000);
+  clearTimeout(defaultTimeout);
+  const defaultInterval = setInterval('void 0', 1000);
+  clearInterval(defaultInterval);
+  testing.expectEqual(
+    [
+      ['default-input', 'TrustedHTML', 'Element innerHTML'],
+      ['script-input', 'TrustedScript', 'HTMLScriptElement textContent'],
+      ['/url-input.js', 'TrustedScriptURL', 'HTMLScriptElement src'],
+      ['frame-input', 'TrustedHTML', 'HTMLIFrameElement srcdoc'],
+      ['handler-input', 'TrustedScript', 'Element onclick'],
+      ['void 0', 'TrustedScript', 'Window setTimeout'],
+      ['void 0', 'TrustedScript', 'Window setInterval'],
+    ],
+    defaultCalls,
+  );
+  expectTTError(
+    () => trustedTypes.createPolicy('default', { createHTML: input => input }),
+    'Failed to execute \'createPolicy\' on \'TrustedTypePolicyFactory\': Policy with name "default" already exists.',
+  );
+});
+</script>
+</body>

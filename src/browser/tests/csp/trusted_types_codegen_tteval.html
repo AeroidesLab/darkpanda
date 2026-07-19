@@ -1,0 +1,21 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<script id="trusted-types-codegen-tteval">
+  const defaultCalls = [];
+  trustedTypes.createPolicy('default', {
+    createScript(...args) {
+      defaultCalls.push(args);
+      return args[0];
+    },
+  });
+  const policy = trustedTypes.createPolicy('codegen-values', {
+    createScript: input => input,
+  });
+
+  testing.expectEqual(41, eval('41'));
+  testing.expectEqual(42, Function('return 42')());
+  const trusted = policy.createScript('43');
+  testing.expectEqual(trusted, eval(trusted));
+  testing.expectEqual(44, Function(policy.createScript('return 44'))());
+  testing.expectEqual([], defaultCalls);
+</script>

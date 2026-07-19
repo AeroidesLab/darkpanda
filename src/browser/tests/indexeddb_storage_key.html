@@ -1,0 +1,206 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="testing.js"></script>
+
+<script id="indexeddb_immutable_storage_key" type="module">
+{
+  const state = await testing.async();
+  let step = 'main-start';
+
+  const openDatabase = (factory, name, version, upgrade) => new Promise((resolve, reject) => {
+    const request = version === undefined ? factory.open(name) : factory.open(name, version);
+    let upgraded = false;
+    request.onupgradeneeded = () => {
+      upgraded = true;
+      if (upgrade) upgrade(request.result);
+    };
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve({database: request.result, upgraded});
+  });
+
+  const deleteDatabase = (factory, name) => new Promise((resolve, reject) => {
+    const request = factory.deleteDatabase(name);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve();
+  });
+
+  const put = (database, key, value) => new Promise((resolve, reject) => {
+    const transaction = database.transaction('records', 'readwrite');
+    transaction.objectStore('records').put(value, key);
+    transaction.onabort = () => reject(transaction.error);
+    transaction.onerror = () => reject(transaction.error);
+    transaction.oncomplete = resolve;
+  });
+
+  const get = (database, key) => new Promise((resolve, reject) => {
+    const transaction = database.transaction('records', 'readonly');
+    const request = transaction.objectStore('records').get(key);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+  });
+
+  const workerResult = worker => new Promise((resolve, reject) => {
+    worker.onmessage = event => resolve(event.data);
+    worker.onerror = event => reject(new Error(event.message));
+  });
+
+  const run = async () => {
+    const factory = indexedDB;
+    const originalDomain = document.domain;
+
+    // The backend dispatch is asynchronous. Mutating both the same-document
+    // URL and its history entry before it runs must not redirect open(),
+    // databases(), or deleteDatabase() to another engine.
+    step = 'main-history-open';
+    const asyncName = 'storage-key-async-window';
+    const opening = openDatabase(factory, asyncName, 1, database => {
+      database.createObjectStore('records');
+    });
+    history.pushState(null, '', `${location.pathname}?storage-key-push#one`);
+    history.replaceState(null, '', `${location.pathname}?storage-key-replace#two`);
+
+    // Setting document.domain changes the effective scripting-origin key and
+    // drops its port. The already-created factory and in-flight request must
+    // remain bound to this Document's immutable storage key.
+    step = 'main-document-domain';
+    document.domain = document.domain;
+    const relaxedDomain = document.domain;
+
+    step = 'main-history-open-completion';
+    const opened = await opening;
+    await put(opened.database, 'marker', 'same-document');
+    opened.database.close();
+
+    step = 'main-history-databases-completion';
+    const listing = factory.databases();
+    const listed = (await listing).some(info => info.name === asyncName);
+
+    step = 'main-history-delete-completion';
+    const deleting = deleteDatabase(factory, asyncName);
+    await deleting;
+    const deleted = !(await factory.databases()).some(info => info.name === asyncName);
+
+    // Initial about:blank and srcdoc Documents inherit the creator's frozen
+    // storage key. All three realms must observe the same database and record.
+    step = 'inherited-about-blank';
+    const inheritedName = 'storage-key-inherited-document';
+    const parentOpen = await openDatabase(factory, inheritedName, 1, database => {
+      database.createObjectStore('records');
+    });
+    await put(parentOpen.database, 'creator', 'parent-value');
+    parentOpen.database.close();
+
+    const blank = document.createElement('iframe');
+    document.body.appendChild(blank);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const blankFactory = blank.contentWindow.indexedDB;
+    const blankListed = (await blankFactory.databases()).some(info => info.name === inheritedName);
+    const blankOpen = await openDatabase(blankFactory, inheritedName);
+    const blankValue = await get(blankOpen.database, 'creator');
+    blankOpen.database.close();
+
+    const srcdoc = document.createElement('iframe');
+    const srcdocLoaded = new Promise(resolve => srcdoc.onload = resolve);
+    srcdoc.srcdoc = '<!doctype html><p>storage-key child</p>';
+    document.body.appendChild(srcdoc);
+    step = 'inherited-srcdoc';
+    await srcdocLoaded;
+    const srcdocFactory = srcdoc.contentWindow.indexedDB;
+    const srcdocListed = (await srcdocFactory.databases()).some(info => info.name === inheritedName);
+    const srcdocOpen = await openDatabase(srcdocFactory, inheritedName);
+    const srcdocValue = await get(srcdocOpen.database, 'creator');
+    srcdocOpen.database.close();
+    await deleteDatabase(srcdocFactory, inheritedName);
+    const inheritedDeleted = !(await factory.databases()).some(info => info.name === inheritedName);
+    blank.remove();
+    srcdoc.remove();
+
+    // A Worker created after document.domain still inherits the creator
+    // Document's immutable storage key, not its relaxed scripting-origin key.
+    step = 'main-dedicated-worker';
+    const workerName = 'storage-key-dedicated-worker';
+    const workerOpen = await openDatabase(factory, workerName, 1, database => {
+      database.createObjectStore('records');
+    });
+    await put(workerOpen.database, 'page', 'written-by-page');
+    workerOpen.database.close();
+
+    const worker = new Worker(testing.BASE_URL + 'indexeddb-storage-key-worker.js');
+    const dedicated = await workerResult(worker);
+    worker.terminate();
+    const pageReopen = await openDatabase(factory, workerName);
+    const workerValue = await get(pageReopen.database, 'worker');
+    pageReopen.database.close();
+    await deleteDatabase(factory, workerName);
+
+    // data: workers have an opaque settings object. Backend methods are
+    // denied, but cmp() is a pure key operation and remains available.
+    step = 'opaque-data-worker';
+    const opaqueSource = `
+      (async () => {
+        let openError = null;
+        let deleteError = null;
+        let databasesError = null;
+        try { indexedDB.open('opaque-storage-key'); } catch (error) { openError = error.name; }
+        try { indexedDB.deleteDatabase('opaque-storage-key'); } catch (error) { deleteError = error.name; }
+        try { await indexedDB.databases(); } catch (error) { databasesError = error.name; }
+        postMessage({openError, deleteError, databasesError, cmp: indexedDB.cmp(1, 2)});
+      })();
+    `;
+    const opaqueWorker = new Worker('data:text/javascript,' + encodeURIComponent(opaqueSource));
+    const opaque = await workerResult(opaqueWorker);
+    opaqueWorker.terminate();
+
+    return {
+      factoryStable: factory === indexedDB,
+      asyncUpgraded: opened.upgraded,
+      listed,
+      deleted,
+      originalDomain,
+      relaxedDomain,
+      blankListed,
+      blankUpgraded: blankOpen.upgraded,
+      blankValue,
+      srcdocListed,
+      srcdocUpgraded: srcdocOpen.upgraded,
+      srcdocValue,
+      inheritedDeleted,
+      dedicated,
+      workerValue,
+      opaque,
+    };
+  };
+
+  run().then(state.resolve, error => state.resolve({fatal: `[${step}] ${error?.stack || String(error)}`}));
+
+  await state.done(result => {
+    testing.expectEqual(undefined, result.fatal);
+    testing.expectEqual(true, result.factoryStable);
+    testing.expectEqual(true, result.asyncUpgraded);
+    testing.expectEqual(true, result.listed);
+    testing.expectEqual(true, result.deleted);
+
+    testing.expectEqual(testing.HOST, result.originalDomain);
+    testing.expectEqual(testing.HOST, result.relaxedDomain);
+
+    testing.expectEqual(true, result.blankListed);
+    testing.expectEqual(false, result.blankUpgraded);
+    testing.expectEqual('parent-value', result.blankValue);
+    testing.expectEqual(true, result.srcdocListed);
+    testing.expectEqual(false, result.srcdocUpgraded);
+    testing.expectEqual('parent-value', result.srcdocValue);
+    testing.expectEqual(true, result.inheritedDeleted);
+
+    testing.expectEqual(undefined, result.dedicated.error);
+    testing.expectEqual(true, result.dedicated.listed);
+    testing.expectEqual('written-by-page', result.dedicated.pageValue);
+    testing.expectEqual(-1, result.dedicated.cmp);
+    testing.expectEqual('written-by-worker', result.workerValue);
+
+    testing.expectEqual('SecurityError', result.opaque.openError);
+    testing.expectEqual('SecurityError', result.opaque.deleteError);
+    testing.expectEqual('SecurityError', result.opaque.databasesError);
+    testing.expectEqual(-1, result.opaque.cmp);
+  });
+}
+</script>

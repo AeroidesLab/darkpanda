@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=replaceable>
+    "use strict";
+    // console is [Replaceable] (Console Standard): assignment must replace it
+    // even in strict mode — neither throwing nor silently no-op'ing, and even
+    // after console has already been read.
+    const prev = window.console;
+    window.console = {marker: 42};
+    testing.expectEqual(42, window.console.marker);
+    testing.expectEqual(42, console.marker);
+    // restore: console is now a writable data property, so this just overwrites it.
+    window.console = prev;
+    testing.expectEqual(true, window.console === prev);
+</script>
+
+<script id=entries>
+    {
+        const entries = Object.entries(console);
+        testing.expectEqual(true, entries.length > 10);
+
+        const log_entry = entries.find((e) => e[0] == 'log');
+        testing.expectEqual(true, log_entry[1] === console.log);
+    }
+</script>
+
+<script id="time">
+    // should not crash
+    console.time();
+    console.timeLog();
+    console.timeEnd();
+
+    console.time("test");
+    console.timeLog("test");
+    console.timeEnd("test");
+
+    testing.expectEqual(true, true);
+</script>
+
+<script id="count">
+    // should not crash
+    console.count();
+    console.count();
+    console.countReset();
+
+    console.count("test");
+    console.count("test");
+    console.countReset("test");
+
+    testing.expectEqual(true, true);
+</script>
+
+<script id="group">
+    // should not crash
+    console.group();
+    console.groupEnd();
+
+    console.group("outer");
+    console.group("inner");
+    console.log("nested");
+    console.groupEnd();
+    console.groupEnd();
+
+    console.groupCollapsed("collapsed");
+    console.log("inside collapsed");
+    console.groupEnd();
+
+    // groupEnd beyond depth 0 should not crash
+    console.groupEnd();
+
+    testing.expectEqual(true, true);
+</script>

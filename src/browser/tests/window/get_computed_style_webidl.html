@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="target" style="color: rgb(1, 2, 3)"></div>
+
+<script id="get_computed_style_webidl">
+{
+  // Chrome 149 / Blink generated bindings use
+  // NativeValueTraits<Element>::ArgumentValue for argument 0 and Web IDL
+  // DOMString conversion for the optional pseudo-element argument.
+  const target = document.getElementById('target');
+  const method = window.getComputedStyle;
+
+  const capture = callback => {
+    try {
+      callback();
+    } catch (error) {
+      return error;
+    }
+    testing.fail('expected a TypeError');
+  };
+
+  const verify = (error, message, stack) => {
+    testing.expectEqual('TypeError', error.name);
+    testing.expectEqual(message, error.message);
+    testing.expectEqual(stack, String(error.stack).split('\n')[0]);
+  };
+
+  verify(
+    capture(() => method()),
+    "Failed to execute 'getComputedStyle' on 'Window': 1 argument required, but only 0 present.",
+    'TypeError: 1 argument required, but only 0 present.',
+  );
+
+  const elementTypeMessage =
+    "Failed to execute 'getComputedStyle' on 'Window': parameter 1 is not of type 'Element'.";
+  for (const value of [null, undefined, document, {}]) {
+    verify(
+      capture(() => method(value)),
+      elementTypeMessage,
+      "TypeError: parameter 1 is not of type 'Element'.",
+    );
+  }
+
+  verify(
+    capture(() => method(target, Symbol('before'))),
+    "Failed to execute 'getComputedStyle' on 'Window': Cannot convert a Symbol value to a string",
+    'TypeError: Cannot convert a Symbol value to a string',
+  );
+
+  // V8's receiver Signature runs before the callback's argument checks and
+  // conversions. Native functions substitute the Window global for a null
+  // receiver, matching Chrome's non-strict Web IDL callback behavior.
+  verify(
+    capture(() => Reflect.apply(method, {}, [])),
+    'Illegal invocation',
+    'TypeError: Illegal invocation',
+  );
+  verify(
+    capture(() => Reflect.apply(method, {}, [target, Symbol('before')])),
+    'Illegal invocation',
+    'TypeError: Illegal invocation',
+  );
+  verify(
+    capture(() => Reflect.apply(method, null, [])),
+    "Failed to execute 'getComputedStyle' on 'Window': 1 argument required, but only 0 present.",
+    'TypeError: 1 argument required, but only 0 present.',
+  );
+  testing.expectEqual(
+    'rgb(1, 2, 3)',
+    Reflect.apply(method, null, [target]).color,
+  );
+}
+</script>

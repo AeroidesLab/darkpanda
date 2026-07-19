@@ -1,0 +1,592 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+const std = @import("std");
+const lp = @import("darkpanda");
+
+const js = @import("../../js/js.zig");
+const URL = @import("../../URL.zig");
+const Page = @import("../../Page.zig");
+const HttpClient = @import("../../HttpClient.zig");
+
+const Blob = @import("../Blob.zig");
+const ReadableStream = @import("../streams/ReadableStream.zig");
+
+const Headers = @import("Headers.zig");
+const body_init = @import("body_init.zig");
+
+const Execution = js.Execution;
+const Allocator = std.mem.Allocator;
+
+const Response = @This();
+
+pub const Type = enum {
+    basic,
+    cors,
+    default,
+    @"error",
+    @"opaque",
+    opaqueredirect,
+};
+
+_rc: lp.RC(u8) = .{},
+_status: u16,
+_arena: Allocator,
+_headers: *Headers,
+_body: Body = .empty,
+_type: Type,
+_status_text: []const u8,
+_url: [:0]const u8,
+_is_redirected: bool,
+_http_response: ?HttpClient.Response = null,
+_body_used: bool = false,
+// The Body mixin exposes one stable ReadableStream object. Keep it separate
+// from `_body` so byte-backed convenience methods can still consume the
+// original bytes without manufacturing a fresh stream on every `.body` read.
+_body_stream: ?*ReadableStream = null,
+
+const Body = union(enum) {
+    empty,
+    bytes: []const u8,
+    stream: *ReadableStream,
+};
+
+const InitOpts = struct {
+    status: u16 = 200,
+    headers: ?Headers.InitOpts = null,
+    statusText: ?[]const u8 = null,
+};
+
+pub const BodyInit = body_init.BodyInit;
+
+pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Response {
+    const session = exec.session;
+    const arena = try session.getArena(.large, "Response");
+    errdefer session.releaseArena(arena);
+
+    const opts = opts_ orelse InitOpts{};
+    const status_text = if (opts.statusText) |st| try arena.dupe(u8, st) else "";
+
+    var content_type: ?[]const u8 = null;
+    const body: Body = blk: {
+        const b = body_ orelse break :blk .empty;
+        switch (b) {
+            .stream => |stream| break :blk .{ .stream = stream },
+            else => {
+                const extracted = try b.extract(arena);
+                content_type = extracted.content_type;
+                break :blk .{ .bytes = extracted.bytes };
+            },
+        }
+    };
+
+    const headers = try Headers.init(opts.headers, exec);
+    if (content_type) |ct| {
+        if (!(try headers.has("content-type", exec))) {
+            try headers.append("content-type", ct, exec);
+        }
+    }
+
+    const self = try arena.create(Response);
+    self.* = .{
+        ._arena = arena,
+        ._status = opts.status,
+        ._status_text = status_text,
+        ._url = "",
+        ._body = body,
+        ._type = .default,
+        ._is_redirected = false,
+        ._headers = headers,
+    };
+    return self;
+}
+
+pub fn createError(exec: *const Execution) !*Response {
+    const session = exec.session;
+    const arena = try session.getArena(.large, "Response.error");
+    errdefer session.releaseArena(arena);
+
+    const headers = try Headers.init(null, exec);
+    headers.setGuard(.immutable);
+    const self = try arena.create(Response);
+    self.* = .{
+        ._arena = arena,
+        ._status = 0,
+        ._status_text = "",
+        ._url = "",
+        ._body = .empty,
+        ._type = .@"error",
+        ._is_redirected = false,
+        ._headers = headers,
+    };
+    return self;
+}
+
+pub fn createRedirect(url_: []const u8, status_: ?u16, exec: *const Execution) !*Response {
+    const status = status_ orelse 302;
+    switch (status) {
+        301, 302, 303, 307, 308 => {},
+        else => return error.RangeError,
+    }
+
+    const session = exec.session;
+    const arena = try session.getArena(.large, "Response.redirect");
+    errdefer session.releaseArena(arena);
+
+    const location = try URL.resolve(arena, exec.base(), url_, .{ .encoding = exec.charset.* });
+
+    const headers = try Headers.init(null, exec);
+    try headers.set("location", location, exec);
+    headers.setGuard(.immutable);
+
+    const self = try arena.create(Response);
+    self.* = .{
+        ._arena = arena,
+        ._status = status,
+        ._status_text = "",
+        ._url = "",
+        ._body = .empty,
+        ._type = .default,
+        ._is_redirected = false,
+        ._headers = headers,
+    };
+    return self;
+}
+
+pub fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Response {
+    const session = exec.session;
+    const arena = try session.getArena(.medium, "Response.json");
+    errdefer session.releaseArena(arena);
+
+    const json = data.toJson(arena) catch |err| switch (err) {
+        error.JsException => return error.TryCatchRethrow,
+        else => return err,
+    };
+    if (std.mem.eql(u8, json, "undefined")) {
+        return error.TypeError;
+    }
+
+    const opts = opts_ orelse InitOpts{};
+    const status_text = if (opts.statusText) |st| try arena.dupe(u8, st) else "";
+
+    const headers = try Headers.init(opts.headers, exec);
+    if (!(try headers.has("content-type", exec))) {
+        try headers.append("content-type", "application/json", exec);
+    }
+
+    const self = try arena.create(Response);
+    self.* = .{
+        ._arena = arena,
+        ._status = opts.status,
+        ._status_text = status_text,
+        ._url = "",
+        ._body = .{ .bytes = json },
+        ._type = .default,
+        ._is_redirected = false,
+        ._headers = headers,
+    };
+    return self;
+}
+
+pub fn deinit(self: *Response, page: *Page) void {
+    if (self._http_response) |resp| {
+        resp.abort(error.Abort);
+        self._http_response = null;
+    }
+    page.releaseArena(self._arena);
+}
+
+pub fn releaseRef(self: *Response, page: *Page) void {
+    self._rc.release(self, page);
+}
+
+pub fn acquireRef(self: *Response) void {
+    self._rc.acquire();
+}
+
+pub fn getStatus(self: *const Response) u16 {
+    return self._status;
+}
+
+pub fn getStatusText(self: *const Response) []const u8 {
+    return self._status_text;
+}
+
+pub fn getURL(self: *const Response) []const u8 {
+    return self._url;
+}
+
+pub fn isRedirected(self: *const Response) bool {
+    return self._is_redirected;
+}
+
+pub fn getHeaders(self: *const Response) *Headers {
+    return self._headers;
+}
+
+pub fn getType(self: *const Response) []const u8 {
+    return @tagName(self._type);
+}
+
+pub fn getBody(self: *Response, exec: *const Execution) !?*ReadableStream {
+    return switch (self._body) {
+        .empty => null,
+        .stream => |stream| stream,
+        .bytes => |body| {
+            if (self._body_stream) |stream| return stream;
+            if (body.len == 0) {
+                const stream = try ReadableStream.init(null, null, exec);
+                try stream._controller.close();
+                self._body_stream = stream;
+                return stream;
+            }
+            const stream = try ReadableStream.initWithData(body, exec);
+            self._body_stream = stream;
+            return stream;
+        },
+    };
+}
+
+pub fn isOK(self: *const Response) bool {
+    return self._status >= 200 and self._status <= 299;
+}
+
+pub fn getBodyUsed(self: *const Response) bool {
+    return switch (self._body) {
+        .empty => false,
+        .stream => |stream| self._body_used or stream._disturbed,
+        .bytes => self._body_used or if (self._body_stream) |stream| stream._disturbed else false,
+    };
+}
+
+pub fn isBodyLocked(self: *const Response) bool {
+    return switch (self._body) {
+        .empty => false,
+        .stream => |stream| stream.getLocked(),
+        .bytes => if (self._body_stream) |stream| stream.getLocked() else false,
+    };
+}
+
+pub const WasmBody = union(enum) {
+    bytes: []const u8,
+    stream: *ReadableStream,
+};
+
+pub const WasmStreamingError = error{
+    HttpStatusNotOk,
+    IncorrectMimeType,
+    BodyUnavailable,
+    EmptyBody,
+};
+
+/// Chromium's WebAssembly streaming embedder validation, kept on Response so
+/// it uses the same body state as all other Body-mixin consumers. A successful
+/// call disturbs/claims the body exactly once.
+pub fn beginWasmStreaming(self: *Response, exec: *const Execution) (WasmStreamingError || Allocator.Error)!WasmBody {
+    if (!self.isOK()) return error.HttpStatusNotOk;
+
+    const content_type = try self._headers.getByNormalizedName("content-type", exec.call_arena);
+    if (content_type == null or !std.ascii.eqlIgnoreCase(content_type.?, "application/wasm")) {
+        return error.IncorrectMimeType;
+    }
+
+    if (self.isBodyLocked() or self.getBodyUsed()) {
+        return error.BodyUnavailable;
+    }
+
+    return switch (self._body) {
+        .empty => error.EmptyBody,
+        .bytes => |body| blk: {
+            self._body_used = true;
+            if (self._body_stream) |stream| stream._disturbed = true;
+            break :blk .{ .bytes = body };
+        },
+        .stream => |stream| blk: {
+            self._body_used = true;
+            break :blk .{ .stream = stream };
+        },
+    };
+}
+
+// Marks a present body consumed; returns a rejected promise if it already was.
+fn consume(self: *Response, local: *const js.Local) ?js.Promise {
+    switch (self._body) {
+        .empty => return null,
+        else => {},
+    }
+    if (self.isBodyLocked() or self.getBodyUsed()) {
+        return local.rejectPromise(.{ .type_error = "Body has already been read" });
+    }
+    self._body_used = true;
+    if (self._body_stream) |stream| stream._disturbed = true;
+    return null;
+}
+
+pub fn getText(self: *Response, exec: *const Execution) !js.Promise {
+    const local = exec.js.local.?;
+    if (self.consume(local)) |rejected| {
+        return rejected;
+    }
+
+    const body = switch (self._body) {
+        .bytes => |b| body_init.stripUtf8Bom(b),
+        .empty => "",
+        .stream => return local.rejectPromise(.{ .type_error = "Cannot read text from stream body" }),
+    };
+    return local.resolvePromise(body);
+}
+
+pub fn getJson(self: *Response, exec: *const Execution) !js.Promise {
+    const local = exec.js.local.?;
+    if (self.consume(local)) |rejected| {
+        return rejected;
+    }
+
+    const body = switch (self._body) {
+        .bytes => |b| body_init.stripUtf8Bom(b),
+        .empty => "",
+        .stream => return local.rejectPromise(.{ .type_error = "Cannot read JSON from stream body" }),
+    };
+    const value = local.parseJSON(body) catch {
+        return local.rejectPromise(.{ .syntax_error = "failed to parse" });
+    };
+    return local.resolvePromise(try value.persist());
+}
+
+pub fn arrayBuffer(self: *Response, exec: *const Execution) !js.Promise {
+    const local = exec.js.local.?;
+    if (self.consume(local)) |rejected| {
+        return rejected;
+    }
+
+    return switch (self._body) {
+        .bytes => |body| local.resolvePromise(js.ArrayBuffer{ .values = body }),
+        .empty => local.resolvePromise(js.ArrayBuffer{ .values = "" }),
+        .stream => |stream| StreamConsumer.start(stream, exec),
+    };
+}
+
+/// Async consumer for reading all data from a ReadableStream
+const StreamConsumer = struct {
+    const ReadableStreamDefaultReader = @import("../streams/ReadableStreamDefaultReader.zig");
+
+    execution: *const Execution,
+    total_len: usize,
+    arena: Allocator,
+    reader: *ReadableStreamDefaultReader,
+    chunks: std.ArrayList([]const u8),
+    resolver: js.PromiseResolver.Global,
+
+    fn start(stream: *ReadableStream, exec: *const Execution) !js.Promise {
+        const local = exec.js.local.?;
+        var resolver = local.createPromiseResolver();
+        const promise = resolver.promise();
+
+        const reader = try stream.getReader(exec);
+
+        const state = try exec.arena.create(StreamConsumer);
+        state.* = .{
+            .execution = exec,
+            .reader = reader,
+            .chunks = .empty,
+            .total_len = 0,
+            .arena = exec.arena,
+            .resolver = try resolver.persist(),
+        };
+
+        try state.pumpRead();
+        return promise;
+    }
+
+    fn pumpRead(self: *StreamConsumer) !void {
+        const local = self.execution.js.local.?;
+        const read_promise = try self.reader.read(self.execution);
+
+        const then_fn = local.newCallback(onReadFulfilled, self);
+        const catch_fn = local.newCallback(onReadRejected, self);
+
+        _ = read_promise.thenAndCatch(then_fn, catch_fn) catch {
+            self.finish(local, null);
+        };
+    }
+
+    const ReadData = struct {
+        done: bool,
+        value: js.Value,
+    };
+
+    fn onReadFulfilled(self: *StreamConsumer, data_: ?ReadData) void {
+        const local = self.execution.js.local.?;
+
+        const data = data_ orelse {
+            return self.finish(local, null);
+        };
+
+        self._onReadFulfilled(data) catch {
+            self.finish(local, null);
+        };
+    }
+
+    fn _onReadFulfilled(self: *StreamConsumer, data: ReadData) !void {
+        const exec = self.execution;
+        const local = exec.js.local.?;
+
+        if (data.done) {
+            // Stream is finished, concatenate all chunks and resolve
+            self.reader.releaseLock();
+            const result = try self.concatenateChunks(exec.call_arena);
+            local.toLocal(self.resolver).resolve("arrayBuffer complete", js.ArrayBuffer{ .values = result });
+            return;
+        }
+
+        // Collect the chunk data
+        const value = data.value;
+        if (!value.isUndefined()) {
+            // Try to get bytes from the value (could be Uint8Array or string)
+            if (value.isTypedArray() or value.isArrayBufferView() or value.isArrayBuffer()) {
+                if (local.jsValueToZig([]u8, value)) |typed_data| {
+                    const chunk_copy = try self.arena.dupe(u8, typed_data);
+                    try self.chunks.append(self.arena, chunk_copy);
+                    self.total_len += chunk_copy.len;
+                } else |_| {}
+            } else if (value.isString()) |str| {
+                const slice = try str.toSlice();
+                const chunk_copy = try self.arena.dupe(u8, slice);
+                try self.chunks.append(self.arena, chunk_copy);
+                self.total_len += chunk_copy.len;
+            }
+        }
+        try self.pumpRead();
+    }
+
+    fn onReadRejected(self: *StreamConsumer) void {
+        self.finish(self.execution.js.local.?, null);
+    }
+
+    fn concatenateChunks(self: *StreamConsumer, allocator: Allocator) ![]const u8 {
+        if (self.chunks.items.len == 0) {
+            return "";
+        }
+        if (self.chunks.items.len == 1) {
+            return self.chunks.items[0];
+        }
+        return std.mem.join(allocator, "", self.chunks.items);
+    }
+
+    fn finish(self: *StreamConsumer, local: *const js.Local, err: ?[]const u8) void {
+        self.reader.releaseLock();
+        local.toLocal(self.resolver).rejectError("arrayBuffer error", .{ .type_error = err orelse "Failed to read stream" });
+    }
+};
+
+pub fn blob(self: *Response, exec: *const Execution) !js.Promise {
+    const local = exec.js.local.?;
+    if (self.consume(local)) |rejected| return rejected;
+    const body = switch (self._body) {
+        .bytes => |b| b,
+        .empty => "",
+        .stream => return local.rejectPromise(.{ .type_error = "Cannot read blob from stream body" }),
+    };
+    const content_type = try self._headers.get("content-type", exec) orelse "";
+    const b = try Blob.initFromBytes(body, content_type, exec.page);
+    return local.resolvePromise(b);
+}
+
+pub fn bytes(self: *Response, exec: *const Execution) !js.Promise {
+    const local = exec.js.local.?;
+    if (self.consume(local)) |rejected| return rejected;
+    const body = switch (self._body) {
+        .bytes => |b| b,
+        .empty => "",
+        .stream => return local.rejectPromise(.{ .type_error = "Cannot read bytes from stream body" }),
+    };
+    return local.resolvePromise(js.TypedArray(u8){ .values = body });
+}
+
+pub fn clone(self: *const Response, exec: *const Execution) !*Response {
+    const session = exec.session;
+    const body_len = switch (self._body) {
+        .bytes => |b| b.len,
+        .empty => 0,
+        .stream => 0,
+    };
+    const arena = try session.getArena(body_len + self._url.len + 256, "Response.clone");
+    errdefer session.releaseArena(arena);
+
+    const body: Body = switch (self._body) {
+        .bytes => |b| .{ .bytes = try arena.dupe(u8, b) },
+        .empty => .empty,
+        .stream => .empty, // TODO: implement stream tee for proper cloning
+    };
+    const status_text = try arena.dupe(u8, self._status_text);
+    const url = try arena.dupeZ(u8, self._url);
+
+    const cloned_headers = try Headers.init(.{ .obj = self._headers }, exec);
+    cloned_headers.setGuard(self._headers._guard);
+    const cloned = try arena.create(Response);
+    cloned.* = .{
+        ._arena = arena,
+        ._status = self._status,
+        ._status_text = status_text,
+        ._url = url,
+        ._body = body,
+        ._type = self._type,
+        ._is_redirected = self._is_redirected,
+        ._headers = cloned_headers,
+        ._http_response = null,
+    };
+    return cloned;
+}
+
+pub const JsApi = struct {
+    pub const bridge = js.Bridge(Response);
+
+    pub const Meta = struct {
+        pub const name = "Response";
+        pub const prototype_chain = bridge.prototypeChain();
+        pub var class_id: bridge.ClassId = undefined;
+    };
+
+    pub const constructor = bridge.constructor(Response.init, .{});
+
+    pub const @"error" = bridge.function(Response.createError, .{ .static = true });
+    pub const redirect = bridge.function(Response.createRedirect, .{ .static = true });
+    // Response.json (staticc) conflicts with resposne.json, hence the `js_name` option
+    pub const json_static = bridge.function(Response.createJson, .{ .static = true, .js_name = "json" });
+
+    pub const ok = bridge.accessor(Response.isOK, null, .{});
+    pub const status = bridge.accessor(Response.getStatus, null, .{});
+    pub const statusText = bridge.accessor(Response.getStatusText, null, .{});
+    pub const @"type" = bridge.accessor(Response.getType, null, .{});
+    pub const text = bridge.function(Response.getText, .{});
+    pub const json = bridge.function(Response.getJson, .{});
+    pub const headers = bridge.accessor(Response.getHeaders, null, .{});
+    pub const body = bridge.accessor(Response.getBody, null, .{});
+    pub const bodyUsed = bridge.accessor(Response.getBodyUsed, null, .{});
+    pub const url = bridge.accessor(Response.getURL, null, .{});
+    pub const redirected = bridge.accessor(Response.isRedirected, null, .{});
+    pub const arrayBuffer = bridge.function(Response.arrayBuffer, .{});
+    pub const blob = bridge.function(Response.blob, .{});
+    pub const bytes = bridge.function(Response.bytes, .{});
+    pub const clone = bridge.function(Response.clone, .{});
+};
+
+const testing = @import("../../../testing.zig");
+test "WebApi: Response" {
+    try testing.htmlRunner("net/response.html", .{});
+}

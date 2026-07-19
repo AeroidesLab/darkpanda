@@ -1,0 +1,196 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+const js = @import("../../js/js.zig");
+
+const WritableStreamDefaultWriter = @import("WritableStreamDefaultWriter.zig");
+const WritableStreamDefaultController = @import("WritableStreamDefaultController.zig");
+const TransformStream = @import("TransformStream.zig");
+
+const Execution = js.Execution;
+
+const WritableStream = @This();
+
+pub const State = enum {
+    writable,
+    closed,
+    errored,
+};
+
+_state: State,
+_writer: ?*WritableStreamDefaultWriter,
+_controller: *WritableStreamDefaultController,
+_stored_error: ?[]const u8,
+_stored_error_value: ?js.Value.Global,
+_write_fn: ?js.Function.Global,
+_close_fn: ?js.Function.Global,
+_transform_stream: ?*TransformStream,
+
+const UnderlyingSink = struct {
+    start: ?js.Function = null,
+    write: ?js.Function.Global = null,
+    close: ?js.Function.Global = null,
+    abort: ?js.Function.Global = null,
+    type: ?[]const u8 = null,
+};
+
+pub fn init(sink_: ?UnderlyingSink, exec: *const Execution) !*WritableStream {
+    const self = try exec._factory.create(WritableStream{
+        ._state = .writable,
+        ._writer = null,
+        ._controller = undefined,
+        ._stored_error = null,
+        ._stored_error_value = null,
+        ._write_fn = null,
+        ._close_fn = null,
+        ._transform_stream = null,
+    });
+
+    self._controller = try WritableStreamDefaultController.init(self, exec);
+
+    if (sink_) |sink| {
+        if (sink.start) |start| {
+            try start.call(void, .{self._controller});
+        }
+        self._write_fn = sink.write;
+        self._close_fn = sink.close;
+    }
+
+    return self;
+}
+
+pub fn initForTransform(transform_stream: *TransformStream, exec: *const Execution) !*WritableStream {
+    const self = try exec._factory.create(WritableStream{
+        ._state = .writable,
+        ._writer = null,
+        ._controller = undefined,
+        ._stored_error = null,
+        ._stored_error_value = null,
+        ._write_fn = null,
+        ._close_fn = null,
+        ._transform_stream = transform_stream,
+    });
+
+    self._controller = try WritableStreamDefaultController.init(self, exec);
+    return self;
+}
+
+pub fn getWriter(self: *WritableStream, exec: *const Execution) !*WritableStreamDefaultWriter {
+    if (self.getLocked()) {
+        return error.WriterLocked;
+    }
+
+    const writer = try WritableStreamDefaultWriter.init(self, exec);
+    self._writer = writer;
+    return writer;
+}
+
+pub fn getLocked(self: *const WritableStream) bool {
+    return self._writer != null;
+}
+
+pub fn writeChunk(self: *WritableStream, chunk: js.Value, exec: *const Execution) !void {
+    if (self._state != .writable) return;
+
+    if (self._transform_stream) |ts| {
+        try ts.transformWrite(chunk, exec);
+        return;
+    }
+
+    if (self._write_fn) |write_fn| {
+        var ls: js.Local.Scope = undefined;
+        exec.js.localScope(&ls);
+        defer ls.deinit();
+
+        try ls.toLocal(write_fn).callRethrow(void, .{ chunk, self._controller });
+    }
+}
+
+pub fn closeStream(self: *WritableStream, exec: *const Execution) !void {
+    if (self._state != .writable) return;
+
+    if (self._transform_stream) |ts| {
+        try ts.transformClose(exec);
+        self._state = .closed;
+        return;
+    }
+
+    if (self._close_fn) |close_fn| {
+        var ls: js.Local.Scope = undefined;
+        exec.js.localScope(&ls);
+        defer ls.deinit();
+
+        try ls.toLocal(close_fn).callRethrow(void, .{self._controller});
+    }
+
+    self._state = .closed;
+}
+
+pub fn errorWithValue(self: *WritableStream, reason: js.Value) !void {
+    if (self._state != .writable) return;
+    self._state = .errored;
+    self._stored_error_value = try reason.persist();
+}
+
+/// Convert a failed sink/transform operation into its JavaScript rejection
+/// reason and error both sides of a TransformStream with that exact object.
+pub fn failOperation(
+    self: *WritableStream,
+    local: *const js.Local,
+    try_catch: *js.TryCatch,
+    err: anyerror,
+) !js.Value {
+    const reason = try_catch.exceptionValue() orelse js.Value{
+        .local = local,
+        .handle = switch (err) {
+            error.InvalidBufferSource => local.isolate.createTypeError("The provided value is not of type '(ArrayBuffer or ArrayBufferView)'."),
+            error.InvalidEncodedData => local.isolate.createTypeError("The encoded data was not valid."),
+            error.TypeError => local.isolate.createTypeError(""),
+            error.RangeError => local.isolate.createRangeError(""),
+            error.OutOfMemory => local.isolate.createError("out of memory"),
+            else => local.isolate.createError(@errorName(err)),
+        },
+    };
+
+    if (self._transform_stream) |transform| {
+        try transform.errorWithValue(reason);
+    } else {
+        try self.errorWithValue(reason);
+    }
+    return reason;
+}
+
+pub const JsApi = struct {
+    pub const bridge = js.Bridge(WritableStream);
+
+    pub const Meta = struct {
+        pub const name = "WritableStream";
+        pub const prototype_chain = bridge.prototypeChain();
+        pub var class_id: bridge.ClassId = undefined;
+    };
+
+    pub const constructor = bridge.constructor(WritableStream.init, .{});
+    pub const getWriter = bridge.function(WritableStream.getWriter, .{});
+    pub const locked = bridge.accessor(WritableStream.getLocked, null, .{});
+};
+
+pub fn registerTypes() []const type {
+    return &.{
+        WritableStream,
+    };
+}

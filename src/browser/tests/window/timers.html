@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=setInterval type=module>
+  {
+    const state = await testing.async();
+
+    let set_interval1 = false
+    let timer1 = window.setInterval(function() {
+      set_interval1 = true;
+      testing.expectEqual(window, this);
+    }, 1);
+
+    let set_interval2 = false
+    let timer2 = window.setInterval(function() {
+      set_interval2 = true;
+    }, 1)
+    window.clearInterval(timer2);
+
+    testing.expectEqual(true, timer1 != timer2);
+
+    window.setTimeout(() => {
+      state.resolve()
+    }, 5);
+
+    await state.done(() => {
+      testing.expectEqual(true, set_interval1);
+      testing.expectEqual(false, set_interval2);
+    });
+  }
+</script>
+
+<script id=setInterval-zero-clamps-after-six type=module>
+  {
+    const state = await testing.async();
+    let count = 0;
+    let interval;
+
+    interval = setInterval(() => {
+      count++;
+      if (count === 1) {
+        // The first six interval tasks are eligible immediately in Chrome 149.
+        // The seventh is 4 ms-clamped. A 2 ms sentinel therefore observes six
+        // callbacks without depending on sub-millisecond performance.now()
+        // thresholds.
+        setTimeout(() => {
+          clearInterval(interval);
+          state.resolve(count);
+        }, 2);
+      }
+    }, 0);
+
+    await state.done((count) => testing.expectEqual(6, count));
+  }
+</script>
+
+<script id=timer-nesting-crosses-microtasks-but-not-message-tasks type=module>
+  {
+    const state = await testing.async();
+    const channel = new MessageChannel();
+    const order = [];
+    let completed = 0;
+    const watchdog = setTimeout(() => state.resolve(['watchdog']), 100);
+
+    const record = (value) => {
+      order.push(value);
+      if (++completed !== 2) return;
+      clearTimeout(watchdog);
+      channel.port1.close();
+      channel.port2.close();
+      state.resolve(order);
+    };
+
+    channel.port1.onmessage = () => {
+      // MessagePort delivery is a new task, so this timer starts at nesting 1
+      // and remains immediate.
+      setTimeout(() => record('message-task-timer'), 0);
+    };
+
+    const nest = (level) => {
+      if (level < 6) {
+        setTimeout(() => nest(level + 1), 0);
+        return;
+      }
+
+      // A microtask checkpoint is still part of the sixth timer task. The
+      // timer it creates has nesting 7 and is therefore delayed by 4 ms.
+      queueMicrotask(() => {
+        setTimeout(() => record('microtask-timer'), 0);
+      });
+      channel.port2.postMessage(null);
+    };
+    setTimeout(() => nest(1), 0);
+
+    await state.done((order) => {
+      testing.expectEqual(
+        ['message-task-timer', 'microtask-timer'],
+        order,
+      );
+    });
+  }
+</script>
+
+<script id=setTimeout type=module>
+  const state = await testing.async();
+
+  testing.expectEqual(1, window.setTimeout.length);
+  let wst2 = 1;
+
+  window.setTimeout((a, b) => {
+    wst2 = a + b;
+    state.resolve();
+  }, 1, 2, 3);
+
+  await state.done(() => testing.expectEqual(5, wst2));
+</script>
+
+<script id=invalid-timer-clear>
+  // Surprisingly, these don't fail but silently ignored.
+  clearTimeout(-1);
+  clearInterval(-2);
+  testing.expectEqual(0, setTimeout('', 0));
+  testing.expectEqual(0, setInterval('', 0));
+  testing.expectEqual('undefined', typeof window.setImmediate);
+  testing.expectEqual('undefined', typeof window.clearImmediate);
+  testing.expectEqual(true, true);
+</script>
+
+<script id=requestIdleCallback-deadline type=module>
+  {
+    const state = await testing.async();
+    const result = {
+      counts: { hundred: 0, zero: 0, busy: 0, once: 0, cancel: 0, self: 0 },
+    };
+    let completed = 0;
+    let selfId;
+
+    const completeOne = () => {
+      // Wait past every competing timeout arm. A broken loser/cancel path
+      // increments one of the counters before the result is captured.
+      if (++completed === 5) setTimeout(() => state.resolve(result), 130);
+    };
+
+    requestIdleCallback((deadline) => {
+      result.hundred = {
+        didTimeout: deadline.didTimeout,
+        remaining: deadline.timeRemaining(),
+        own: Object.getOwnPropertyNames(deadline),
+        prototype: Object.getOwnPropertyNames(IdleDeadline.prototype),
+      };
+      result.counts.hundred++;
+      completeOne();
+    }, { timeout: 100 });
+
+    requestIdleCallback((deadline) => {
+      result.zero = { didTimeout: deadline.didTimeout, remaining: deadline.timeRemaining() };
+      result.counts.zero++;
+      completeOne();
+    }, { timeout: 0 });
+
+    requestIdleCallback((deadline) => {
+      result.busy = { didTimeout: deadline.didTimeout, remaining: deadline.timeRemaining() };
+      result.counts.busy++;
+      completeOne();
+    }, { timeout: 5 });
+
+    requestIdleCallback((deadline) => {
+      result.once = { didTimeout: deadline.didTimeout, remaining: deadline.timeRemaining() };
+      result.counts.once++;
+      completeOne();
+    }, { timeout: 5 });
+
+    const cancelledId = requestIdleCallback(() => result.counts.cancel++, { timeout: 1 });
+    cancelIdleCallback(cancelledId);
+
+    selfId = requestIdleCallback((deadline) => {
+      result.self = { didTimeout: deadline.didTimeout };
+      result.counts.self++;
+      // The map entry is already detached, while the running arm still owns
+      // the callback until this stack returns.
+      cancelIdleCallback(selfId);
+      completeOne();
+    });
+
+    // Keep the current JS task busy until the two 5 ms timeout arms expire.
+    const busyStart = performance.now();
+    while (performance.now() - busyStart < 25) {}
+
+    await state.done((result) => {
+      testing.expectEqual(
+        { hundred: 1, zero: 1, busy: 1, once: 1, cancel: 0, self: 1 },
+        result.counts,
+      );
+      testing.expectEqual(false, result.hundred.didTimeout);
+      testing.expectTrue(result.hundred.remaining > 0 && result.hundred.remaining <= 50);
+      testing.expectEqual([], result.hundred.own);
+      testing.expectEqual(["didTimeout", "timeRemaining", "constructor"], result.hundred.prototype);
+      testing.expectEqual(false, result.zero.didTimeout);
+      testing.expectTrue(result.zero.remaining > 0 && result.zero.remaining <= 50);
+      testing.expectEqual(true, result.busy.didTimeout);
+      testing.expectEqual(0, result.busy.remaining);
+      testing.expectEqual(true, result.once.didTimeout);
+      testing.expectEqual(0, result.once.remaining);
+      testing.expectEqual(false, result.self.didTimeout);
+    });
+  }
+</script>
+
+<script id=timer-capacity-and-eager-clear>
+  let cancelled_timer_fired = false;
+  const ids = [];
+  for (let i = 0; i < 600; i++) {
+    ids.push(window.setTimeout(() => { cancelled_timer_fired = true; }, 0));
+  }
+  testing.expectEqual(600, new Set(ids).size);
+  for (const id of ids) window.clearTimeout(id);
+
+  // This must be removed from Scheduler, not merely marked as cancelled;
+  // otherwise a standalone Runner can remain live until this deadline.
+  const long_id = window.setTimeout(() => { cancelled_timer_fired = true; }, 3_600_000);
+  window.clearTimeout(long_id);
+  testing.onload(() => testing.expectEqual(false, cancelled_timer_fired));
+</script>
+
+<script id=setTimeout-string-handler>
+  // Per HTML spec, TimerHandler = Function or DOMString. The string form
+  // is legacy but still required by the spec, and many sites (especially
+  // legacy or server-rendered pages) rely on it.
+  window.__st_string_ran = 0;
+  const st_id = window.setTimeout("window.__st_string_ran = 42;", 1);
+  testing.expectEqual('number', typeof st_id);
+  testing.onload(() => testing.expectEqual(42, window.__st_string_ran));
+</script>
+
+<script id=setInterval-string-handler>
+  window.__si_string_ran = 0;
+  const si_id = window.setInterval("window.__si_string_ran += 1;", 1);
+  testing.expectEqual('number', typeof si_id);
+  window.setTimeout(() => window.clearInterval(si_id), 5);
+  testing.onload(() => testing.expectEqual(true, window.__si_string_ran >= 1));
+</script>
+
+<script id=setTimeout-invalid-handler>
+  // The legacy overload converts every non-function handler to DOMString.
+  const numeric = window.setTimeout(123, 1);
+  testing.expectEqual('number', typeof numeric);
+  window.clearTimeout(numeric);
+
+  const capture = (fn) => {
+    try { fn(); return null; }
+    catch (error) { return { message: error.message, stack: error.stack }; }
+  };
+
+  const missing = capture(() => window.setTimeout());
+  testing.expectEqual(
+    "Failed to execute 'setTimeout' on 'Window': 1 argument required, but only 0 present.",
+    missing.message,
+  );
+  testing.expectTrue(missing.stack.startsWith('TypeError: 1 argument required, but only 0 present.'));
+
+  for (const [value, reason] of [
+    [Symbol('delay'), 'Cannot convert a Symbol value to a number'],
+    [1n, 'Cannot convert a BigInt value to a number'],
+    [{ [Symbol.toPrimitive]() { return Symbol('delay'); } }, 'Cannot convert a Symbol value to a number'],
+    [{ [Symbol.toPrimitive]() { return 1n; } }, 'Cannot convert a BigInt value to a number'],
+  ]) {
+    const result = capture(() => window.setTimeout(() => {}, value));
+    testing.expectEqual(
+      `Failed to execute 'setTimeout' on 'Window': ${reason}`,
+      result.message,
+    );
+    testing.expectTrue(result.stack.startsWith(`TypeError: ${reason}`));
+  }
+
+  const handlerSymbol = capture(() => window.setTimeout(Symbol('handler')));
+  testing.expectEqual(
+    "Failed to execute 'setTimeout' on 'Window': Cannot convert a Symbol value to a string",
+    handlerSymbol.message,
+  );
+</script>
+

@@ -1,0 +1,87 @@
+<!doctype html>
+<body></body>
+<script src="testing.js"></script>
+<script type="module" id="storage_origin_partitioning">
+  const state = await testing.async();
+
+  // This must precede the first Storage getter. document.domain changes the
+  // effective scripting origin, but not the Document's storage origin.
+  document.domain = document.domain;
+  localStorage.setItem('domain-local', 'local-from-relaxed-parent');
+  sessionStorage.setItem('domain-session', 'session-from-relaxed-parent');
+
+  const aboutBlank = document.createElement('iframe');
+  document.body.append(aboutBlank);
+  const aboutBlankValues = [
+    aboutBlank.contentWindow.localStorage.getItem('domain-local'),
+    aboutBlank.contentWindow.sessionStorage.getItem('domain-session'),
+  ];
+
+  const srcdoc = document.createElement('iframe');
+  const srcdocLoaded = new Promise((resolve) => { srcdoc.onload = resolve; });
+  srcdoc.srcdoc = '<!doctype html><p>storage srcdoc</p>';
+  document.body.append(srcdoc);
+  await srcdocLoaded;
+  const srcdocValues = [
+    srcdoc.contentWindow.localStorage.getItem('domain-local'),
+    srcdoc.contentWindow.sessionStorage.getItem('domain-session'),
+  ];
+
+  const network = document.createElement('iframe');
+  const networkReady = new Promise((resolve) => {
+    const onMessage = (message) => {
+      if (message.source !== network.contentWindow ||
+          message.data?.kind !== 'storage-origin-network-ready') return;
+      removeEventListener('message', onMessage);
+      resolve(message.data);
+    };
+    addEventListener('message', onMessage);
+  });
+  network.src = 'storage_origin_network_fixture.html';
+  document.body.append(network);
+  const networkValues = await networkReady;
+
+  const delivered = new Promise((resolve) => {
+    const events = [];
+    const onStorage = (event) => {
+      if (event.key !== 'network-local' && event.key !== 'network-session') return;
+      events.push([
+        event.storageArea === localStorage ? 'local' : 'session',
+        event.key,
+        event.newValue,
+      ]);
+      if (events.length !== 2) return;
+      removeEventListener('storage', onStorage);
+      resolve(events);
+    };
+    addEventListener('storage', onStorage);
+  });
+  network.contentWindow.postMessage({command: 'mutate-storage-origin'}, '*');
+
+  state.resolve({
+    aboutBlankValues,
+    srcdocValues,
+    networkValues,
+    events: await delivered,
+  });
+
+  state.done((result) => {
+    const expected = [
+      'local-from-relaxed-parent',
+      'session-from-relaxed-parent',
+    ];
+    testing.expectEqual(expected, result.aboutBlankValues);
+    testing.expectEqual(expected, result.srcdocValues);
+    testing.expectEqual({
+      kind: 'storage-origin-network-ready',
+      localValue: expected[0],
+      sessionValue: expected[1],
+    }, result.networkValues);
+    testing.expectEqual([
+      ['local', 'network-local', 'from-network-child'],
+      ['session', 'network-session', 'from-network-child'],
+    ], result.events);
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+</script>

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id=d1></div>
+<div id=d2><p id=p1></p></div>
+
+<script id=appendChild>
+  function assertChildren(expected, parent) {
+    const actual = Array.from(parent.childNodes).map((n) => n.id);
+    testing.expectEqual(expected, actual)
+    for (let child of parent.childNodes) {
+      testing.expectEqual(parent, child.parentNode);
+    }
+  }
+  const d1 = $('#d1');
+  const d2 = $('#d2');
+  const p1 = $('#p1');
+
+  assertChildren([], d1);
+  assertChildren(['p1'], d2);
+
+  d1.appendChild(p1);
+
+  assertChildren(['p1'], d1);
+  assertChildren([], d2);
+
+  const p2 = document.createElement('p');
+  p2.id = 'p2';
+  d1.appendChild(p2);
+  assertChildren(['p1', 'p2'], d1);
+</script>
+
+<div id=d3></div>
+<script id=appendChild_fragment_mutation>
+  // Custom-element reactions are queued during the appendChild algorithm
+  // and fire after it completes. The connectedCallback below sees the
+  // post-move DOM state — both fragment children are already in d3 — so
+  // its check `b.parentNode === fragment` is false and it leaves b alone.
+  const d3 = $('#d3');
+  const fragment = document.createDocumentFragment();
+
+  let bElement = null;
+  let parentSeenAtCallback = null;
+  class ModifyingElement extends HTMLElement {
+    connectedCallback() {
+      // Callback fires after the move; record what we observe.
+      parentSeenAtCallback = bElement && bElement.parentNode;
+      if (bElement && bElement.parentNode === fragment) {
+        fragment.removeChild(bElement);
+      }
+    }
+  }
+  customElements.define('modifying-element', ModifyingElement);
+
+  const a = document.createElement('modifying-element');
+  a.id = 'a';
+  const b = document.createElement('span');
+  b.id = 'b';
+  bElement = b;
+  fragment.appendChild(a);
+  fragment.appendChild(b);
+
+  d3.appendChild(fragment);
+
+  // Both moved atomically. Callback observed b already in d3.
+  assertChildren(['a', 'b'], d3);
+  testing.expectEqual(d3, parentSeenAtCallback);
+</script>
+
+<div id=d4></div>
+<div id=d4_stash></div>
+<script id=appendChild_disconnect_callback_observes_post_move>
+  // Custom-element reactions queue and drain at the algorithm boundary, so
+  // disconnectedCallback fires after the whole move completes. By then the
+  // element is already in its new (disconnected) parent — the callback
+  // observes the post-move state, never a parentless intermediate.
+  const d4 = $('#d4');
+
+  let parentSeenAtDisconnect = undefined;
+  class ObserveOnDisconnect extends HTMLElement {
+    disconnectedCallback() {
+      parentSeenAtDisconnect = this.parentNode;
+    }
+  }
+  customElements.define('observe-on-disconnect', ObserveOnDisconnect);
+
+  const ood = document.createElement('observe-on-disconnect');
+  ood.id = 'ood';
+  d4.appendChild(ood);
+
+  const detached = document.createElement('div');
+  detached.appendChild(ood);
+
+  testing.expectEqual(detached, ood.parentNode);
+  testing.expectEqual(detached, parentSeenAtDisconnect);
+</script>

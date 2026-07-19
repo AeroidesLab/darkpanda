@@ -1,0 +1,8 @@
+<!doctype html>
+<script>
+  localStorage.setItem('noopener-result', JSON.stringify({
+    openerIsNull: opener === null,
+    sessionValue: sessionStorage.getItem('opener-secret'),
+    localValue: localStorage.getItem('noopener-shared'),
+  }));
+</script>

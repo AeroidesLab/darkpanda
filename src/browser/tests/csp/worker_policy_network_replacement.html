@@ -1,0 +1,56 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+<meta http-equiv="Content-Security-Policy"
+      content="script-src 'self' 'unsafe-inline'; worker-src 'self'">
+<script id="worker-policy-network-replacement">
+  testing.expectTrue(true);
+  (async () => {
+    const state = await testing.async();
+    const run = suffix => new Promise(resolve => {
+      const worker = new Worker(`worker_policy_probe.js?${suffix}`);
+      worker.onmessage = event => {
+        worker.terminate();
+        resolve(event.data);
+      };
+      worker.onerror = event => {
+        worker.terminate();
+        resolve({workerError: event.message});
+      };
+    });
+
+    const [none, reportOnly, enforce, trustedTypesEval] = await Promise.all([
+      run('policy=none'),
+      run('policy=report&nullish=1'),
+      run('policy=enforce&nullish=1'),
+      run('policy=tteval'),
+    ]);
+    state.resolve({none, reportOnly, enforce, trustedTypesEval});
+
+    await state.done(result => {
+      const ttEvalMessage =
+        "Evaluating a string as JavaScript violates this document's Trusted Type assignment requirements.";
+      const timerMessage =
+        "Failed to execute 'setTimeout' on 'WorkerGlobalScope': This document requires 'TrustedScript' assignment.";
+
+      // HTTP(S) workers with no response CSP must not inherit their creator's
+      // enforced container.
+      testing.expectEqual({value: 4}, result.none.eval);
+
+      // The final response policy replaces the creator container. Report-only
+      // nullish default falls back to the input; enforced nullish blocks.
+      testing.expectEqual({value: 4}, result.reportOnly.eval);
+      testing.expectEqual(
+        {error: {name: 'EvalError', message: ttEvalMessage}},
+        result.enforce.eval,
+      );
+
+      // trusted-types-eval bypasses eval/Function only, never string timers.
+      testing.expectEqual({value: 6}, result.trustedTypesEval.eval);
+      testing.expectEqual(
+        {error: {name: 'TypeError', message: timerMessage}},
+        result.trustedTypesEval.timer,
+      );
+    });
+  })();
+</script>

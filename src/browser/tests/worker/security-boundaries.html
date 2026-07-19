@@ -1,0 +1,143 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Chrome 149 DedicatedWorker security boundaries</title>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="worker_security_boundaries" type="module">
+  const state = await testing.async();
+  const worker = new Worker('./security-boundaries-worker.js');
+
+  const describeError = error => ({
+    name: error?.name,
+    message: error?.message,
+    code: error?.code,
+    constructor: error?.constructor?.name,
+    isDOMException: error instanceof DOMException,
+    tag: Object.prototype.toString.call(error),
+    ownKeys: Reflect.ownKeys(error).map(String),
+    stackFirst: String(error?.stack).split('\n')[0],
+  });
+  const capture = callback => {
+    try {
+      callback();
+      return { threw: false };
+    } catch (error) {
+      return { threw: true, error: describeError(error) };
+    }
+  };
+  const expectDOMException = (outcome, name, code, message) => {
+    testing.expectTrue(outcome.threw);
+    testing.expectEqual(name, outcome.error.name);
+    testing.expectEqual(code, outcome.error.code);
+    testing.expectEqual('DOMException', outcome.error.constructor);
+    testing.expectTrue(outcome.error.isDOMException);
+    testing.expectEqual('[object DOMException]', outcome.error.tag);
+    testing.expectEqual(message, outcome.error.message);
+    testing.expectTrue(outcome.error.ownKeys.includes('stack'));
+    testing.expectEqual(`${name}: ${message}`, outcome.error.stackFirst);
+  };
+
+  worker.onmessage = event => state.resolve(event.data);
+  worker.onerror = event => state.resolve({ workerError: event.message });
+
+  await state.done(report => {
+    try {
+      testing.expectEqual(undefined, report.workerError);
+      window.__workerSecurityParity = report;
+
+      for (const name of [
+        'window', 'document', 'parent', 'top', 'frames',
+        'Window', 'Document', 'HTMLElement',
+      ]) {
+        testing.expectEqual('undefined', report.types[name]);
+      }
+      testing.expectEqual('object', report.types.navigator);
+      testing.expectEqual('object', report.types.location);
+      testing.expectEqual('function', report.types.importScripts);
+      testing.expectEqual('function', report.types.postMessage);
+      testing.expectEqual('function', report.types.close);
+      testing.expectEqual('function', report.types.WorkerGlobalScope);
+      testing.expectEqual('function', report.types.DedicatedWorkerGlobalScope);
+      testing.expectEqual('undefined', report.types.SharedArrayBuffer);
+      testing.expectEqual('object', report.types.Atomics);
+      testing.expectEqual('boolean', report.types.crossOriginIsolated);
+      testing.expectFalse(report.crossOriginIsolated);
+      testing.expectTrue(report.isSecureContext);
+      testing.expectTrue(report.selfIsGlobalThis);
+      testing.expectEqual([
+        'DedicatedWorkerGlobalScope',
+        'DedicatedWorkerGlobalScope',
+        'WorkerGlobalScope',
+        'EventTarget',
+        'Object',
+      ], report.prototypeChain);
+
+      for (const name of ['window', 'document', 'parent', 'top', 'frames']) {
+        const outcome = report.forbiddenReferences[name];
+        testing.expectTrue(outcome.threw);
+        testing.expectEqual('ReferenceError', outcome.error.name);
+        testing.expectEqual(`${name} is not defined`, outcome.error.message);
+        testing.expectEqual('ReferenceError', outcome.error.constructor);
+        testing.expectFalse(outcome.error.isDOMException);
+        testing.expectEqual('[object Error]', outcome.error.tag);
+        testing.expectEqual(['stack', 'message'], outcome.error.ownKeys);
+      }
+
+      expectDOMException(
+        report.structuredCloneSelf,
+        'DataCloneError',
+        25,
+        "Failed to execute 'structuredClone' on 'WorkerGlobalScope': " +
+          '#<DedicatedWorkerGlobalScope> could not be cloned.',
+      );
+
+      testing.expectEqual('undefined', typeof SharedArrayBuffer);
+      testing.expectEqual('object', typeof Atomics);
+
+      const crossURL = new URL('./security-boundaries-worker.js', location.href);
+      crossURL.hostname = location.hostname === '127.0.0.1' ? 'localhost' : '127.0.0.1';
+      expectDOMException(
+        capture(() => new Worker(crossURL.href)),
+        'SecurityError',
+        18,
+        `Failed to construct 'Worker': Script at '${crossURL.href}' ` +
+          `cannot be accessed from origin '${location.origin}'.`,
+      );
+
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const shadowRoot = host.attachShadow({ mode: 'open' });
+      const values = { window, document, shadowRoot };
+      const display = {
+        window: '#<Window>',
+        document: 'HTMLDocument object',
+        shadowRoot: 'ShadowRoot object',
+      };
+      for (const [name, value] of Object.entries(values)) {
+        expectDOMException(
+          capture(() => structuredClone(value)),
+          'DataCloneError',
+          25,
+          "Failed to execute 'structuredClone' on 'Window': " +
+            `${display[name]} could not be cloned.`,
+        );
+        expectDOMException(
+          capture(() => worker.postMessage(value)),
+          'DataCloneError',
+          25,
+          "Failed to execute 'postMessage' on 'Worker': " +
+            `${display[name]} could not be cloned.`,
+        );
+      }
+
+      // Chromium exposes Worker inside DedicatedWorkerGlobalScope and supports
+      // nested workers. DarkPanda's current constructor is Frame-bound, so the
+      // generic report keeps this observable in the parity artifact without
+      // blessing the known architectural gap as an expected value.
+      window.__workerSecurityParity.nestedWorkerType = report.types.Worker;
+    } finally {
+      worker.terminate();
+    }
+  });
+</script>

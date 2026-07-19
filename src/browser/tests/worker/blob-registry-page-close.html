@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+
+<script id="blob_registry_page_close" type="module">
+  const state = await testing.async();
+  const worker = new Worker('./blob-registry-page-close-worker.js');
+
+  worker.onerror = event => state.resolve({
+    ok: false,
+    error: event.message || 'worker error',
+  });
+  worker.onmessage = event => {
+    if (event.data.type === 'armed') {
+      state.resolve({ ok: true, generation: event.data.generation });
+    }
+  };
+
+  await state.done(result => {
+    testing.expectTrue(result.ok, result.error || 'worker failed before close');
+    testing.expectEqual(2, result.generation);
+  });
+
+  // Intentionally do not terminate the Worker. htmlRunner closes the Page as
+  // soon as this assertion completes, while the owner thread is still creating,
+  // resolving, and revoking blob URLs and has synthetic fetches in flight.
+</script>

@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="testing.js"></script>
+
+<script id="cookie_store_cross_owner_mailbox" type="module">
+  const state = await testing.async();
+  const worker = new Worker('./cookie_store_cross_owner_worker.js');
+  const waiters = [];
+  worker.onmessage = event => {
+    const index = waiters.findIndex(waiter => waiter.match(event.data));
+    if (index === -1) return;
+    waiters.splice(index, 1)[0].resolve(event.data);
+  };
+  const waitFor = match => new Promise(resolve => waiters.push({ match, resolve }));
+  const workerToWindow = `worker-to-window-${Date.now()}`;
+  const windowToWorker = `window-to-worker-${Date.now()}`;
+
+  await waitFor(message => message.type === 'ready');
+
+  const windowChange = new Promise(resolve => {
+    const listener = event => {
+      const item = event.changed.find(cookie => cookie.name === workerToWindow);
+      if (!item) return;
+      cookieStore.removeEventListener('change', listener);
+      resolve(item);
+    };
+    cookieStore.addEventListener('change', listener);
+  });
+  const workerSetDone = waitFor(
+    message => message.type === 'set-done' && message.name === workerToWindow,
+  );
+  worker.postMessage({ type: 'set', name: workerToWindow, value: 'from-worker' });
+  const [windowItem] = await Promise.all([windowChange, workerSetDone]);
+
+  const armed = waitFor(
+    message => message.type === 'armed' && message.name === windowToWorker,
+  );
+  worker.postMessage({ type: 'arm', name: windowToWorker });
+  await armed;
+  const workerChange = waitFor(message =>
+    message.type === 'change' &&
+    message.changed.some(cookie => cookie.name === windowToWorker)
+  );
+  await cookieStore.set(windowToWorker, 'from-window');
+  const workerReport = await workerChange;
+  const workerItem = workerReport.changed.find(cookie => cookie.name === windowToWorker);
+
+  await cookieStore.delete(workerToWindow);
+  await cookieStore.delete(windowToWorker);
+  worker.terminate();
+  state.resolve({ windowItem, workerItem });
+
+  await state.done(result => {
+    testing.expectEqual('from-worker', result.windowItem.value);
+    testing.expectEqual('from-window', result.workerItem.value);
+  });
+</script>

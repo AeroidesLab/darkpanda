@@ -1,0 +1,65 @@
+<!doctype html>
+<script src="testing.js"></script>
+<body>
+
+<script id="localhost_window">
+  // The HTML runner is served over plain HTTP on 127.0.0.1. Chromium treats
+  // loopback origins as potentially trustworthy.
+  testing.expectEqual('http:', location.protocol);
+  testing.expectEqual('127.0.0.1', location.hostname);
+  testing.expectTrue(isSecureContext);
+</script>
+
+<script id="inherited_about_frames">
+  const blank = document.createElement('iframe');
+  blank.src = 'about:blank';
+  document.body.appendChild(blank);
+  testing.expectTrue(blank.contentWindow.isSecureContext);
+
+  // srcdoc commits an inherited-origin about:srcdoc document.
+  const srcdoc = document.createElement('iframe');
+  srcdoc.srcdoc = '<p id="srcdoc-marker">srcdoc</p>';
+  document.body.appendChild(srcdoc);
+  testing.expectEqual('about:srcdoc', srcdoc.contentWindow.location.href);
+  testing.expectEqual('srcdoc', srcdoc.contentDocument.querySelector('#srcdoc-marker').textContent);
+  testing.expectTrue(srcdoc.contentWindow.isSecureContext);
+</script>
+
+<script id="blob_worker" type="module">
+  {
+    const state = await testing.async();
+    const blob = new Blob([
+      "postMessage({ secure: isSecureContext });",
+    ], { type: 'text/javascript' });
+    const blobUrl = URL.createObjectURL(blob);
+    const worker = new Worker(blobUrl);
+    worker.onmessage = event => state.resolve(event.data);
+    worker.onerror = event => state.resolve({ error: event.message });
+
+    await state.done(result => {
+      testing.expectEqual(undefined, result.error);
+      testing.expectTrue(result.secure);
+    });
+    worker.terminate();
+    URL.revokeObjectURL(blobUrl);
+  }
+</script>
+
+<script id="data_worker" type="module">
+  {
+    const state = await testing.async();
+    const source = "postMessage({ secure: isSecureContext, origin: location.origin });";
+    const worker = new Worker('data:text/javascript,' + encodeURIComponent(source));
+    worker.onmessage = event => state.resolve(event.data);
+    worker.onerror = event => state.resolve({ error: event.message });
+
+    await state.done(result => {
+      testing.expectEqual(undefined, result.error);
+      // Blink's SecurityContext explicitly admits a data: worker when its
+      // creator is secure, while retaining the worker's opaque origin.
+      testing.expectTrue(result.secure);
+      testing.expectEqual('null', result.origin);
+    });
+    worker.terminate();
+  }
+</script>

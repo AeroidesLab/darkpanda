@@ -1,0 +1,43 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+<script id="trusted-types-codegen-report-only">
+  const expectedMessage =
+    "Evaluating a string as JavaScript violates this document's Trusted Type assignment requirements.";
+  const expectBlocked = callback => {
+    let error = null;
+    try { callback(); } catch (caught) { error = caught; }
+    testing.expectEqual('EvalError', error && error.name);
+    testing.expectEqual(expectedMessage, error && error.message);
+  };
+
+  // With no default policy, report-only falls back to the original source.
+  testing.expectEqual(6, eval('6'));
+
+  const calls = [];
+  trustedTypes.createPolicy('default', {
+    createScript(input, type, sink) {
+      calls.push([input, type, sink]);
+      if (input === '2') return '3';
+      if (input === '4') return null;
+      if (input === '5') throw new RangeError('author sentinel');
+      return input;
+    },
+  });
+
+  testing.expectEqual(1, eval('1'));
+  expectBlocked(() => eval('2'));
+  testing.expectEqual(4, eval('4'));
+  expectBlocked(() => eval('5'));
+  testing.expectEqual(7, Function('return 7')());
+  testing.expectEqual(
+    [
+      ['1', 'TrustedScript', 'eval'],
+      ['2', 'TrustedScript', 'eval'],
+      ['4', 'TrustedScript', 'eval'],
+      ['5', 'TrustedScript', 'eval'],
+      ['(function anonymous(\n) {\nreturn 7\n})', 'TrustedScript', 'Function'],
+    ],
+    calls,
+  );
+</script>

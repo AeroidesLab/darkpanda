@@ -1,0 +1,29 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<script id="worker_quiescence_delayed" type="module">
+  const state = await testing.async();
+  window.__delayedWorkerMessage = false;
+  const worker = new Worker('./quiescence-delayed-worker.js');
+  worker.onmessage = event => {
+    window.__delayedWorkerMessage = event.data === 'delayed-worker-message';
+    worker.terminate();
+    state.resolve({ ok: window.__delayedWorkerMessage });
+  };
+  worker.onerror = event => state.resolve({
+    ok: false,
+    error: event.message || 'worker error',
+  });
+
+  const timeout = setTimeout(
+    () => state.resolve({ ok: false, error: 'timeout' }),
+    2000,
+  );
+
+  await state.done(result => {
+    testing.expectTrue(result.ok, result.error || 'delayed Worker message failed');
+    testing.expectTrue(window.__delayedWorkerMessage);
+  });
+
+  clearTimeout(timeout);
+  worker.terminate();
+</script>

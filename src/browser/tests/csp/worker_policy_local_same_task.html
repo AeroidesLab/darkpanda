@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+<script id="worker-policy-local-same-task">
+  testing.expectTrue(true);
+  (async () => {
+    const state = await testing.async();
+    const source = `
+      try {
+        postMessage({value: eval('2')});
+      } catch (error) {
+        postMessage({error: {name: error.name, message: error.message}});
+      }
+    `;
+    const url = URL.createObjectURL(new Blob([source], {type: 'text/javascript'}));
+    const worker = new Worker(url);
+    worker.onmessage = event => state.resolve(event.data);
+    worker.onerror = event => state.resolve({workerError: event.message});
+
+    // Chrome snapshots a local-scheme Worker's creator policy container at
+    // response completion, not synchronously inside the constructor. A meta
+    // appended later in this same task must therefore be visible to it.
+    const meta = document.createElement('meta');
+    document.head.append(meta);
+    meta.content = "script-src 'self' 'unsafe-inline' blob:; worker-src blob:";
+    meta.httpEquiv = 'Content-Security-Policy';
+
+    await state.done(result => {
+      worker.terminate();
+      URL.revokeObjectURL(url);
+      testing.expectEqual(undefined, result.workerError);
+      testing.expectEqual('EvalError', result.error && result.error.name);
+      testing.expectEqual(undefined, result.value);
+    });
+  })();
+</script>

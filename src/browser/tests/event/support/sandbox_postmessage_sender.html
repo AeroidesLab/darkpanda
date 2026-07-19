@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<script>
+addEventListener('message', event => {
+  if (event.data?.kind !== 'sandbox-command') return;
+  parent.postMessage({kind: 'sandbox-echo', value: event.data.value}, '*');
+});
+
+const capture = callback => {
+  try {
+    callback();
+    return null;
+  } catch (error) {
+    return {name: error.name, message: error.message, code: error.code};
+  }
+};
+
+(async () => {
+  const blobURL = URL.createObjectURL(new Blob(['authored sandbox probe']));
+  const idbError = capture(() => indexedDB.open('opaque-sandbox-must-deny'));
+  const localStorageError = capture(() => localStorage);
+  const sessionStorageError = capture(() => sessionStorage);
+  const cookieGetError = capture(() => document.cookie);
+  const cookieSetError = capture(() => { document.cookie = 'sandbox=denied'; });
+  const cookieStoreGetError = await cookieStore.get('sandbox').then(
+    () => null,
+    error => ({name: error.name, message: error.message, code: error.code}),
+  );
+  const cookieStoreSetError = await cookieStore.set('sandbox', 'denied').then(
+    () => null,
+    error => ({name: error.name, message: error.message, code: error.code}),
+  );
+
+  parent.postMessage({
+    kind: 'sandbox-ready',
+    windowOrigin: origin,
+    locationOrigin: location.origin,
+    blobURL,
+    idbError,
+    localStorageError,
+    sessionStorageError,
+    cookieGetError,
+    cookieSetError,
+    cookieStoreGetError,
+    cookieStoreSetError,
+  }, '*');
+})();
+</script>

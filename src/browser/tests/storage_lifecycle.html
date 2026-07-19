@@ -1,0 +1,45 @@
+<!doctype html>
+<body></body>
+<script src="testing.js"></script>
+<script id="storage_lifecycle_setup">
+  localStorage.clear();
+  sessionStorage.clear();
+  localStorage.setItem('local-value', 'shared-across-top-levels');
+  sessionStorage.setItem('root-value', 'survives-root-navigation');
+
+  // An iframe belongs to this top-level browsing context and shares its
+  // origin's session area immediately, even before a network navigation.
+  const iframe = document.createElement('iframe');
+  document.body.append(iframe);
+  const iframeShared =
+    iframe.contentWindow.sessionStorage.getItem('root-value') === 'survives-root-navigation';
+  iframe.contentWindow.sessionStorage.setItem('from-iframe', 'visible-in-parent');
+  sessionStorage.setItem(
+    'iframe-shared',
+    String(iframeShared && sessionStorage.getItem('from-iframe') === 'visible-in-parent'),
+  );
+
+  // A popup is a separate top-level browsing context. Chrome snapshots the
+  // opener's session namespace at creation, then the two copies diverge;
+  // local storage remains shared by Session+origin.
+  const popup = open();
+  const popupCloned =
+    popup.sessionStorage.getItem('root-value') === 'survives-root-navigation' &&
+    popup.localStorage.getItem('local-value') === 'shared-across-top-levels';
+  popup.sessionStorage.setItem('root-value', 'popup-copy');
+  popup.sessionStorage.setItem('popup-only', 'value');
+  const popupIsolated =
+    sessionStorage.getItem('root-value') === 'survives-root-navigation' &&
+    sessionStorage.getItem('popup-only') === null;
+  sessionStorage.setItem(
+    'popup-isolated',
+    String(popupCloned && popupIsolated),
+  );
+  popup.close();
+
+  // A root document replacement reuses the stable NavigationContext identity,
+  // so the target fixture observes the same session namespace.
+  const navigationTarget = new URL('storage_navigation_fixture.html', location.href);
+  navigationTarget.search = location.search;
+  location.href = navigationTarget.href;
+</script>

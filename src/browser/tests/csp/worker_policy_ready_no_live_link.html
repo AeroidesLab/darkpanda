@@ -1,0 +1,43 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+<script id="worker-policy-ready-no-live-link">
+  testing.expectTrue(true);
+  (async () => {
+    const state = await testing.async();
+    const source = `
+      postMessage({ready: true});
+      onmessage = () => {
+        try {
+          postMessage({value: eval('2')});
+        } catch (error) {
+          postMessage({error: {name: error.name, message: error.message}});
+        }
+      };
+    `;
+    const url = URL.createObjectURL(new Blob([source], {type: 'text/javascript'}));
+    const worker = new Worker(url);
+    worker.onerror = event => state.resolve({workerError: event.message});
+    worker.onmessage = event => {
+      if (event.data.ready) {
+        // Once the entry script is running, its cloned policy container has
+        // no live link back to the creator Document.
+        const meta = document.createElement('meta');
+        document.head.append(meta);
+        meta.content = "script-src 'self' 'unsafe-inline' blob:; worker-src blob:";
+        meta.httpEquiv = 'Content-Security-Policy';
+        worker.postMessage('run');
+        return;
+      }
+      state.resolve(event.data);
+    };
+
+    await state.done(result => {
+      worker.terminate();
+      URL.revokeObjectURL(url);
+      testing.expectEqual(undefined, result.workerError);
+      testing.expectEqual(undefined, result.error);
+      testing.expectEqual(2, result.value);
+    });
+  })();
+</script>

@@ -1,0 +1,24 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<meta http-equiv="Content-Security-Policy"
+      content="require-trusted-types-for 'script'; trusted-types default">
+<script id="trusted-types-meta">
+testing.onload(() => {
+  const target = document.createElement('div');
+  let assignmentError = null;
+  try { target.innerHTML = 'blocked'; } catch (error) { assignmentError = error; }
+  testing.expectEqual('TypeError', assignmentError && assignmentError.name);
+  testing.expectEqual(
+    "Failed to set the 'innerHTML' property on 'Element': This document requires 'TrustedHTML' assignment.",
+    assignmentError && assignmentError.message,
+  );
+
+  let policyError = null;
+  try { trustedTypes.createPolicy('other', {}); } catch (error) { policyError = error; }
+  testing.expectEqual('TypeError', policyError && policyError.name);
+  testing.expectEqual(
+    'Failed to execute \'createPolicy\' on \'TrustedTypePolicyFactory\': Policy "other" disallowed.',
+    policyError && policyError.message,
+  );
+});
+</script>

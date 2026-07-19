@@ -1,0 +1,6 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<script id="worker_quiescence_dormant">
+  window.__dormantWorker = new Worker('./quiescence-dormant-worker.js');
+  testing.expectTrue(window.__dormantWorker instanceof Worker);
+</script>

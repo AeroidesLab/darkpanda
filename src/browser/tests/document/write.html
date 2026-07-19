@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<head>
+  <title>document.write Tests</title>
+  <script src="../testing.js"></script>
+</head>
+
+<body>
+
+<!-- Phase 1 Tests: Basic HTML (no scripts) -->
+
+<script id=basic_write_and_verify>
+  document.write('<h1 id="written">Hello</h1>');
+  // Add a simple assertion so the test framework doesn't complain
+  testing.expectEqual(true, true);
+</script>
+
+<script id=verify_basic>
+  {
+    const written = document.getElementById('written');
+    testing.expectEqual('Hello', written.textContent);
+    testing.expectEqual('H1', written.tagName);
+  }
+</script>
+
+<script id=multiple_writes>
+  document.write('<div id="a">A</div>');
+  document.write('<div id="b">B</div>');
+  testing.expectEqual(true, true);
+</script>
+
+<script id=verify_multiple>
+  {
+    const a = document.getElementById('a');
+    const b = document.getElementById('b');
+    testing.expectEqual('A', a.textContent);
+    testing.expectEqual('B', b.textContent);
+
+    // Verify they're siblings in the correct order
+    testing.expectEqual(b, a.nextElementSibling);
+  }
+</script>
+
+<script id=write_with_attributes>
+  document.write('<div id="styled" class="foo bar" data-value="123">Content</div>');
+  testing.expectEqual(true, true);
+</script>
+
+<script id=verify_attributes>
+  {
+    const el = document.getElementById('styled');
+    testing.expectEqual('foo bar', el.className);
+    testing.expectEqual('123', el.getAttribute('data-value'));
+    testing.expectEqual('Content', el.textContent);
+  }
+</script>
+
+<script id=write_multiple_elements>
+  document.write('<p id="p1">First</p><p id="p2">Second</p>');
+  testing.expectEqual(true, true);
+</script>
+
+<script id=verify_multiple_elements>
+  {
+    const p1 = document.getElementById('p1');
+    const p2 = document.getElementById('p2');
+    testing.expectEqual('First', p1.textContent);
+    testing.expectEqual('Second', p2.textContent);
+    testing.expectEqual(p2, p1.nextElementSibling);
+  }
+</script>
+
+<script id=write_nested_elements>
+  document.write('<div id="outer"><span id="inner">Nested</span></div>');
+  testing.expectEqual(true, true);
+</script>
+
+<script id=verify_nested>
+  {
+    const outer = document.getElementById('outer');
+    const inner = document.getElementById('inner');
+    testing.expectEqual(outer, inner.parentElement);
+    testing.expectEqual('Nested', inner.textContent);
+  }
+</script>
+
+<!-- Phase 2 Tests: Script execution -->
+
+<script id=write_script>
+  document.write('<script id="written_script">window.executed = true; testing.expectEqual(true, true);<\/script>');
+  testing.expectEqual(true, true);
+</script>
+
+<script id=verify_script_executed>
+  testing.expectEqual(true, window.executed);
+  testing.expectEqual(document.getElementById('written_script').tagName, 'SCRIPT');
+</script>
+
+<script id=written_script_can_write>
+  document.write('<script id="nested_writer">document.write("<div id=\\"nested\\">OK</div>"); testing.expectEqual(true, true);<\/script>');
+  testing.expectEqual(true, true);
+</script>
+
+<script id=verify_nested_write>
+  {
+    const nested = document.getElementById('nested');
+    testing.expectEqual('OK', nested.textContent);
+  }
+</script>
+
+<div id="before_script">Before</div>
+<script id=written_script_sees_dom>
+  document.write('<script id="dom_accessor">document.getElementById("before_script").setAttribute("data-modified", "yes"); testing.expectEqual(true, true);<\/script>');
+  testing.expectEqual(true, true);
+</script>
+
+<script id=verify_dom_modification>
+  {
+    const beforeScript = document.getElementById('before_script');
+    testing.expectEqual('yes', beforeScript.getAttribute('data-modified'));
+  }
+</script>
+
+<!-- Regression: a script written by document.write can detach the
+     currently-executing script during fragment parsing (here by
+     replacing the parent's children via innerHTML). document.write
+     must not crash when its `_current_script` ends up parentless. -->
+<div id=dw_detach_container>
+  <script id=write_when_detached_during_write>
+    document.write('<script>document.getElementById("dw_detach_container").innerHTML = "";<\/script>');
+    // All we care is that the above didn't crash.
+    testing.expectEqual(true, true);
+  </script>
+</div>
+
+<script id=verify_dw_detach>
+  {
+    // The previous script *not crashing* is the real assertion. We also
+    // sanity-check that the inner script's innerHTML="" took effect by
+    // verifying the only element children are gone.
+    const container = document.getElementById('dw_detach_container');
+    testing.expectEqual(0, container.children.length);
+  }
+</script>
+
+<!-- document.write processes declarative shadow roots, like the parser. -->
+<script id=write_declarative_shadow>
+  document.write('<div id="dw_dsd"><template shadowrootmode="open"><p>written shadow</p></template></div>');
+  testing.expectEqual(true, true);
+</script>
+
+<script id=verify_declarative_shadow>
+  {
+    const host = document.getElementById('dw_dsd');
+    // The shadow root survives the fragment->live-DOM splice.
+    testing.expectEqual(true, host.shadowRoot !== null);
+    testing.expectEqual('written shadow', host.shadowRoot.querySelector('p').textContent);
+    // The <template> was consumed, not left in light DOM.
+    testing.expectEqual(null, host.querySelector('template'));
+  }
+</script>
+
+<!-- Phase 3 Tests: document.open/close would go here -->
+<!-- Note: Testing document.open/close requires async/setTimeout which doesn't -->
+<!-- work well with the test isolation. The implementation is tested manually. -->
+
+<script id=final_assertion>
+  // Just verify the methods exist
+  testing.expectEqual('function', typeof document.open);
+  testing.expectEqual('function', typeof document.close);
+  testing.expectEqual('function', typeof document.write);
+  testing.expectEqual('function', typeof document.writeln);
+</script>
+
+<script>
+  // setup for the next step
+  document.writeln('<p id="writeln_basic">Line</p>');
+</script>
+
+<script id=verify_writeln_basic>
+  {
+    const el = document.getElementById('writeln_basic');
+    testing.expectEqual('Line', el.textContent);
+    // writeln should append a newline after the written text; that newline
+    // becomes a text node sibling of the element.
+    const next = el.nextSibling;
+    testing.expectEqual(true, next !== null);
+    testing.expectEqual('#text', next.nodeName);
+    testing.expectEqual('\n\n\n', next.nodeValue);
+  }
+</script>
+
+<script id=writeln_multiple_args>
+  // writeln joins all arguments, then appends a single U+000A.
+  document.writeln('<span id="wln_a">A</span>', '<span id="wln_b">B</span>');
+  testing.expectEqual(true, true);
+</script>
+
+<script id=verify_writeln_multiple_args>
+  {
+    const a = document.getElementById('wln_a');
+    const b = document.getElementById('wln_b');
+    testing.expectEqual('A', a.textContent);
+    testing.expectEqual('B', b.textContent);
+    testing.expectEqual(b, a.nextElementSibling);
+  }
+</script>
+
+
+<!-- Phase 3 Tests: document.open/close (post-parsing with setTimeout) -->
+
+<div id="will_be_removed">This will be removed by document.open()</div>
+
+<script id=test_open_close_async type=module>
+  {
+    const state = await testing.async();
+
+    // Mark that we saw the element before
+    const sawBefore = document.getElementById('will_be_removed') !== null;
+    testing.expectEqual(true, sawBefore);
+
+    // Use setTimeout to ensure we're after parsing completes
+    setTimeout(() => {
+      document.open();
+    }, 5);
+
+    // doing this after test_open_close_async used to crash, so we keep it
+    // to make sure it doesn't
+    setTimeout(() => {
+      document.open();
+      document.close();
+      state.resolve();
+    }, 20);
+
+    await state.done(() => {
+      // The element should be gone now
+      const afterOpen = document.getElementById('will_be_removed');
+      testing.expectEqual(null, afterOpen);
+
+      // Write new content
+      document.write('<html><body>');
+      document.write('<h1 id="new_content">Replaced</h1>');
+      document.write('</body></html>');
+
+      // Close the document
+      document.close();
+
+      // Verify new content exists
+      const newContent = document.getElementById('new_content');
+      testing.expectEqual('Replaced', newContent.textContent);
+    });
+  }
+</script>
+</body>

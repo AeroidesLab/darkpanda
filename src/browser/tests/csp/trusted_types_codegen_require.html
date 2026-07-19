@@ -1,0 +1,28 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<script id="trusted-types-codegen-require">
+  const captureCodegen = callback => {
+    try { return { ok: true, value: callback() }; }
+    catch (error) { return { ok: false, name: error.name, message: error.message }; }
+  };
+  const expectedMessage =
+    "Evaluating a string as JavaScript violates this document's Trusted Type assignment requirements.";
+  const expectBlocked = callback => {
+    const result = captureCodegen(callback);
+    testing.expectFalse(result.ok);
+    testing.expectEqual('EvalError', result.name);
+    testing.expectEqual(expectedMessage, result.message);
+  };
+
+  const marker = {};
+  testing.expectEqual(marker, eval(marker));
+  expectBlocked(() => eval('41'));
+  expectBlocked(() => (0, eval)('42'));
+  expectBlocked(() => Function('return 43')());
+
+  const policy = trustedTypes.createPolicy('codegen-values', {
+    createScript: input => input,
+  });
+  testing.expectEqual(44, eval(policy.createScript('44')));
+  expectBlocked(() => Function(policy.createScript('return 45'))());
+</script>

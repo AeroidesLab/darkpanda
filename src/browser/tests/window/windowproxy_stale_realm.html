@@ -1,0 +1,497 @@
+<!doctype html>
+<head>
+  <meta charset="utf-8">
+  <title>WindowProxy and stale realm navigation semantics</title>
+  <script src="../testing.js"></script>
+</head>
+<body>
+  <iframe id="child" src="support/stale_realm_a1.html"></iframe>
+</body>
+
+<!--
+Chrome oracle: Chrome for Testing 149.0.7827.203 / V8 14.9.207.35.
+
+This fixture deliberately keeps three kinds of references across A1 -> B ->
+A2: the browsing-context WindowProxy, each document's Location, and the A1
+Document.  WindowProxy is stable and changes its access policy dynamically;
+Location and Document are per-document objects whose old realms remain
+observable after their LocalDOMWindow is detached.
+-->
+<script id="chrome149_windowproxy_stale_realm">
+  window.__windowProxyStaleRealmProbe = (async () => {
+    const state = await testing.async();
+    const iframe = document.getElementById('child');
+    const a1URL = new URL('support/stale_realm_a1.html', location.href).href;
+    const a2URL = new URL('support/stale_realm_a2.html', location.href).href;
+    const bURL = new URL('support/stale_realm_b.html', location.href);
+    bURL.hostname = 'localhost';
+
+    const capture = operation => {
+      try {
+        const value = operation();
+        return {ok: true, valueType: typeof value, value};
+      } catch (error) {
+        return {
+          ok: false,
+          name: error.name,
+          code: typeof error.code === 'number' ? error.code : null,
+          message: error.message,
+          domException: error instanceof DOMException,
+        };
+      }
+    };
+
+    const descriptor = (object, property) => {
+      const value = Object.getOwnPropertyDescriptor(object, property);
+      if (value === undefined) return null;
+      const callable = member => typeof member === 'function' ? {
+        name: member.name,
+        length: member.length,
+      } : null;
+      return {
+        kind: 'get' in value || 'set' in value ? 'accessor' : 'data',
+        get: callable(value.get),
+        set: callable(value.set),
+        valueType: 'value' in value ? typeof value.value : null,
+        valueName: callable(value.value)?.name ?? null,
+        valueLength: callable(value.value)?.length ?? null,
+        valueIsUndefined: 'value' in value && value.value === undefined,
+        writable: 'writable' in value ? value.writable : null,
+        enumerable: value.enumerable,
+        configurable: value.configurable,
+      };
+    };
+
+    const immutablePrototype = object => {
+      const original = Object.getPrototypeOf(object);
+      const replacement = {replacement: true};
+      return {
+        tag: Object.prototype.toString.call(object),
+        sameReflect: Reflect.setPrototypeOf(object, original),
+        sameObject: Object.setPrototypeOf(object, original) === object,
+        changeReflect: capture(() => Reflect.setPrototypeOf(object, replacement)),
+        changeObject: capture(() => Object.setPrototypeOf(object, replacement)),
+        unchanged: Object.getPrototypeOf(object) === original,
+        extensible: Object.isExtensible(object),
+      };
+    };
+
+    const navigate = url => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`navigation timeout: ${url}`)), 5000);
+      iframe.onload = () => {
+        iframe.onload = null;
+        clearTimeout(timer);
+        setTimeout(resolve, 0);
+      };
+      iframe.src = url;
+    });
+
+    // Parser progress does not imply that the initial child navigation has
+    // committed.  Caching about:blank here would test initial-empty-document
+    // inheritance instead of the intended A1 realm.
+    if (
+      iframe.contentDocument?.URL !== a1URL ||
+      iframe.contentDocument?.readyState !== 'complete'
+    ) {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error(`initial iframe timeout: ${a1URL}`)),
+          5000
+        );
+        iframe.onload = () => {
+          iframe.onload = null;
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+    }
+
+    const windowProxy = iframe.contentWindow;
+    const a1Document = windowProxy.document;
+    const a1Location = windowProxy.location;
+    const a1WindowPrototype = Object.getPrototypeOf(windowProxy);
+    const a1DocumentPrototype = Object.getPrototypeOf(a1Document);
+    const a1LocationPrototype = Object.getPrototypeOf(a1Location);
+    const A1Document = a1Document.constructor;
+    const A1HTMLElement = windowProxy.HTMLElement;
+    const A1Location = windowProxy.Location;
+
+    const lookalikeToStringTag = Symbol(Symbol.toStringTag.description);
+    const secondLookalikeToStringTag = Symbol(Symbol.toStringTag.description);
+
+    const result = {
+      oracle: {
+        chrome: '149.0.7827.203',
+        v8: '14.9.207.35',
+        parentOrigin: location.origin,
+        a1URL,
+        bURL: bURL.href,
+        a2URL,
+      },
+      a1: {
+        windowProxyStable: windowProxy === iframe.contentWindow,
+        locationStable: a1Location === windowProxy.location,
+        documentStable: a1Document === windowProxy.document,
+        windowPrototype: immutablePrototype(windowProxy),
+        locationPrototype: immutablePrototype(a1Location),
+        lookalikesAreDistinct:
+          lookalikeToStringTag !== secondLookalikeToStringTag &&
+          lookalikeToStringTag !== Symbol.toStringTag,
+        documentRealm: {
+          prototypeStable: Object.getPrototypeOf(a1Document) === a1DocumentPrototype,
+          oldConstructorInstance: a1Document instanceof A1Document,
+          oldElementRealm: a1Document.createElement('div') instanceof A1HTMLElement,
+          defaultViewIsWindowProxy: a1Document.defaultView === windowProxy,
+        },
+      },
+    };
+
+    await navigate(bURL.href);
+    const bLocation = windowProxy.location;
+    const blocked =
+      `Blocked a frame with origin "${location.origin}" from accessing a cross-origin frame.`;
+
+    result.b = {
+      windowProxyStable: windowProxy === iframe.contentWindow,
+      windowPrototypeNull: Object.getPrototypeOf(windowProxy) === null,
+      currentLocationStable: bLocation === windowProxy.location,
+      locationChangedFromA1: bLocation !== a1Location,
+      locationPrototypeNull: Object.getPrototypeOf(bLocation) === null,
+      documentRead: capture(() => windowProxy.document),
+      hrefRead: capture(() => bLocation.href),
+      assignRead: capture(() => bLocation.assign),
+      replace: {
+        type: typeof bLocation.replace,
+        name: bLocation.replace.name,
+        length: bLocation.replace.length,
+        descriptor: descriptor(bLocation, 'replace'),
+      },
+      hrefDescriptor: descriptor(bLocation, 'href'),
+      then: {
+        get: capture(() => bLocation.then),
+        has: capture(() => 'then' in bLocation),
+        descriptor: descriptor(bLocation, 'then'),
+      },
+      symbols: {
+        lookalikesAreDistinct:
+          lookalikeToStringTag !== secondLookalikeToStringTag,
+        windowWellKnownGet: capture(() => windowProxy[Symbol.toStringTag]),
+        windowWellKnownHas: capture(() => Symbol.toStringTag in windowProxy),
+        windowLookalikeGet: capture(() => windowProxy[lookalikeToStringTag]),
+        windowSecondLookalikeGet:
+          capture(() => windowProxy[secondLookalikeToStringTag]),
+        windowLookalikeHas: capture(() => lookalikeToStringTag in windowProxy),
+        locationWellKnownGet: capture(() => bLocation[Symbol.toStringTag]),
+        locationWellKnownHas: capture(() => Symbol.toStringTag in bLocation),
+        locationLookalikeGet: capture(() => bLocation[lookalikeToStringTag]),
+        locationSecondLookalikeGet:
+          capture(() => bLocation[secondLookalikeToStringTag]),
+        locationLookalikeHas: capture(() => lookalikeToStringTag in bLocation),
+      },
+      oldA1Location: {
+        href: capture(() => a1Location.href),
+        assignRead: capture(() => a1Location.assign),
+        replaceRead: capture(() => a1Location.replace),
+        toString: capture(() => a1Location.toString()),
+        prototypeStable: Object.getPrototypeOf(a1Location) === a1LocationPrototype,
+        oldConstructorInstance: a1Location instanceof A1Location,
+      },
+      oldA1Document: {
+        url: a1Document.URL,
+        phase: a1Document.body.dataset.phase,
+        prototypeStable: Object.getPrototypeOf(a1Document) === a1DocumentPrototype,
+        oldConstructorInstance: a1Document instanceof A1Document,
+        oldElementRealm: a1Document.createElement('div') instanceof A1HTMLElement,
+        defaultViewNull: a1Document.defaultView === null,
+        ownerDocumentStable: a1Document.body.ownerDocument === a1Document,
+      },
+    };
+
+    result.b.oldA1Location.hrefSet = capture(() => {
+      const target = new URL('support/stale_realm_a1.html?stale=href', location.href).href;
+      const returned = (a1Location.href = target);
+      return {returned, hrefAfter: a1Location.href};
+    });
+    result.b.oldA1Location.assignCall = capture(() => {
+      const returned = a1Location.assign(
+        new URL('support/stale_realm_a1.html?stale=assign', location.href).href
+      );
+      return {returnedUndefined: returned === undefined, hrefAfter: a1Location.href};
+    });
+    result.b.oldA1Location.replaceCall = capture(() => {
+      const returned = a1Location.replace(
+        new URL('support/stale_realm_a1.html?stale=replace', location.href).href
+      );
+      return {returnedUndefined: returned === undefined, hrefAfter: a1Location.href};
+    });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    result.b.afterOldA1LocationWrites = {
+      windowProxyStable: windowProxy === iframe.contentWindow,
+      currentLocationStable: windowProxy.location === bLocation,
+    };
+
+    await navigate(a2URL);
+    const a2Document = windowProxy.document;
+    const a2Location = windowProxy.location;
+    const detachedPolicy =
+      'An attempt was made to break through the security policy of the user agent.';
+
+    result.a2 = {
+      windowProxyStable: windowProxy === iframe.contentWindow,
+      windowPrototypeChangedFromA1:
+        Object.getPrototypeOf(windowProxy) !== a1WindowPrototype,
+      currentLocationStable: a2Location === windowProxy.location,
+      locationChangedFromA1: a2Location !== a1Location,
+      locationChangedFromB: a2Location !== bLocation,
+      locationPrototypeChangedFromA1:
+        Object.getPrototypeOf(a2Location) !== a1LocationPrototype,
+      currentHref: a2Location.href,
+      currentPhase: a2Document.body.dataset.phase,
+      documentChangedFromA1: a2Document !== a1Document,
+      documentPrototypeChangedFromA1:
+        Object.getPrototypeOf(a2Document) !== a1DocumentPrototype,
+      oldA1Location: {
+        href: capture(() => a1Location.href),
+        prototypeStable: Object.getPrototypeOf(a1Location) === a1LocationPrototype,
+        oldConstructorInstance: a1Location instanceof A1Location,
+      },
+      oldBLocation: {
+        prototypeNull: capture(() => Object.getPrototypeOf(bLocation) === null),
+        href: capture(() => bLocation.href),
+        assign: capture(() => bLocation.assign),
+        replaceType: capture(() => typeof bLocation.replace),
+        thenGet: capture(() => bLocation.then),
+        thenHas: capture(() => 'then' in bLocation),
+        ownKeys: capture(() => Reflect.ownKeys(bLocation).map(String)),
+        setPrototype: capture(() => Reflect.setPrototypeOf(bLocation, null)),
+      },
+      oldA1Document: {
+        url: a1Document.URL,
+        phase: a1Document.body.dataset.phase,
+        prototypeStable: Object.getPrototypeOf(a1Document) === a1DocumentPrototype,
+        oldConstructorInstance: a1Document instanceof A1Document,
+        oldElementRealm: a1Document.createElement('p') instanceof A1HTMLElement,
+        defaultViewNull: a1Document.defaultView === null,
+        ownerDocumentStable: a1Document.body.ownerDocument === a1Document,
+      },
+      newDocumentRealm: {
+        oldConstructorInstance: a2Document instanceof A1Document,
+        oldElementRealm: a2Document.createElement('p') instanceof A1HTMLElement,
+      },
+    };
+
+    result.a2.oldBLocation.replaceCall = capture(() => {
+      const returned = bLocation.replace(
+        new URL('support/stale_realm_b.html?stale=replace', location.href).href
+      );
+      return {returnedUndefined: returned === undefined};
+    });
+    result.a2.oldBLocation.hrefSet = capture(() => {
+      const target = new URL('support/stale_realm_b.html?stale=href', location.href).href;
+      const returned = (bLocation.href = target);
+      return {returned};
+    });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    result.a2.afterOldBLocationWrites = {
+      currentLocationStable: windowProxy.location === a2Location,
+      currentHref: windowProxy.location.href,
+      currentPhase: windowProxy.document.body.dataset.phase,
+    };
+
+    const expectCaptureValue = (expected, actual) => {
+      testing.expectTrue(actual.ok);
+      testing.expectEqual(expected, actual.value);
+    };
+    const expectSecurityError = (actual, expectedMessage) => {
+      testing.expectFalse(actual.ok);
+      testing.expectEqual('SecurityError', actual.name);
+      testing.expectEqual(18, actual.code);
+      testing.expectTrue(actual.domException);
+      testing.expectEqual(expectedMessage, actual.message);
+    };
+    const expectImmutablePrototype = (actual, tag) => {
+      testing.expectEqual(tag, actual.tag);
+      testing.expectTrue(actual.sameReflect);
+      testing.expectTrue(actual.sameObject);
+      expectCaptureValue(false, actual.changeReflect);
+      testing.expectFalse(actual.changeObject.ok);
+      testing.expectEqual('TypeError', actual.changeObject.name);
+      testing.expectEqual(
+        `Immutable prototype object '${tag}' cannot have their prototype set`,
+        actual.changeObject.message
+      );
+      testing.expectTrue(actual.unchanged);
+      testing.expectTrue(actual.extensible);
+    };
+
+    state.resolve(result);
+    await state.done(value => {
+      expectImmutablePrototype(value.a1.windowPrototype, '[object Window]');
+      expectImmutablePrototype(value.a1.locationPrototype, '[object Location]');
+      testing.expectTrue(value.a1.windowProxyStable);
+      testing.expectTrue(value.a1.locationStable);
+      testing.expectTrue(value.a1.documentStable);
+      testing.expectTrue(value.a1.lookalikesAreDistinct);
+      testing.expectEqual({
+        prototypeStable: true,
+        oldConstructorInstance: true,
+        oldElementRealm: true,
+        defaultViewIsWindowProxy: true,
+      }, value.a1.documentRealm);
+
+      // The same WindowProxy dynamically becomes cross-origin. Its current
+      // Location is a new per-document object; cached A1 objects remain tied
+      // to A1 and do not acquire B's policy.
+      testing.expectTrue(value.b.windowProxyStable);
+      testing.expectTrue(value.b.windowPrototypeNull);
+      testing.expectTrue(value.b.currentLocationStable);
+      testing.expectTrue(value.b.locationChangedFromA1);
+      testing.expectTrue(value.b.locationPrototypeNull);
+      expectSecurityError(
+        value.b.documentRead,
+        `Failed to read a named property 'document' from 'Window': ${blocked}`
+      );
+      expectSecurityError(
+        value.b.hrefRead,
+        `Failed to read a named property 'href' from 'Location': ${blocked}`
+      );
+      expectSecurityError(
+        value.b.assignRead,
+        `Failed to read a named property 'assign' from 'Location': ${blocked}`
+      );
+      testing.expectEqual('function', value.b.replace.type);
+      testing.expectEqual('replace', value.b.replace.name);
+      testing.expectEqual(1, value.b.replace.length);
+      testing.expectEqual({
+        kind: 'data', get: null, set: null, valueType: 'function',
+        valueName: 'replace', valueLength: 1, valueIsUndefined: false,
+        writable: false, enumerable: false, configurable: true,
+      }, value.b.replace.descriptor);
+      testing.expectEqual({
+        kind: 'accessor', get: null, set: {name: 'set href', length: 1},
+        valueType: null, valueName: null, valueLength: null,
+        valueIsUndefined: false, writable: null, enumerable: false,
+        configurable: true,
+      }, value.b.hrefDescriptor);
+
+      // CrossOriginGetOwnPropertyHelper has an explicit `then` fallback. The
+      // corresponding [[HasProperty]] path does not, hence this asymmetry.
+      expectCaptureValue(undefined, value.b.then.get);
+      expectSecurityError(value.b.then.has, blocked);
+      testing.expectEqual({
+        kind: 'data', get: null, set: null, valueType: 'undefined',
+        valueName: null, valueLength: null, valueIsUndefined: true,
+        writable: false, enumerable: false, configurable: true,
+      }, value.b.then.descriptor);
+
+      // Identity, not Symbol.description, selects the three allowed symbols.
+      // A custom symbol with the same description as Symbol.toStringTag must
+      // still take the protected-property path.
+      testing.expectTrue(value.b.symbols.lookalikesAreDistinct);
+      expectCaptureValue(undefined, value.b.symbols.windowWellKnownGet);
+      expectCaptureValue(true, value.b.symbols.windowWellKnownHas);
+      expectCaptureValue(undefined, value.b.symbols.locationWellKnownGet);
+      expectCaptureValue(true, value.b.symbols.locationWellKnownHas);
+      const symbolWindowMessage =
+        `Failed to read a named property '[Symbol.toStringTag]' from 'Window': ${blocked}`;
+      const symbolLocationMessage =
+        `Failed to read a named property '[Symbol.toStringTag]' from 'Location': ${blocked}`;
+      expectSecurityError(value.b.symbols.windowLookalikeGet, symbolWindowMessage);
+      expectSecurityError(
+        value.b.symbols.windowSecondLookalikeGet,
+        symbolWindowMessage
+      );
+      expectSecurityError(value.b.symbols.windowLookalikeHas, blocked);
+      expectSecurityError(value.b.symbols.locationLookalikeGet, symbolLocationMessage);
+      expectSecurityError(
+        value.b.symbols.locationSecondLookalikeGet,
+        symbolLocationMessage
+      );
+      expectSecurityError(value.b.symbols.locationLookalikeHas, blocked);
+
+      expectCaptureValue(a1URL, value.b.oldA1Location.href);
+      testing.expectTrue(value.b.oldA1Location.assignRead.ok);
+      testing.expectEqual('function', value.b.oldA1Location.assignRead.valueType);
+      testing.expectTrue(value.b.oldA1Location.replaceRead.ok);
+      testing.expectEqual('function', value.b.oldA1Location.replaceRead.valueType);
+      expectCaptureValue(a1URL, value.b.oldA1Location.toString);
+      testing.expectTrue(value.b.oldA1Location.prototypeStable);
+      testing.expectTrue(value.b.oldA1Location.oldConstructorInstance);
+      testing.expectTrue(value.b.oldA1Location.hrefSet.ok);
+      testing.expectEqual(a1URL, value.b.oldA1Location.hrefSet.value.hrefAfter);
+      testing.expectTrue(value.b.oldA1Location.assignCall.ok);
+      testing.expectTrue(value.b.oldA1Location.assignCall.value.returnedUndefined);
+      testing.expectEqual(a1URL, value.b.oldA1Location.assignCall.value.hrefAfter);
+      testing.expectTrue(value.b.oldA1Location.replaceCall.ok);
+      testing.expectTrue(value.b.oldA1Location.replaceCall.value.returnedUndefined);
+      testing.expectEqual(a1URL, value.b.oldA1Location.replaceCall.value.hrefAfter);
+      testing.expectEqual({
+        url: a1URL,
+        phase: 'a1',
+        prototypeStable: true,
+        oldConstructorInstance: true,
+        oldElementRealm: true,
+        defaultViewNull: true,
+        ownerDocumentStable: true,
+      }, value.b.oldA1Document);
+      testing.expectTrue(value.b.afterOldA1LocationWrites.windowProxyStable);
+      testing.expectTrue(value.b.afterOldA1LocationWrites.currentLocationStable);
+
+      testing.expectTrue(value.a2.windowProxyStable);
+      testing.expectTrue(value.a2.windowPrototypeChangedFromA1);
+      testing.expectTrue(value.a2.currentLocationStable);
+      testing.expectTrue(value.a2.locationChangedFromA1);
+      testing.expectTrue(value.a2.locationChangedFromB);
+      testing.expectTrue(value.a2.locationPrototypeChangedFromA1);
+      testing.expectEqual(a2URL, value.a2.currentHref);
+      testing.expectEqual('a2', value.a2.currentPhase);
+      testing.expectTrue(value.a2.documentChangedFromA1);
+      testing.expectTrue(value.a2.documentPrototypeChangedFromA1);
+      expectCaptureValue(a1URL, value.a2.oldA1Location.href);
+      testing.expectTrue(value.a2.oldA1Location.prototypeStable);
+      testing.expectTrue(value.a2.oldA1Location.oldConstructorInstance);
+      testing.expectEqual({
+        url: a1URL,
+        phase: 'a1',
+        prototypeStable: true,
+        oldConstructorInstance: true,
+        oldElementRealm: true,
+        defaultViewNull: true,
+        ownerDocumentStable: true,
+      }, value.a2.oldA1Document);
+      testing.expectEqual({
+        oldConstructorInstance: false,
+        oldElementRealm: false,
+      }, value.a2.newDocumentRealm);
+
+      // A B Location kept after B is detached never becomes same-origin merely
+      // because its WindowProxy now targets A2. With no live target frame its
+      // SecurityError uses the detached-policy fallback text.
+      expectCaptureValue(true, value.a2.oldBLocation.prototypeNull);
+      expectSecurityError(
+        value.a2.oldBLocation.href,
+        `Failed to read a named property 'href' from 'Location': ${detachedPolicy}`
+      );
+      expectSecurityError(
+        value.a2.oldBLocation.assign,
+        `Failed to read a named property 'assign' from 'Location': ${detachedPolicy}`
+      );
+      expectCaptureValue('function', value.a2.oldBLocation.replaceType);
+      expectCaptureValue(undefined, value.a2.oldBLocation.thenGet);
+      expectSecurityError(value.a2.oldBLocation.thenHas, detachedPolicy);
+      expectSecurityError(value.a2.oldBLocation.setPrototype, detachedPolicy);
+      expectCaptureValue([
+        'href', 'replace', 'then', 'Symbol(Symbol.toStringTag)',
+        'Symbol(Symbol.hasInstance)', 'Symbol(Symbol.isConcatSpreadable)',
+      ], value.a2.oldBLocation.ownKeys);
+      testing.expectTrue(value.a2.oldBLocation.replaceCall.ok);
+      testing.expectTrue(value.a2.oldBLocation.replaceCall.value.returnedUndefined);
+      testing.expectTrue(value.a2.oldBLocation.hrefSet.ok);
+      testing.expectTrue(value.a2.afterOldBLocationWrites.currentLocationStable);
+      testing.expectEqual(a2URL, value.a2.afterOldBLocationWrites.currentHref);
+      testing.expectEqual('a2', value.a2.afterOldBLocationWrites.currentPhase);
+    });
+
+    return result;
+  })();
+</script>

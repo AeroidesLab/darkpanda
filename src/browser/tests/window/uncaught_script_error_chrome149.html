@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<head>
+  <title>Chrome 149 Window uncaught script ErrorEvent parity</title>
+  <script src="../testing.js"></script>
+</head>
+<body></body>
+
+<script id="inline_error_setup">
+(() => {
+  const state = window.__inlineErrorState = {
+    order: [],
+    elementLoad: 0,
+    elementError: 0,
+    error: new Error('inline boom'),
+  };
+  state.first = event => {
+    state.order.push('listener-first');
+    state.event = event;
+    state.phase = event.eventPhase;
+    state.targetIsWindow = event.target === window;
+    state.currentTargetIsWindow = event.currentTarget === window;
+    state.firstDefaultPrevented = event.defaultPrevented;
+  };
+  state.second = event => {
+    state.order.push('listener-second');
+    state.secondDefaultPrevented = event.defaultPrevented;
+  };
+  addEventListener('error', state.first);
+  window.onerror = function(message, source, lineno, colno, error) {
+    state.order.push('onerror');
+    state.args = [message, source, lineno, colno, error];
+    state.argCount = arguments.length;
+    state.thisIsWindow = this === window;
+    return true;
+  };
+  addEventListener('error', state.second);
+  testing.expectTrue(true);
+})();
+</script>
+<script onload="__inlineErrorState.elementLoad++" onerror="__inlineErrorState.elementError++">
+throw window.__inlineErrorState.error;
+</script>
+<script id="inline_error_assertions">
+(() => {
+  const state = window.__inlineErrorState;
+  // Snapshot all boolean invariants before cleanup, then remove the authored
+  // handlers before any assertion can throw.  Keeping stale error handlers
+  // installed made a failed assertion recursively enter this fixture and hid
+  // which `expectTrue` had failed behind the generic true/false diagnostic.
+  const booleanSurface = {
+    thisIsWindow: state.thisIsWindow,
+    // Inline classic-script errors use the document URL as their resource
+    // name.  Parse it before checking the fixture path because Chrome retains
+    // the runner's `?__darkpanda_test_runner=1` query component.
+    filenamePathHasExpectedSuffix: new URL(state.event.filename).pathname
+      .endsWith('/window/uncaught_script_error_chrome149.html'),
+    linenoIsPositive: state.event.lineno > 0,
+    colnoIsPositive: state.event.colno > 0,
+    isTrusted: state.event.isTrusted,
+    targetIsWindow: state.targetIsWindow,
+    currentTargetIsWindow: state.currentTargetIsWindow,
+    secondListenerSawPrevented: state.secondDefaultPrevented,
+  };
+  removeEventListener('error', state.first);
+  removeEventListener('error', state.second);
+  window.onerror = null;
+
+  testing.expectEqual(['listener-first', 'onerror', 'listener-second'], state.order);
+  testing.expectEqual(0, state.elementLoad);
+  testing.expectEqual(0, state.elementError);
+  testing.expectEqual(5, state.argCount);
+  testing.expectEqual(state.error, state.args[4]);
+  testing.expectEqual(state.error, state.event.error);
+  testing.expectEqual(state.event.message, state.args[0]);
+  testing.expectEqual(state.event.filename, state.args[1]);
+  testing.expectEqual(state.event.lineno, state.args[2]);
+  testing.expectEqual(state.event.colno, state.args[3]);
+  testing.expectEqual('Uncaught Error: inline boom', state.event.message);
+  testing.expectFalse(state.event.bubbles);
+  testing.expectTrue(state.event.cancelable);
+  testing.expectFalse(state.event.composed);
+  testing.expectEqual(Event.AT_TARGET, state.phase);
+  testing.expectFalse(state.firstDefaultPrevented);
+  testing.expectEqual({
+    thisIsWindow: true,
+    filenamePathHasExpectedSuffix: true,
+    linenoIsPositive: true,
+    colnoIsPositive: true,
+    isTrusted: true,
+    targetIsWindow: true,
+    currentTargetIsWindow: true,
+    secondListenerSawPrevented: true,
+  }, booleanSurface);
+})();
+</script>
+
+<script id="property_before_listener_setup">
+(() => {
+  const state = window.__propertyBeforeState = {order: []};
+  window.onerror = function(message, source, lineno, colno, error) {
+    state.order.push('onerror');
+    state.args = [message, source, lineno, colno, error];
+    return true;
+  };
+  state.listener = event => {
+    state.order.push('listener');
+    state.event = event;
+    state.listenerSawPrevented = event.defaultPrevented;
+  };
+  addEventListener('error', state.listener);
+  testing.expectTrue(true);
+})();
+</script>
+<script>throw 'primitive boom';</script>
+<script id="property_before_listener_assertions">
+(() => {
+  const state = window.__propertyBeforeState;
+  testing.expectEqual(['onerror', 'listener'], state.order);
+  testing.expectEqual('Uncaught primitive boom', state.event.message);
+  testing.expectEqual('primitive boom', state.event.error);
+  testing.expectEqual('primitive boom', state.args[4]);
+  testing.expectTrue(state.listenerSawPrevented);
+  removeEventListener('error', state.listener);
+  window.onerror = null;
+})();
+</script>
+
+<script id="property_replace_setup">
+(() => {
+  const state = window.__propertyReplaceState = {order: []};
+  state.first = () => state.order.push('listener-first');
+  state.second = event => {
+    state.order.push('listener-second');
+    state.preventedAtSecond = event.defaultPrevented;
+  };
+  addEventListener('error', state.first);
+  window.onerror = () => {
+    state.order.push('old-handler');
+    return true;
+  };
+  addEventListener('error', state.second);
+  window.onerror = () => {
+    state.order.push('replacement-handler');
+    return true;
+  };
+  testing.expectTrue(true);
+})();
+</script>
+<script>throw 7;</script>
+<script id="property_replace_assertions">
+(() => {
+  const state = window.__propertyReplaceState;
+  testing.expectEqual(
+    ['listener-first', 'replacement-handler', 'listener-second'],
+    state.order,
+  );
+  testing.expectTrue(state.preventedAtSecond);
+  removeEventListener('error', state.first);
+  removeEventListener('error', state.second);
+  window.onerror = null;
+})();
+</script>
+
+<script id="property_clear_reassign_setup">
+(() => {
+  const state = window.__propertyReassignState = {order: []};
+  state.first = () => state.order.push('listener-first');
+  state.second = event => {
+    state.order.push('listener-second');
+    state.preventedAtSecond = event.defaultPrevented;
+  };
+  addEventListener('error', state.first);
+  window.onerror = () => {
+    state.order.push('removed-handler');
+    return true;
+  };
+  window.onerror = null;
+  addEventListener('error', state.second);
+  window.onerror = () => {
+    state.order.push('new-handler');
+    return true;
+  };
+  testing.expectTrue(true);
+})();
+</script>
+<script>throw 8;</script>
+<script id="property_clear_reassign_assertions">
+(() => {
+  const state = window.__propertyReassignState;
+  testing.expectEqual(
+    ['listener-first', 'listener-second', 'new-handler'],
+    state.order,
+  );
+  testing.expectFalse(state.preventedAtSecond);
+  removeEventListener('error', state.first);
+  removeEventListener('error', state.second);
+  window.onerror = null;
+})();
+</script>
+
+<script id="object_throw_setup">
+(() => {
+  const state = window.__objectThrowState = {getterCalls: 0, functionCalls: 0};
+  state.thrown = {};
+  Object.defineProperty(state.thrown, 'toString', {
+    get() {
+      state.getterCalls++;
+      return function() {
+        state.functionCalls++;
+        return 'OBJECT_TOKEN';
+      };
+    },
+  });
+  window.onerror = function(message, source, lineno, colno, error) {
+    state.args = [message, source, lineno, colno, error];
+    return true;
+  };
+  state.listener = event => state.event = event;
+  addEventListener('error', state.listener);
+  testing.expectTrue(true);
+})();
+</script>
+<script>throw window.__objectThrowState.thrown;</script>
+<script id="object_throw_assertions">
+(() => {
+  const state = window.__objectThrowState;
+  testing.expectEqual(1, state.getterCalls);
+  testing.expectEqual(1, state.functionCalls);
+  testing.expectEqual('Uncaught OBJECT_TOKEN', state.event.message);
+  testing.expectEqual(state.thrown, state.event.error);
+  testing.expectEqual(state.thrown, state.args[4]);
+  removeEventListener('error', state.listener);
+  window.onerror = null;
+})();
+</script>
+
+<script id="external_runtime_setup">
+(() => {
+  const state = window.__externalRuntimeState = {order: [], elementError: 0};
+  window.onerror = function(message, source, lineno, colno, error) {
+    state.order.push('onerror');
+    state.args = [message, source, lineno, colno, error];
+    return true;
+  };
+  state.listener = event => {
+    state.order.push('window-error');
+    state.event = event;
+  };
+  addEventListener('error', state.listener);
+  testing.expectTrue(true);
+})();
+</script>
+<script src="uncaught_script_error_external.js"
+        onload="__externalRuntimeState.order.push('script-load')"
+        onerror="__externalRuntimeState.elementError++"></script>
+<script id="external_runtime_assertions">
+(() => {
+  const state = window.__externalRuntimeState;
+  testing.expectEqual(['onerror', 'window-error', 'script-load'], state.order);
+  testing.expectEqual(0, state.elementError);
+  testing.expectEqual(state.thrown, state.event.error);
+  testing.expectEqual(state.thrown, state.args[4]);
+  testing.expectTrue(state.event.filename.endsWith('/window/uncaught_script_error_external.js'));
+  removeEventListener('error', state.listener);
+  window.onerror = null;
+})();
+</script>
+
+<script id="external_compile_setup">
+(() => {
+  const state = window.__externalCompileState = {order: [], elementLoad: 0, elementError: 0};
+  window.onerror = function(message, source, lineno, colno, error) {
+    state.order.push('onerror');
+    state.args = [message, source, lineno, colno, error];
+    return true;
+  };
+  state.listener = event => {
+    state.order.push('window-error');
+    state.event = event;
+  };
+  addEventListener('error', state.listener);
+  testing.expectTrue(true);
+})();
+</script>
+<script src="uncaught_script_error_compile.js"
+        onload="__externalCompileState.order.push('script-load'); __externalCompileState.elementLoad++"
+        onerror="__externalCompileState.elementError++"></script>
+<script id="external_compile_assertions">
+(() => {
+  const state = window.__externalCompileState;
+  testing.expectEqual(['onerror', 'window-error', 'script-load'], state.order);
+  testing.expectEqual(1, state.elementLoad);
+  testing.expectEqual(0, state.elementError);
+  testing.expectEqual("Uncaught SyntaxError: Unexpected token '='", state.event.message);
+  testing.expectTrue(state.event.filename.endsWith('/window/uncaught_script_error_compile.js'));
+  testing.expectEqual(2, state.event.lineno);
+  testing.expectEqual(7, state.event.colno);
+  testing.expectTrue(state.event.error instanceof SyntaxError);
+  testing.expectEqual(state.event.error, state.args[4]);
+  removeEventListener('error', state.listener);
+  window.onerror = null;
+})();
+</script>
+
+<script id="cross_origin_muted_setup">
+(() => {
+  const state = window.__crossMutedState = {order: [], elementError: 0};
+  window.onerror = function(message, source, lineno, colno, error) {
+    state.order.push('onerror');
+    state.args = [message, source, lineno, colno, error];
+    return true;
+  };
+  state.listener = event => {
+    state.order.push('window-error');
+    state.event = event;
+  };
+  addEventListener('error', state.listener);
+  testing.expectTrue(true);
+})();
+</script>
+<script src="http://localhost:9582/src/browser/tests/window/uncaught_script_error_cross.js"
+        onload="__crossMutedState.order.push('script-load')"
+        onerror="__crossMutedState.elementError++"></script>
+<script id="cross_origin_muted_assertions">
+(() => {
+  const state = window.__crossMutedState;
+  testing.expectEqual(['onerror', 'window-error', 'script-load'], state.order);
+  testing.expectEqual(0, state.elementError);
+  testing.expectEqual('Script error.', state.event.message);
+  testing.expectEqual('', state.event.filename);
+  testing.expectEqual(0, state.event.lineno);
+  testing.expectEqual(0, state.event.colno);
+  testing.expectEqual(null, state.event.error);
+  testing.expectEqual(['Script error.', '', 0, 0, null], state.args);
+  removeEventListener('error', state.listener);
+  window.onerror = null;
+})();
+</script>
+
+<script id="module_runtime_setup">
+(() => {
+  const state = window.__moduleRuntimeState = {order: [], elementError: 0};
+  window.onerror = function(message, source, lineno, colno, error) {
+    state.order.push('onerror');
+    state.args = [message, source, lineno, colno, error];
+    return true;
+  };
+  state.listener = event => {
+    state.order.push('window-error');
+    state.event = event;
+  };
+  addEventListener('error', state.listener);
+  testing.expectTrue(true);
+})();
+</script>
+<script type="module" src="uncaught_script_error_module.js"
+        onload="__moduleRuntimeState.order.push('script-load')"
+        onerror="__moduleRuntimeState.elementError++"></script>
+<script id="module_runtime_assertions">
+testing.onload(() => {
+  const state = window.__moduleRuntimeState;
+  testing.expectEqual(['onerror', 'window-error', 'script-load'], state.order);
+  testing.expectEqual(0, state.elementError);
+  testing.expectEqual(state.thrown, state.event.error);
+  testing.expectEqual(state.thrown, state.args[4]);
+  testing.expectTrue(state.event.filename.endsWith('/window/uncaught_script_error_module.js'));
+  removeEventListener('error', state.listener);
+  window.onerror = null;
+});
+</script>

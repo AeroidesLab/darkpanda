@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<head>
+  <title>WindowAgent microtask queue ordering</title>
+  <script src="../testing.js"></script>
+</head>
+
+<body></body>
+
+<script id="same_origin_iframe_uses_one_fifo_microtask_queue" type="module">
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+
+  const order = [];
+  Promise.resolve().then(() => order.push('parent-p1'));
+  iframe.contentWindow.Promise.resolve().then(() => order.push('child-c1'));
+  Promise.resolve().then(() => order.push('parent-p2'));
+
+  // This continuation is queued after all three jobs. With per-Context
+  // queues, the parent queue incorrectly reaches it before the child queue is
+  // checkpointed and observes parent-p1,parent-p2. Chromium's shared
+  // same-origin WindowAgent queue observes one global FIFO.
+  await Promise.resolve();
+  testing.expectEqual('parent-p1,child-c1,parent-p2', order.join(','));
+</script>
+
+<script id="nested_microtask_can_create_initial_about_blank_context" type="module">
+  // Context creation happens while V8 is executing a promise job. The initial
+  // about:blank child must receive its creator WindowAgent queue at construction
+  // time; attempting to retrofit it with Context::SetMicrotaskQueue here is a
+  // process-fatal V8 API violation.
+  const iframe = await Promise.resolve().then(() => {
+    const child = document.createElement('iframe');
+    child.src = 'about:blank';
+    document.body.appendChild(child);
+    return child;
+  });
+
+  const order = [];
+  iframe.contentWindow.queueMicrotask(() => order.push('child-1'));
+  queueMicrotask(() => order.push('parent-1'));
+  iframe.contentWindow.queueMicrotask(() => order.push('child-2'));
+  await Promise.resolve();
+  testing.expectEqual('child-1,parent-1,child-2', order.join(','));
+</script>

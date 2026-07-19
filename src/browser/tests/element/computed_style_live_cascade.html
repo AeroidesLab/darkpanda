@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<style id="live-style">
+  .live-target {
+    content-visibility: auto;
+    display: flex;
+    opacity: 0.25;
+    visibility: hidden;
+    color: rgb(1, 2, 3);
+  }
+</style>
+
+<style id="cascade-style">
+  .specific-target { color: rgb(10, 11, 12); display: block; }
+  #specific-target { color: rgb(20, 21, 22); }
+  #specific-target { color: rgb(30, 31, 32); }
+
+  #important-target {
+    color: rgb(40, 41, 42) !important;
+    opacity: 0.2 !important;
+  }
+
+  .inherit-parent { color: rgb(50, 51, 52); visibility: hidden; }
+  .ua-display-override { display: inline-block; }
+</style>
+
+<style id="rule-owner">.rule-backed { color: rgb(60, 61, 62); }</style>
+
+<div id="live-target" class="live-target"></div>
+<div id="specific-target" class="specific-target"></div>
+<div id="important-target" style="color: rgb(70, 71, 72); opacity: 0.7 !important"></div>
+<div id="inherit-parent" class="inherit-parent"><span id="inherit-child"></span></div>
+<div id="ua-override" class="ua-display-override" hidden></div>
+
+<script id="computed_style_active_document_live_gate">
+{
+  const target = document.getElementById('live-target');
+  const retained = getComputedStyle(target);
+
+  testing.expectEqual(472, retained.length);
+  testing.expectEqual('accent-color', retained.item(0));
+  testing.expectEqual('rgb(1, 2, 3)', retained.color);
+
+  target.remove();
+  testing.expectEqual(0, retained.length);
+  testing.expectEqual('', retained.item(0));
+  testing.expectEqual(undefined, retained[0]);
+  testing.expectEqual('', retained.getPropertyValue('color'));
+  testing.expectEqual('', retained.display);
+
+  document.body.appendChild(target);
+  testing.expectEqual(472, retained.length);
+  testing.expectEqual('accent-color', retained.item(0));
+  testing.expectEqual('rgb(1, 2, 3)', retained.color);
+}
+</script>
+
+<script id="computed_style_authored_values_and_text_replacement">
+{
+  const target = document.getElementById('live-target');
+  const retained = getComputedStyle(target);
+
+  testing.expectEqual('auto', retained.contentVisibility);
+  testing.expectEqual('flex', retained.display);
+  testing.expectEqual('0.25', retained.opacity);
+  testing.expectEqual('hidden', retained.visibility);
+  testing.expectEqual('rgb(1, 2, 3)', retained.color);
+
+  document.getElementById('live-style').textContent = `
+    .live-target {
+      content-visibility: hidden;
+      display: inline-block;
+      opacity: 0.5;
+      visibility: visible;
+      color: rgb(4, 5, 6);
+    }
+  `;
+
+  testing.expectEqual('hidden', retained.contentVisibility);
+  testing.expectEqual('inline-block', retained.display);
+  testing.expectEqual('0.5', retained.opacity);
+  testing.expectEqual('visible', retained.visibility);
+  testing.expectEqual('rgb(4, 5, 6)', retained.color);
+}
+</script>
+
+<script id="computed_style_specificity_order_and_important">
+{
+  const specific = getComputedStyle(document.getElementById('specific-target'));
+  testing.expectEqual('rgb(30, 31, 32)', specific.color);
+  testing.expectEqual('block', specific.display);
+
+  const importantTarget = document.getElementById('important-target');
+  const important = getComputedStyle(importantTarget);
+  // A stylesheet !important beats a normal inline declaration.
+  testing.expectEqual('rgb(40, 41, 42)', important.color);
+  // Inline !important beats stylesheet !important.
+  testing.expectEqual('0.7', important.opacity);
+
+  importantTarget.style.setProperty('color', 'rgb(80, 81, 82)', 'important');
+  testing.expectEqual('rgb(80, 81, 82)', important.color);
+}
+</script>
+
+<script id="computed_style_inheritance_defaults_and_ua_origin">
+{
+  const child = document.getElementById('inherit-child');
+  const retained = getComputedStyle(child);
+  testing.expectEqual('rgb(50, 51, 52)', retained.color);
+  testing.expectEqual('hidden', retained.visibility);
+  testing.expectEqual('visible', retained.contentVisibility);
+
+  child.style.visibility = 'visible';
+  testing.expectEqual('visible', retained.visibility);
+
+  const uaOverride = getComputedStyle(document.getElementById('ua-override'));
+  testing.expectEqual('inline-block', uaOverride.display);
+}
+</script>
+
+<script id="css_style_declaration_parent_rule_and_iterator">
+{
+  const inline = document.getElementById('important-target').style;
+  const computed = getComputedStyle(document.getElementById('important-target'));
+  testing.expectEqual(null, inline.parentRule);
+  testing.expectEqual(null, computed.parentRule);
+
+  const rule = document.getElementById('rule-owner').sheet.cssRules[0];
+  testing.expectTrue(rule.style.parentRule === rule);
+
+  testing.expectTrue(CSSStyleDeclaration.prototype[Symbol.iterator] === Array.prototype.values);
+  inline.cssText = 'color: red; opacity: 0.4';
+  const names = Array.from(inline);
+  testing.expectEqual(2, names.length);
+  testing.expectEqual('color', names[0]);
+  testing.expectEqual('opacity', names[1]);
+}
+</script>

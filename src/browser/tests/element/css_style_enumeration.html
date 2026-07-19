@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body>
+
+<!--
+  Differential baseline: Chrome 149.0.7827.203 (CDP 127.0.0.1:9223).
+  This fixture checks generic CSSOM supported-property enumeration; none of
+  the assertions are tied to a page or challenge script.
+-->
+
+<script id="CSSStyleDeclaration_named_own_properties">
+{
+  const style = document.createElement('div').style;
+  const keys = Object.keys(style);
+
+  testing.expectEqual(0, style.length);
+  testing.expectEqual(732, keys.length);
+  testing.expectEqual('accentColor', keys[0]);
+  testing.expectEqual('zoom', keys[keys.length - 1]);
+  testing.expectTrue(keys.includes('backgroundColor'));
+  testing.expectTrue(keys.includes('webkitTransform'));
+  testing.expectTrue(Object.hasOwn(style, 'color'));
+  testing.expectTrue(Object.hasOwn(style, 'background-color'));
+  testing.expectFalse(Object.hasOwn(style, 'notARealProperty'));
+
+  const descriptor = Object.getOwnPropertyDescriptor(style, 'color');
+  testing.expectEqual('', descriptor.value);
+  testing.expectTrue(descriptor.writable);
+  testing.expectTrue(descriptor.enumerable);
+  testing.expectTrue(descriptor.configurable);
+
+  // Dash-case aliases are supported named properties but are deliberately
+  // omitted from the named enumerator, matching Blink's interceptor.
+  const dashDescriptor = Object.getOwnPropertyDescriptor(style, 'background-color');
+  testing.expectEqual('', dashDescriptor.value);
+  testing.expectTrue(dashDescriptor.enumerable);
+  testing.expectFalse(keys.includes('background-color'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_named_property_spelling">
+{
+  // Chrome 149's named interceptor is case-sensitive. This is intentionally
+  // different from setProperty(), whose CSS property-name input remains ASCII
+  // case-insensitive.
+  const style = document.createElement('div').style;
+  style.backgroundColor = 'red';
+
+  for (const name of ['backgroundColor', 'background-color']) {
+    testing.expectEqual('red', style[name]);
+    testing.expectTrue(name in style);
+    testing.expectEqual('red', Object.getOwnPropertyDescriptor(style, name).value);
+  }
+
+  for (const name of [
+    'COLOR',
+    'Color',
+    'BackgroundColor',
+    'background-Color',
+    'BACKGROUND-COLOR',
+    'background--color',
+  ]) {
+    testing.expectEqual(undefined, style[name]);
+    testing.expectFalse(name in style);
+    testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(style, name));
+  }
+
+  // Blink supports both forms for its legacy WebKit dash alias.
+  for (const name of ['webkitTransform', 'webkit-transform', '-webkit-transform']) {
+    testing.expectEqual('', style[name]);
+    testing.expectTrue(name in style);
+  }
+
+  const overlongName = 'a'.repeat(2048);
+  testing.expectEqual(undefined, style[overlongName]);
+  testing.expectFalse(overlongName in style);
+  testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(style, overlongName));
+
+  style.setProperty('BACKGROUND-COLOR', 'blue');
+  testing.expectEqual('blue', style.backgroundColor);
+}
+</script>
+
+<script id="CSSStyleDeclaration_indexed_own_properties">
+{
+  const style = document.createElement('div').style;
+  style.cssText = 'color: red; background-color: blue;';
+
+  const keys = Object.keys(style);
+  testing.expectEqual(2, style.length);
+  testing.expectEqual(734, keys.length);
+  testing.expectEqual('0', keys[0]);
+  testing.expectEqual('1', keys[1]);
+  testing.expectEqual('color', style[0]);
+  testing.expectEqual('background-color', style.item(1));
+
+  const descriptor = Object.getOwnPropertyDescriptor(style, '0');
+  testing.expectEqual('color', descriptor.value);
+  testing.expectFalse(descriptor.writable);
+  testing.expectTrue(descriptor.enumerable);
+  testing.expectTrue(descriptor.configurable);
+}
+</script>
+
+<script id="CSSStyleDeclaration_computed_indexed_properties">
+{
+  const element = document.createElement('div');
+  document.body.appendChild(element);
+  const computed = getComputedStyle(element);
+  const keys = Object.keys(computed);
+
+  testing.expectEqual(472, computed.length);
+  testing.expectEqual(1204, keys.length);
+  testing.expectEqual('0', keys[0]);
+  testing.expectEqual('471', keys[471]);
+  testing.expectEqual('accentColor', keys[472]);
+  testing.expectEqual('accent-color', computed[0]);
+  testing.expectEqual('accent-color', computed.item(0));
+  testing.expectEqual('-webkit-writing-mode', computed[471]);
+
+  const indexedDescriptor = Object.getOwnPropertyDescriptor(computed, '0');
+  testing.expectFalse(indexedDescriptor.writable);
+  testing.expectTrue(indexedDescriptor.enumerable);
+  testing.expectTrue(indexedDescriptor.configurable);
+
+  const namedDescriptor = Object.getOwnPropertyDescriptor(computed, 'color');
+  testing.expectTrue(namedDescriptor.writable);
+  testing.expectTrue(namedDescriptor.enumerable);
+  testing.expectTrue(namedDescriptor.configurable);
+
+  // The descriptor is writable because CSSOM exposes a named setter, but a
+  // resolved declaration block rejects every public mutation path.
+  testing.expectError('NoModificationAllowedError', () => computed.setProperty('color', 'red'));
+  testing.expectError('NoModificationAllowedError', () => computed.removeProperty('color'));
+  testing.expectError('NoModificationAllowedError', () => { computed.cssFloat = 'left'; });
+  testing.expectError('NoModificationAllowedError', () => { computed.cssText = 'color: red'; });
+  testing.expectError('NoModificationAllowedError', () => { computed.color = 'red'; });
+}
+</script>

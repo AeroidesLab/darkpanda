@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+<script id="trusted-types-report-only-worker">
+  testing.expectTrue(true);
+  (async () => {
+    const state = await testing.async();
+    const worker = new Worker('trusted_types_report_only_worker.js');
+    worker.onmessage = event => state.resolve(event.data);
+    worker.onerror = event => state.resolve({workerError: event.message});
+
+    await state.done(result => {
+      worker.terminate();
+      const expectedMessage =
+        "Evaluating a string as JavaScript violates this document's Trusted Type assignment requirements.";
+      testing.expectEqual(undefined, result.workerError);
+      testing.expectEqual(6, result.missing);
+      testing.expectEqual(1, result.same);
+      testing.expectEqual({name: 'EvalError', message: expectedMessage}, result.changed);
+      testing.expectEqual(4, result.nullish);
+      testing.expectEqual({name: 'EvalError', message: expectedMessage}, result.thrown);
+      testing.expectEqual(7, result.functionValue);
+      testing.expectEqual(
+        [
+          ['1', 'TrustedScript', 'eval'],
+          ['2', 'TrustedScript', 'eval'],
+          ['4', 'TrustedScript', 'eval'],
+          ['5', 'TrustedScript', 'eval'],
+          ['(function anonymous(\n) {\nreturn 7\n})', 'TrustedScript', 'Function'],
+        ],
+        result.calls,
+      );
+    });
+  })();
+</script>

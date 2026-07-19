@@ -1,0 +1,203 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+<body>
+
+<script id="shadow_stylesheets_tree_scope_same_object_and_closed_root">
+{
+    const documentSheets = document.styleSheets;
+    const documentLength = documentSheets.length;
+
+    const openHost = document.createElement('div');
+    const openRoot = openHost.attachShadow({ mode: 'open' });
+    const openStyle = document.createElement('style');
+    openStyle.textContent = '.open { color: red; }';
+    openRoot.appendChild(openStyle);
+    document.body.appendChild(openHost);
+
+    const openSheets = openRoot.styleSheets;
+    testing.expectTrue(openSheets === openRoot.styleSheets);
+    testing.expectEqual(1, openSheets.length);
+    testing.expectTrue(openSheets[0] === openStyle.sheet);
+    testing.expectEqual(documentLength, documentSheets.length);
+
+    const closedHost = document.createElement('div');
+    const retainedClosedRoot = closedHost.attachShadow({ mode: 'closed' });
+    document.body.appendChild(closedHost);
+    const closedStyle = document.createElement('style');
+    closedStyle.textContent = '.closed { color: blue; }';
+    retainedClosedRoot.appendChild(closedStyle);
+
+    testing.expectEqual(null, closedHost.shadowRoot);
+    testing.expectTrue(retainedClosedRoot.styleSheets === retainedClosedRoot.styleSheets);
+    testing.expectEqual(1, retainedClosedRoot.styleSheets.length);
+    testing.expectTrue(retainedClosedRoot.styleSheets[0] === closedStyle.sheet);
+    testing.expectEqual(documentLength, documentSheets.length);
+
+    openHost.remove();
+    closedHost.remove();
+}
+</script>
+
+<script id="shadow_stylesheets_live_order_remove_reinsert_and_type">
+{
+    const host = document.createElement('div');
+    const root = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+
+    const first = document.createElement('style');
+    first.textContent = '.first {}';
+    const second = document.createElement('style');
+    second.textContent = '.second {}';
+    root.appendChild(first);
+    root.appendChild(second);
+
+    const sheets = root.styleSheets;
+    testing.expectEqual(2, sheets.length);
+    testing.expectTrue(sheets[0].ownerNode === first);
+    testing.expectTrue(sheets[1].ownerNode === second);
+
+    root.insertBefore(second, first);
+    testing.expectTrue(sheets === root.styleSheets);
+    testing.expectEqual(2, sheets.length);
+    testing.expectTrue(sheets[0].ownerNode === second);
+    testing.expectTrue(sheets[1].ownerNode === first);
+
+    first.remove();
+    testing.expectEqual(1, sheets.length);
+    testing.expectTrue(sheets[0].ownerNode === second);
+    root.appendChild(first);
+    testing.expectEqual(2, sheets.length);
+    testing.expectTrue(sheets[0].ownerNode === second);
+    testing.expectTrue(sheets[1].ownerNode === first);
+
+    second.setAttribute('type', 'text/less');
+    testing.expectEqual(null, second.sheet);
+    testing.expectEqual(1, sheets.length);
+    testing.expectTrue(sheets[0].ownerNode === first);
+    second.setAttribute('type', 'TEXT/CSS');
+    testing.expectEqual(2, sheets.length);
+    testing.expectTrue(sheets[0].ownerNode === second);
+    testing.expectTrue(sheets[1].ownerNode === first);
+
+    host.remove();
+}
+</script>
+
+<script id="shadow_stylesheets_text_disabled_and_sheet_identity">
+{
+    const host = document.createElement('div');
+    const root = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+    const style = document.createElement('style');
+    style.textContent = '.before { color: red; }';
+    root.appendChild(style);
+
+    const sheets = root.styleSheets;
+    const sheet = style.sheet;
+    style.textContent = '.after { color: blue; }';
+    testing.expectTrue(root.styleSheets === sheets);
+    testing.expectTrue(style.sheet === sheet);
+    testing.expectTrue(sheets[0] === sheet);
+
+    style.disabled = true;
+    testing.expectTrue(root.styleSheets === sheets);
+    testing.expectTrue(style.sheet === sheet);
+    testing.expectTrue(sheets[0] === sheet);
+    style.disabled = false;
+    testing.expectTrue(sheets[0] === sheet);
+
+    host.remove();
+}
+</script>
+
+<script id="shadow_stylesheets_innerhtml_is_live">
+{
+    const host = document.createElement('div');
+    const root = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+    const sheets = root.styleSheets;
+
+    root.innerHTML = '<style id="from-inner-html">.x { color: green; }</style><span class="x"></span>';
+    const style = root.getElementById('from-inner-html');
+    testing.expectTrue(sheets === root.styleSheets);
+    testing.expectEqual(1, sheets.length);
+    testing.expectTrue(sheets[0] === style.sheet);
+
+    root.innerHTML = '<span>replacement</span>';
+    testing.expectTrue(sheets === root.styleSheets);
+    testing.expectEqual(0, sheets.length);
+
+    host.remove();
+}
+</script>
+
+<script id="shadow_stylesheets_nested_scopes_do_not_mix">
+{
+    const documentLength = document.styleSheets.length;
+    const outerHost = document.createElement('div');
+    const outerRoot = outerHost.attachShadow({ mode: 'open' });
+    const outerStyle = document.createElement('style');
+    outerStyle.textContent = '.outer {}';
+    outerRoot.appendChild(outerStyle);
+
+    const innerHost = document.createElement('section');
+    const innerRoot = innerHost.attachShadow({ mode: 'open' });
+    const innerStyle = document.createElement('style');
+    innerStyle.textContent = '.inner {}';
+    innerRoot.appendChild(innerStyle);
+    outerRoot.appendChild(innerHost);
+    document.body.appendChild(outerHost);
+
+    testing.expectEqual(1, outerRoot.styleSheets.length);
+    testing.expectTrue(outerRoot.styleSheets[0] === outerStyle.sheet);
+    testing.expectEqual(1, innerRoot.styleSheets.length);
+    testing.expectTrue(innerRoot.styleSheets[0] === innerStyle.sheet);
+    testing.expectEqual(documentLength, document.styleSheets.length);
+
+    outerHost.remove();
+    testing.expectEqual(0, outerRoot.styleSheets.length);
+    testing.expectEqual(0, innerRoot.styleSheets.length);
+    testing.expectEqual(null, outerStyle.sheet);
+    testing.expectEqual(null, innerStyle.sheet);
+
+    document.body.appendChild(outerHost);
+    testing.expectEqual(1, outerRoot.styleSheets.length);
+    testing.expectEqual(1, innerRoot.styleSheets.length);
+    testing.expectTrue(outerRoot.styleSheets[0] === outerStyle.sheet);
+    testing.expectTrue(innerRoot.styleSheets[0] === innerStyle.sheet);
+    outerHost.remove();
+}
+</script>
+
+<script id="stylesheet_moves_between_document_and_shadow_scopes">
+{
+    const documentSheets = document.styleSheets;
+    const baseline = documentSheets.length;
+    const host = document.createElement('div');
+    const root = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+    const shadowSheets = root.styleSheets;
+    const style = document.createElement('style');
+    style.textContent = '.moving {}';
+
+    document.head.appendChild(style);
+    testing.expectEqual(baseline + 1, documentSheets.length);
+    testing.expectEqual(0, shadowSheets.length);
+
+    root.appendChild(style);
+    testing.expectEqual(baseline, documentSheets.length);
+    testing.expectEqual(1, shadowSheets.length);
+    testing.expectTrue(shadowSheets[0] === style.sheet);
+
+    document.head.appendChild(style);
+    testing.expectEqual(baseline + 1, documentSheets.length);
+    testing.expectEqual(0, shadowSheets.length);
+    testing.expectTrue(documentSheets[documentSheets.length - 1] === style.sheet);
+
+    style.remove();
+    host.remove();
+}
+</script>
+
+</body>

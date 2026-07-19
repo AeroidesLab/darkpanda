@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=transform_stream_basic>
+  {
+    const ts = new TransformStream();
+    testing.expectEqual('object', typeof ts);
+    testing.expectEqual('object', typeof ts.readable);
+    testing.expectEqual('object', typeof ts.writable);
+  }
+</script>
+
+<script id=transform_stream_with_transformer>
+  (async function() {
+    const ts = new TransformStream({
+      transform(chunk, controller) {
+        controller.enqueue(chunk.toUpperCase());
+      }
+    });
+
+    const writer = ts.writable.getWriter();
+    const reader = ts.readable.getReader();
+
+    await writer.write('hello');
+    await writer.close();
+
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual('HELLO', result.value);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>
+
+<script id=writable_stream_basic>
+  {
+    const ws = new WritableStream();
+    testing.expectEqual('object', typeof ws);
+    testing.expectEqual(false, ws.locked);
+  }
+</script>
+
+<script id=writable_stream_writer>
+  {
+    const ws = new WritableStream();
+    const writer = ws.getWriter();
+    testing.expectEqual('object', typeof writer);
+    testing.expectEqual(true, ws.locked);
+  }
+</script>
+
+<script id=writable_stream_writer_desired_size>
+  {
+    const ws = new WritableStream();
+    const writer = ws.getWriter();
+    testing.expectEqual(1, writer.desiredSize);
+  }
+</script>
+
+<script id=text_encoder_stream_encoding>
+  {
+    const tes = new TextEncoderStream();
+    testing.expectEqual('utf-8', tes.encoding);
+    testing.expectEqual('object', typeof tes.readable);
+    testing.expectEqual('object', typeof tes.writable);
+  }
+</script>
+
+<script id=text_encoder_stream_prototype_surface>
+  {
+  testing.expectEqual(
+    ['encoding', 'readable', 'writable', 'constructor', 'Symbol(Symbol.toStringTag)'],
+    Reflect.ownKeys(TextEncoderStream.prototype).map(String),
+  );
+  testing.expectEqual(0, TextEncoderStream.length);
+
+  const stream = new TextEncoderStream();
+  testing.expectEqual([], Reflect.ownKeys(stream));
+  testing.expectEqual(true, stream.readable === stream.readable);
+  testing.expectEqual(true, stream.writable === stream.writable);
+  for (const name of ['encoding', 'readable', 'writable']) {
+    const descriptor = Object.getOwnPropertyDescriptor(TextEncoderStream.prototype, name);
+    testing.expectEqual(`get ${name}`, descriptor.get.name);
+    testing.expectEqual(undefined, descriptor.set);
+    testing.expectEqual(true, descriptor.enumerable);
+    testing.expectEqual(true, descriptor.configurable);
+  }
+  }
+</script>
+
+<script id=text_encoder_stream_domstring_conversion>
+  (async function() {
+    const stream = new TextEncoderStream();
+    const writer = stream.writable.getWriter();
+    const reader = stream.readable.getReader();
+
+    await writer.write(null);
+    await writer.close();
+    const result = await reader.read();
+    testing.expectEqual([110, 117, 108, 108], Array.from(result.value));
+  })();
+</script>
+
+<script id=text_encoder_stream_encode>
+  (async function() {
+    const tes = new TextEncoderStream();
+
+    const writer = tes.writable.getWriter();
+    const reader = tes.readable.getReader();
+
+    await writer.write('hi');
+    await writer.close();
+
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual(true, result.value instanceof Uint8Array);
+    // 'hi' in UTF-8 is [104, 105]
+    testing.expectEqual(104, result.value[0]);
+    testing.expectEqual(105, result.value[1]);
+    testing.expectEqual(2, result.value.length);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>
+
+<script id=text_encoder_stream_surrogate_state_and_flush>
+  (async function() {
+    async function encode(chunks) {
+      const input = new ReadableStream({
+        start(controller) {
+          chunks.forEach(chunk => controller.enqueue(chunk));
+          controller.close();
+        },
+      });
+      const reader = input.pipeThrough(new TextEncoderStream()).getReader();
+      const output = [];
+      for (;;) {
+        const result = await reader.read();
+        if (result.done) return output;
+        output.push(Array.from(result.value));
+      }
+    }
+
+    const high = String.fromCharCode(0xd83d);
+    const low = String.fromCharCode(0xde00);
+    testing.expectEqual(
+      [[65], [240, 159, 152, 128, 66]],
+      await encode(['A' + high, low + 'B']),
+    );
+    testing.expectEqual(
+      [[65], [239, 191, 189]],
+      await encode(['A' + high]),
+    );
+    testing.expectEqual(
+      [[239, 191, 189, 66]],
+      await encode([high, 'B']),
+    );
+    testing.expectEqual(
+      [[239, 191, 189]],
+      await encode([low]),
+    );
+    testing.expectEqual(
+      [[239, 191, 189]],
+      await encode([high, '']),
+    );
+  })();
+</script>
+
+<script id=text_encoder_stream_conversion_errors_are_promise_rejections>
+  (async function() {
+    async function rejection(chunk) {
+      const stream = new TextEncoderStream();
+      const writer = stream.writable.getWriter();
+      const reader = stream.readable.getReader();
+      let writePromise;
+      try {
+        writePromise = writer.write(chunk);
+      } catch (error) {
+        return {synchronousThrow: error};
+      }
+      let writeError;
+      let readError;
+      await Promise.all([
+        writePromise.catch(error => { writeError = error; }),
+        reader.read().catch(error => { readError = error; }),
+      ]);
+      return {writeError, readError};
+    }
+
+    const symbol = await rejection(Symbol('x'));
+    testing.expectEqual(undefined, symbol.synchronousThrow);
+    testing.expectEqual('TypeError', symbol.writeError.name);
+    testing.expectEqual('Cannot convert a Symbol value to a string', symbol.writeError.message);
+    testing.expectEqual(true, symbol.writeError === symbol.readError);
+
+    const custom = await rejection({
+      toString() { throw new RangeError('mine'); },
+    });
+    testing.expectEqual(undefined, custom.synchronousThrow);
+    testing.expectEqual('RangeError', custom.writeError.name);
+    testing.expectEqual('mine', custom.writeError.message);
+    testing.expectEqual(true, custom.writeError === custom.readError);
+  })();
+</script>
+
+<script id=pipe_through_basic>
+  (async function() {
+    const input = new ReadableStream({
+      start(controller) {
+        controller.enqueue('hello');
+        controller.close();
+      }
+    });
+
+    const ts = new TransformStream({
+      transform(chunk, controller) {
+        controller.enqueue(chunk.toUpperCase());
+      }
+    });
+
+    const output = input.pipeThrough(ts);
+    const reader = output.getReader();
+
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual('HELLO', result.value);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>
+
+<script id=pipe_to_basic>
+  (async function() {
+    const chunks = [];
+    const input = new ReadableStream({
+      start(controller) {
+        controller.enqueue('a');
+        controller.enqueue('b');
+        controller.close();
+      }
+    });
+
+    const ws = new WritableStream({
+      write(chunk) {
+        chunks.push(chunk);
+      }
+    });
+
+    await input.pipeTo(ws);
+    testing.expectEqual(2, chunks.length);
+    testing.expectEqual('a', chunks[0]);
+    testing.expectEqual('b', chunks[1]);
+  })();
+</script>
+
+<script id=pipe_through_text_decoder>
+  (async function() {
+    const bytes = new Uint8Array([104, 101, 108, 108, 111]);
+    const input = new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      }
+    });
+
+    const output = input.pipeThrough(new TextDecoderStream());
+    const reader = output.getReader();
+
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual('hello', result.value);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>

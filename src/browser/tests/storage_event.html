@@ -1,0 +1,122 @@
+<!doctype html>
+<script src="testing.js"></script>
+
+<script id="storage_event_api">
+  testing.expectEqual('function', typeof StorageEvent);
+  testing.expectEqual(Event.prototype, Object.getPrototypeOf(StorageEvent.prototype));
+
+  const empty = new StorageEvent('storage');
+  testing.expectEqual({
+    type: 'storage',
+    key: null,
+    oldValue: null,
+    newValue: null,
+    url: '',
+    storageArea: null,
+    bubbles: false,
+    cancelable: false,
+    composed: false,
+    isTrusted: false,
+  }, {
+    type: empty.type,
+    key: empty.key,
+    oldValue: empty.oldValue,
+    newValue: empty.newValue,
+    url: empty.url,
+    storageArea: empty.storageArea,
+    bubbles: empty.bubbles,
+    cancelable: empty.cancelable,
+    composed: empty.composed,
+    isTrusted: empty.isTrusted,
+  });
+
+  const initialized = new StorageEvent('before');
+  initialized.initStorageEvent(
+    'after', true, true, 'key', 'old', 'new',
+    'https://example.test/path', localStorage,
+  );
+  testing.expectEqual({
+    type: 'after',
+    key: 'key',
+    oldValue: 'old',
+    newValue: 'new',
+    url: 'https://example.test/path',
+    storageAreaMatches: true,
+    bubbles: true,
+    cancelable: true,
+    composed: false,
+    isTrusted: false,
+  }, {
+    type: initialized.type,
+    key: initialized.key,
+    oldValue: initialized.oldValue,
+    newValue: initialized.newValue,
+    url: initialized.url,
+    storageAreaMatches: initialized.storageArea === localStorage,
+    bubbles: initialized.bubbles,
+    cancelable: initialized.cancelable,
+    composed: initialized.composed,
+    isTrusted: initialized.isTrusted,
+  });
+</script>
+
+<iframe id="target" src="storage_event_fixture.html"></iframe>
+<script type="module" id="storage_event_delivery">
+  const state = await testing.async();
+  localStorage.clear();
+  sessionStorage.clear();
+  window.__storageTaskOrder = [];
+  let sourceEventCount = 0;
+  addEventListener('storage', () => sourceEventCount++);
+
+  addEventListener('message', (message) => {
+    if (message.data !== 'storage-event-ready') return;
+    const sourceURL = location.href;
+
+    localStorage.setItem('probe-key', 'one');
+    localStorage.setItem('probe-key', 'one'); // same-value no-op event
+    localStorage.setItem('probe-key', 'two');
+    localStorage.removeItem('probe-key');
+    localStorage.removeItem('probe-key'); // missing-key no-op event
+    localStorage.clear(); // empty-area no-op event
+
+    sessionStorage.setItem('probe-key', 's1');
+    sessionStorage.clear();
+    sessionStorage.clear(); // empty-area no-op event
+
+    window.__storageTaskOrder.push('sync');
+    queueMicrotask(() => window.__storageTaskOrder.push('microtask'));
+    setTimeout(() => state.resolve({
+      sourceURL,
+      sourceEventCount,
+      events: target.contentWindow.__storageEvents,
+      order: window.__storageTaskOrder,
+    }), 25);
+  }, {once: true});
+
+  state.done((result) => {
+    testing.expectEqual(0, result.sourceEventCount);
+    testing.expectEqual([
+      ['local', 'probe-key', null, 'one'],
+      ['local', 'probe-key', 'one', 'two'],
+      ['local', 'probe-key', 'two', null],
+      ['session', 'probe-key', null, 's1'],
+      ['session', null, null, null],
+    ], result.events.map((event) => [
+      event.kind, event.key, event.oldValue, event.newValue,
+    ]));
+    testing.expectEqual(true, result.events.every((event) =>
+      event.url === result.sourceURL &&
+      event.bubbles === false &&
+      event.cancelable === false &&
+      event.composed === false &&
+      event.isTrusted === true &&
+      event.storageAreaMatches === true &&
+      event.targetIsWindow === true &&
+      event.constructorMatches === true &&
+      event.prototypeMatches === true
+    ));
+    testing.expectEqual(['sync', 'microtask'], result.order.slice(0, 2));
+    testing.expectEqual(7, result.order.length);
+  });
+</script>

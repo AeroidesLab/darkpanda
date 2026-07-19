@@ -1,0 +1,46 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<script id="csp-header">
+  const cspHeaderBytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+  const captureHeader = callback => {
+    try {
+      callback();
+      return null;
+    } catch (error) {
+      return error;
+    }
+  };
+
+  const nonString = {};
+  testing.expectEqual(true, eval(nonString) === nonString);
+
+  const evalError = captureHeader(() => eval('1 + 1'));
+  testing.expectEqual('EvalError', evalError && evalError.name);
+  testing.expectEqual(true, evalError.message.includes('Content Security Policy'));
+  testing.expectEqual(true, evalError.message.includes("script-src 'self' 'unsafe-inline'"));
+
+  const functionError = captureHeader(() => new Function('return 1')());
+  testing.expectEqual('EvalError', functionError && functionError.name);
+
+  // String timers report legacy CSP denial but do not throw; no timer is
+  // installed and Chrome returns the sentinel id 0.
+  let timerError = null;
+  let timeoutId = null;
+  let intervalId = null;
+  try {
+    timeoutId = setTimeout('globalThis.cspTimer = 1', 0);
+    intervalId = setInterval('globalThis.cspTimer = 2', 0);
+  } catch (error) {
+    timerError = error;
+  }
+  testing.expectEqual(null, timerError);
+  testing.expectEqual(0, timeoutId);
+  testing.expectEqual(0, intervalId);
+
+  const wasmError = captureHeader(() => new WebAssembly.Module(cspHeaderBytes));
+  testing.expectEqual('CompileError', wasmError && wasmError.name);
+  testing.expectEqual(
+    `WebAssembly.Module(): Compiling or instantiating WebAssembly module violates the following Content Security policy directive because 'unsafe-eval' is not an allowed source of script in the following Content Security Policy directive: "script-src 'self' 'unsafe-inline'".`,
+    wasmError && wasmError.message,
+  );
+</script>

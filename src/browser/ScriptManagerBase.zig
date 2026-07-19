@@ -1,0 +1,1135 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+const std = @import("std");
+const lp = @import("darkpanda");
+const builtin = @import("builtin");
+
+const HttpClient = @import("HttpClient.zig");
+const http = @import("../network/http.zig");
+
+const js = @import("js/js.zig");
+const Session = @import("Session.zig");
+const Frame = @import("Frame.zig");
+const ImportMap = @import("ImportMap.zig");
+const WorkerGlobalScope = @import("webapi/WorkerGlobalScope.zig");
+
+const Element = @import("webapi/Element.zig");
+
+const log = lp.log;
+const String = lp.String;
+const Allocator = std.mem.Allocator;
+const IS_DEBUG = builtin.mode == .Debug;
+
+const ScriptManagerBase = @This();
+
+// Either a *Frame (for page ScriptManagers) or *WorkerGlobalScope (for workers).
+// Used from HTTP callbacks that only have a *Script in hand; the Script reaches
+// the owner through its manager pointer.
+pub const Owner = union(enum) {
+    frame: *Frame,
+    worker: *WorkerGlobalScope,
+
+    pub fn url(self: Owner) [:0]const u8 {
+        return switch (self) {
+            inline else => |g| g.url,
+        };
+    }
+
+    pub fn frameId(self: Owner) u32 {
+        return switch (self) {
+            inline else => |g| g._frame_id,
+        };
+    }
+
+    pub fn loaderId(self: Owner) u32 {
+        return switch (self) {
+            inline else => |g| g._loader_id,
+        };
+    }
+
+    pub fn session(self: Owner) *Session {
+        return switch (self) {
+            inline else => |g| g._session,
+        };
+    }
+
+    pub fn jsContext(self: Owner) *js.Context {
+        return switch (self) {
+            inline else => |g| g.js,
+        };
+    }
+
+    pub fn addHeaders(self: Owner, headers: *HttpClient.Headers) !void {
+        return switch (self) {
+            inline else => |g| g.headersForRequest(headers),
+        };
+    }
+
+    pub fn makeRequest(self: Owner, req: HttpClient.Request) !void {
+        return switch (self) {
+            inline else => |g| g.makeRequest(req),
+        };
+    }
+};
+
+owner: Owner,
+
+// used to prevent recursive evaluation
+is_evaluating: bool,
+
+// an evaluate() arrived while is_evaluating was set, signal to call evaluate()
+// when is_evaluating becomes false (to prevent re-entrancy)
+evaluate_pending: bool = false,
+
+// Only once this is true can deferred scripts be run
+static_scripts_done: bool,
+
+// List of async scripts. We don't care about the execution order of these, but
+// on shutdown/abort, we need to cleanup any pending ones. Used for both
+// frame-side .async scripts and .import / .import_async modules.
+async_scripts: std.DoublyLinkedList,
+
+// List of deferred scripts. These must be executed in order, but only once
+// dom_loaded == true. Workers never populate this list.
+defer_scripts: std.DoublyLinkedList,
+
+// When an async script is ready, it's queued here.
+ready_scripts: std.DoublyLinkedList,
+
+shutdown: bool = false,
+
+client: *HttpClient,
+allocator: Allocator,
+
+// See ScriptManager.zig for the type's documentation.
+imported_modules: std.StringHashMapUnmanaged(ImportedModule),
+
+// For workers this stays empty
+importmap: ImportMap,
+
+// Called at the end of evaluate() after all Base-owned work has run. Frame
+// wrapper uses this to drain defer_scripts and fire documentIsLoaded /
+// scriptsCompletedLoading. Null for workers.
+tail_hook: ?*const fn (*ScriptManagerBase) void,
+
+pub fn init(allocator: Allocator, http_client: *HttpClient, owner: Owner) ScriptManagerBase {
+    return .{
+        .owner = owner,
+        .async_scripts = .{},
+        .defer_scripts = .{},
+        .ready_scripts = .{},
+        .importmap = .empty,
+        .is_evaluating = false,
+        .allocator = allocator,
+        .imported_modules = .empty,
+        .client = http_client,
+        .static_scripts_done = false,
+        .tail_hook = null,
+    };
+}
+
+pub fn deinit(self: *ScriptManagerBase) void {
+    // necessary to free any arenas scripts may be referencing
+    self.reset();
+
+    self.imported_modules.deinit(self.allocator);
+}
+
+pub fn reset(self: *ScriptManagerBase) void {
+    var it = self.imported_modules.valueIterator();
+    while (it.next()) |value_ptr| {
+        switch (value_ptr.state) {
+            .done => |script| script.deinit(),
+            else => {},
+        }
+    }
+    self.imported_modules.clearRetainingCapacity();
+
+    // The importmap's contents were allocated from the owner's arena, which
+    // has been reset, so just zero the struct.
+    self.importmap = .empty;
+
+    clearList(&self.defer_scripts);
+    clearList(&self.async_scripts);
+    clearList(&self.ready_scripts);
+    self.static_scripts_done = false;
+    self.evaluate_pending = false;
+}
+
+fn clearList(list: *std.DoublyLinkedList) void {
+    while (list.popFirst()) |n| {
+        const script: *Script = @fieldParentPtr("node", n);
+        script.deinit();
+    }
+}
+
+pub fn getHeaders(
+    self: *ScriptManagerBase,
+    target_url: [:0]const u8,
+    mode: HttpClient.HeaderRequestContext.Mode,
+) !http.Headers {
+    return self.client.newRequestHeaders(target_url, .{
+        .destination = .script,
+        .mode = mode,
+        .initiator_url = self.owner.url(),
+        .top_level_url = self.owner.url(),
+        .referrer_url = self.owner.url(),
+        .credentials = .include,
+    });
+}
+
+fn acquireArena(self: *ScriptManagerBase, size_or_bucket: anytype, debug: []const u8) !Allocator {
+    return self.owner.session().getArena(size_or_bucket, debug);
+}
+
+fn releaseArena(self: *ScriptManagerBase, arena: Allocator) void {
+    self.owner.session().releaseArena(arena);
+}
+
+pub fn scriptList(self: *ScriptManagerBase, script: *const Script) *std.DoublyLinkedList {
+    return switch (script.extra) {
+        .import, .import_async => &self.async_scripts,
+        .preload => unreachable, // done/error are handled directly, never via scriptList
+        .frame => |fe| switch (fe.mode) {
+            .normal => unreachable, // not added to a list, executed immediately
+            .@"defer" => &self.defer_scripts,
+            .async => &self.async_scripts,
+        },
+    };
+}
+
+// Resolve a module specifier to a valid URL.
+pub fn resolveSpecifier(self: *ScriptManagerBase, arena: Allocator, base: [:0]const u8, specifier: [:0]const u8) ![:0]const u8 {
+    if (try self.importmap.resolve(arena, base, specifier)) |url| {
+        return url;
+    }
+    // The importmap _always_ resolves specifies if they're valid, falling back
+    // to the base + specifier itself. So we can only be here on something invalid.
+    return error.SpecifierResolutionFailed;
+}
+
+const PreloadOpts = struct {
+    // set when the preload comes from a <link rel=modulepreload> hint
+    hint_element: ?*Element.Html = null,
+};
+pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []const u8, opts: PreloadOpts) !void {
+    const gop = try self.imported_modules.getOrPut(self.allocator, url);
+    if (gop.found_existing) {
+        if (gop.value_ptr.hint) {
+            // A <link rel=modulepreload> never calls waitForImport, so the
+            // first real import adopts its waiter slot rather than adding one.
+            gop.value_ptr.hint = false;
+        } else {
+            gop.value_ptr.waiters += 1;
+        }
+        return;
+    }
+    errdefer _ = self.imported_modules.remove(url);
+
+    const arena = try self.acquireArena(.large, "SM.preloadImport");
+    errdefer self.releaseArena(arena);
+
+    const script = try arena.create(Script);
+    script.* = .{
+        .arena = arena,
+        .url = url,
+        .node = .{},
+        .manager = self,
+        .complete = false,
+        .source = .{ .remote = .{} },
+        .extra = .import,
+        .hint_element = opts.hint_element,
+    };
+
+    gop.value_ptr.* = .{ .state = .{ .loading = script }, .hint = opts.hint_element != null };
+
+    if (comptime IS_DEBUG) {
+        var ls: js.Local.Scope = undefined;
+        self.owner.jsContext().localScope(&ls);
+        defer ls.deinit();
+
+        log.debug(.http, "script queue", .{
+            .url = url,
+            .ctx = "module",
+            .referrer = referrer,
+            .stack = ls.local.stackTrace() catch "???",
+        });
+    }
+
+    // This seems wrong since we're not dealing with an async import (unlike
+    // getAsyncModule below), but all we're trying to do here is pre-load the
+    // script for execution at some point in the future (when waitForImport is
+    // called).
+    self.async_scripts.append(&script.node);
+
+    const owner = self.owner;
+    const session = owner.session();
+    owner.makeRequest(.{
+        .ctx = script,
+        .url = url,
+        .method = .GET,
+        .frame_id = owner.frameId(),
+        .loader_id = owner.loaderId(),
+        .headers = try self.getHeaders(url, .cors),
+        .cookie_jar = &session.cookie_jar,
+        .cookie_origin = owner.url(),
+        .resource_type = .script,
+        .notification = session.notification,
+        .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
+        .header_callback = Script.headerCallback,
+        .data_callback = Script.dataCallback,
+        .done_callback = Script.doneCallback,
+        .error_callback = Script.errorCallback,
+        .shutdown_callback = Script.shutdownCallback,
+    }) catch |err| {
+        self.async_scripts.remove(&script.node);
+        return err;
+    };
+}
+
+// <link rel=modulepreload href=...> — start fetching a module before import
+// resolution discovers it. Returns false when no fetch was started (the
+// module is already fetched/fetching): no event will fire on the link.
+pub fn preloadModuleHint(self: *ScriptManagerBase, element: *Element.Html, url: [:0]const u8, referrer: []const u8) !bool {
+    if (self.imported_modules.contains(url)) {
+        return false;
+    }
+    try self.preloadImport(url, referrer, .{ .hint_element = element });
+    return true;
+}
+
+pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource {
+    const was_evaluating = self.is_evaluating;
+    self.is_evaluating = true;
+    defer self.endEvaluationWindow(was_evaluating);
+
+    var client = self.client;
+    while (true) {
+        // imported_modules can be mutated by client.tick, so we need to lookup
+        // the entry on each iteration.
+        const entry = self.imported_modules.getEntry(url) orelse {
+            // It shouldn't be possible for v8 to ask for a module that we
+            // didn't `preloadImport` above.
+            return error.UnknownModule;
+        };
+        switch (entry.value_ptr.state) {
+            .loading => {
+                _ = try client.tick(200, .sync_wait);
+                continue;
+            },
+            .done => |script| {
+                var shared = false;
+                const buffer = entry.value_ptr.buffer;
+                const waiters = entry.value_ptr.waiters;
+
+                if (waiters == 1) {
+                    self.imported_modules.removeByPtr(entry.key_ptr);
+                } else {
+                    shared = true;
+                    entry.value_ptr.waiters = waiters - 1;
+                }
+                return .{
+                    .buffer = buffer,
+                    .shared = shared,
+                    .script = script,
+                };
+            },
+            .err => return error.Failed,
+        }
+    }
+}
+
+pub fn releaseImport(self: *ScriptManagerBase, url: [:0]const u8) void {
+    const entry = self.imported_modules.getEntry(url) orelse {
+        return;
+    };
+    if (entry.value_ptr.waiters > 1) {
+        entry.value_ptr.waiters -= 1;
+        return;
+    }
+    switch (entry.value_ptr.state) {
+        .done => |script| script.deinit(),
+        .loading, .err => return,
+    }
+    self.imported_modules.removeByPtr(entry.key_ptr);
+}
+
+pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsync.Callback, cb_data: *anyopaque, referrer: []const u8) !void {
+    // A <link rel=modulepreload> hint may already be fetching/fetched this module
+    if (self.imported_modules.getEntry(url)) |entry| {
+        if (entry.value_ptr.hint) {
+            switch (entry.value_ptr.state) {
+                .loading => |script| {
+                    // fetch is in flight, take the script and turn it into
+                    // our normal getAsyncImport flow (e.g. what we do at the
+                    // end of this file as-if imported_modules didn't have this script)
+                    if (comptime IS_DEBUG) {
+                        log.debug(.http, "script adopt", .{ .url = url, .ctx = "dynamic module", .state = "loading" });
+                    }
+                    script.extra = .{ .import_async = .{ .callback = cb, .data = cb_data } };
+                    self.imported_modules.removeByPtr(entry.key_ptr);
+                    return;
+                },
+                .done => |script| {
+                    // fetch is complete; deliver through the normal
+                    // ready_scripts flow. evaluate() runs it now, or — if an
+                    // evaluation window is open — evaluate_pending runs it
+                    // when that window closes.
+                    if (comptime IS_DEBUG) {
+                        log.debug(.http, "script adopt", .{ .url = url, .ctx = "dynamic module", .state = "done" });
+                    }
+                    script.extra = .{ .import_async = .{ .callback = cb, .data = cb_data } };
+                    self.imported_modules.removeByPtr(entry.key_ptr);
+                    self.ready_scripts.append(&script.node);
+                    self.evaluate();
+                    return;
+                },
+                // The hint's fetch failed; give the import its own attempt.
+                .err => {},
+            }
+        }
+    }
+
+    const arena = try self.acquireArena(.large, "SM.getAsyncImport");
+    errdefer self.releaseArena(arena);
+
+    const script = try arena.create(Script);
+    script.* = .{
+        .arena = arena,
+        .url = url,
+        .node = .{},
+        .manager = self,
+        .complete = false,
+        .source = .{ .remote = .{} },
+        .extra = .{ .import_async = .{
+            .callback = cb,
+            .data = cb_data,
+        } },
+    };
+
+    if (comptime IS_DEBUG) {
+        var ls: js.Local.Scope = undefined;
+        self.owner.jsContext().localScope(&ls);
+        defer ls.deinit();
+
+        log.debug(.http, "script queue", .{
+            .url = url,
+            .ctx = "dynamic module",
+            .referrer = referrer,
+            .stack = ls.local.stackTrace() catch "???",
+        });
+    }
+
+    // It's possible, but unlikely, for client.request to immediately finish
+    // a request, thus calling our callback. We don't want that to trigger a
+    // script evaluation while we're still setting the request up (the script
+    // isn't fully linked into our lists yet).
+    const was_evaluating = self.is_evaluating;
+    self.is_evaluating = true;
+    defer self.endEvaluationWindow(was_evaluating);
+
+    const owner = self.owner;
+    const session = self.owner.session();
+    self.async_scripts.append(&script.node);
+    owner.makeRequest(.{
+        .ctx = script,
+        .url = url,
+        .method = .GET,
+        .frame_id = owner.frameId(),
+        .loader_id = owner.loaderId(),
+        .headers = try self.getHeaders(url, .cors),
+        .resource_type = .script,
+        .cookie_jar = &session.cookie_jar,
+        .cookie_origin = owner.url(),
+        .notification = session.notification,
+        .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
+        .header_callback = Script.headerCallback,
+        .data_callback = Script.dataCallback,
+        .done_callback = Script.doneCallback,
+        .error_callback = Script.errorCallback,
+    }) catch |err| {
+        self.async_scripts.remove(&script.node);
+        return err;
+    };
+}
+
+// Called from the Page / Frame to signal it's done parsing the HTML, so
+// deferred scripts can start evaluating. Workers never call this.
+pub fn staticScriptsDone(self: *ScriptManagerBase) void {
+    lp.assert(self.static_scripts_done == false, "ScriptManagerBase.staticScriptsDone", .{});
+    self.static_scripts_done = true;
+
+    self.evaluate();
+}
+
+// A script-created parser (document.open/write/close) finished. Run any
+// deferred scripts it produced. Unlike staticScriptsDone, this can run after
+// the initial parse already completed (so it must not re-assert the flag): a
+// frame that was loaded (or document.write'd into multiple times) keeps
+// static_scripts_done set, and evaluate() only drains defer_scripts when it is.
+pub fn scriptCreatedParseDone(self: *ScriptManagerBase) void {
+    self.static_scripts_done = true;
+    self.evaluate();
+}
+
+pub fn evaluate(self: *ScriptManagerBase) void {
+    if (self.is_evaluating) {
+        // It's possible for a script.eval to cause evaluate to be called again.
+        // Signal that this happened so that, once the outer evaluate finishes,
+        // we evaluate() again to catch what we're skipping now.
+        self.evaluate_pending = true;
+        return;
+    }
+
+    self.is_evaluating = true;
+    defer self.endEvaluationWindow(false);
+
+    while (true) {
+        self.evaluate_pending = false;
+
+        while (self.ready_scripts.popFirst()) |n| {
+            var script: *Script = @fieldParentPtr("node", n);
+            switch (script.extra) {
+                .frame => {
+                    // Only .async mode reaches ready_scripts (defer stays in
+                    // defer_scripts, normal is sync and never queued).
+                    defer script.deinit();
+                    script.eval();
+                },
+                .import_async => |ia| {
+                    if (script.status < 200 or script.status > 299) {
+                        script.deinit();
+                        ia.callback(ia.data, error.FailedToLoad);
+                    } else {
+                        ia.callback(ia.data, .{
+                            .shared = false,
+                            .script = script,
+                            .buffer = script.source.remote,
+                        });
+                    }
+                },
+                .import => unreachable, // .import doesn't go through ready_scripts
+                .preload => unreachable, // .preload is buffered in the map, never queued
+            }
+        }
+
+        if (self.static_scripts_done) {
+            while (self.defer_scripts.first) |n| {
+                var script: *Script = @fieldParentPtr("node", n);
+                if (script.complete == false) break;
+                defer {
+                    _ = self.defer_scripts.popFirst();
+                    script.deinit();
+                }
+                // Only frame scripts populate defer_scripts.
+                script.eval();
+            }
+        }
+
+        // A script.eval above may have pumped the http client (module
+        // imports, preloads); anything that completed during the pump had
+        // its evaluate() swallowed by the re-entrancy guard, so re-drain
+        // here rather than relying on a future doneCallback that may never
+        // come.
+        if (self.evaluate_pending) {
+            continue;
+        }
+
+        if (self.static_scripts_done == false) {
+            // We can only execute deferred scripts if
+            // 1 - all the normal scripts are done
+            // 2 - we've finished parsing the HTML and at least queued all the scripts
+            // The last one isn't obvious, but it's possible for self.scripts to
+            // be empty not because we're done executing all the normal scripts
+            // but because we're done executing some (or maybe none), but we're still
+            // parsing the HTML.
+            return;
+        }
+        if (self.defer_scripts.first != null) {
+            // Head of the defer list is still in flight; its doneCallback
+            // re-enters evaluate.
+            return;
+        }
+        break;
+    }
+
+    // Frame wrapper uses this to fire documentIsLoaded and
+    // scriptsCompletedLoading. Null for workers.
+    if (self.tail_hook) |hook| {
+        hook(self);
+    }
+}
+
+pub fn endEvaluationWindow(self: *ScriptManagerBase, was_evaluating: bool) void {
+    self.is_evaluating = was_evaluating;
+    if (was_evaluating == false and self.evaluate_pending) {
+        // we have something to evaluate
+        self.evaluate();
+    }
+}
+
+pub const Script = struct {
+    complete: bool,
+    status: u16 = 0,
+    source: Source,
+    url: []const u8,
+    arena: Allocator,
+    extra: Extra,
+    node: std.DoublyLinkedList.Node,
+    manager: *ScriptManagerBase,
+    // HTML's muted-errors flag for a cross-origin classic script fetched in
+    // no-CORS mode. Evaluation still succeeds, but Window sees only the
+    // sanitized "Script error." projection.
+    muted_errors: bool = false,
+
+    // Set when this fetch was started by a <link rel=preload as=script> or
+    // <link rel=modulepreload> hint: the link element to fire load/error on
+    // once the fetch settles. Lives outside `extra` so adoption (e.g.
+    // getAsyncImport replacing .import with .import_async) can't lose it.
+    hint_element: ?*Element.Html = null,
+
+    // for debugging a rare production issue
+    header_callback_called: bool = false,
+
+    // for debugging a rare production issue
+    debug_transfer_id: u32 = 0,
+    debug_transfer_tries: u8 = 0,
+    debug_transfer_aborted: bool = false,
+    debug_transfer_bytes_received: usize = 0,
+    debug_transfer_notified_fail: bool = false,
+    debug_transfer_auth_challenge: bool = false,
+    debug_transfer_connection_id: usize = 0,
+
+    pub const Source = union(enum) {
+        @"inline": []const u8,
+        remote: std.ArrayList(u8),
+
+        pub fn content(self: Source) []const u8 {
+            return switch (self) {
+                .remote => |buf| buf.items,
+                .@"inline" => |c| c,
+            };
+        }
+    };
+
+    // The mode-specific extension. Only `.frame` carries frame-only state
+    // (script_element, kind, *Frame); workers and dynamic JS imports use
+    // `.import` / `.import_async` and never reach the .frame arm.
+    pub const Extra = union(enum) {
+        // Static module import — V8 resolution via imported_modules. Also
+        // <link rel=modulepreload> hints (see Script.hint_element).
+        import,
+        // Dynamic JS import() — resolved via ready_scripts callback.
+        import_async: ImportAsync,
+        // <link rel=preload as=script href=...>
+        preload,
+        // <script> tag in a frame.
+        frame: FrameExtra,
+
+        pub const FrameExtra = struct {
+            kind: Kind,
+            mode: Mode,
+            frame: *Frame,
+            script_element: *Element.Html.Script,
+
+            pub const Kind = enum {
+                module,
+                javascript,
+                importmap,
+            };
+
+            pub const Mode = enum {
+                // sync <script src="..."> — blocks parsing, evaluated
+                // immediately at the end of addFromElement via syncRequest.
+                normal,
+                // <script defer> / <script type=module> — queued in
+                // defer_scripts, drained in document order.
+                @"defer",
+                // <script async> / dynamically-inserted scripts — queued in
+                // async_scripts; once HTTP completes, doneCallback moves to
+                // ready_scripts and evaluate drains them.
+                async,
+            };
+        };
+    };
+
+    pub fn deinit(self: *Script) void {
+        self.manager.releaseArena(self.arena);
+    }
+
+    pub fn startCallback(response: HttpClient.Response) !void {
+        log.debug(.http, "script fetch start", .{ .req = response });
+    }
+
+    pub fn headerCallback(response: HttpClient.Response) !HttpClient.HeaderResult {
+        const self: *Script = @ptrCast(@alignCast(response.ctx));
+
+        self.status = response.status().?;
+        if (response.status() != 200) {
+            log.info(.http, "script header", .{
+                .req = response,
+                .status = response.status(),
+                .content_type = response.contentType(),
+            });
+
+            return .abort;
+        }
+
+        if (comptime IS_DEBUG) {
+            log.debug(.http, "script header", .{
+                .req = response,
+                .status = response.status(),
+                .content_type = response.contentType(),
+            });
+        }
+
+        switch (response.inner) {
+            .transfer => |transfer| {
+                // temp debug, trying to figure out why the next assert sometimes
+                // fails. Is the buffer just corrupt or is headerCallback really
+                // being called twice?
+                lp.assert(self.header_callback_called == false, "ScriptManagerBase.Header recall", .{
+                    .m = @tagName(std.meta.activeTag(self.extra)),
+                    .a1 = self.debug_transfer_id,
+                    .a2 = self.debug_transfer_tries,
+                    .a3 = self.debug_transfer_aborted,
+                    .a4 = self.debug_transfer_bytes_received,
+                    .a5 = self.debug_transfer_notified_fail,
+                    .a8 = self.debug_transfer_auth_challenge,
+                    .a9 = self.debug_transfer_connection_id,
+                    .b1 = transfer.id,
+                    .b2 = transfer._tries,
+                    .b3 = transfer.state == .aborted,
+                    .b4 = transfer.res.bytes_received,
+                    .b5 = transfer._notified_fail,
+                    .b8 = transfer._auth_challenge != null,
+                    .b9 = if (transfer._conn) |c| @intFromPtr(c) else 0,
+                });
+                self.header_callback_called = true;
+                self.debug_transfer_id = transfer.id;
+                self.debug_transfer_tries = transfer._tries;
+                self.debug_transfer_aborted = transfer.state == .aborted;
+                self.debug_transfer_bytes_received = transfer.res.bytes_received;
+                self.debug_transfer_notified_fail = transfer._notified_fail;
+                self.debug_transfer_auth_challenge = transfer._auth_challenge != null;
+                self.debug_transfer_connection_id = if (transfer._conn) |c| @intFromPtr(c) else 0;
+            },
+            else => {},
+        }
+
+        lp.assert(self.source.remote.capacity == 0, "ScriptManagerBase.Header buffer", .{ .capacity = self.source.remote.capacity });
+        var buffer: std.ArrayList(u8) = .empty;
+        if (response.contentLength()) |cl| {
+            try buffer.ensureTotalCapacity(self.arena, cl);
+        }
+        self.source = .{ .remote = buffer };
+        return .proceed;
+    }
+
+    pub fn dataCallback(response: HttpClient.Response, data: []const u8) !void {
+        const self: *Script = @ptrCast(@alignCast(response.ctx));
+        self._dataCallback(response, data) catch |err| {
+            log.err(.http, "SM.dataCallback", .{ .err = err, .transfer = response, .len = data.len });
+            return err;
+        };
+    }
+
+    fn _dataCallback(self: *Script, _: HttpClient.Response, data: []const u8) !void {
+        try self.source.remote.appendSlice(self.arena, data);
+    }
+
+    pub fn doneCallback(ctx: *anyopaque) !void {
+        const self: *Script = @ptrCast(@alignCast(ctx));
+        self.complete = true;
+        if (comptime IS_DEBUG) {
+            log.debug(.http, "script fetch complete", .{ .req = self.url });
+        }
+
+        const manager = self.manager;
+        switch (self.extra) {
+            .frame => |fe| switch (fe.mode) {
+                .async => {
+                    manager.async_scripts.remove(&self.node);
+                    manager.ready_scripts.append(&self.node);
+                },
+                .@"defer" => {}, // stays in defer_scripts; drained in order
+                .normal => unreachable, // syncRequest path doesn't go through callbacks
+            },
+            .import_async => {
+                manager.async_scripts.remove(&self.node);
+                manager.ready_scripts.append(&self.node);
+            },
+            .import => {
+                manager.async_scripts.remove(&self.node);
+                const entry = manager.imported_modules.getPtr(self.url).?;
+                entry.state = .{ .done = self };
+                entry.buffer = self.source.remote;
+            },
+            .preload => unreachable, // preloads use ScriptManager.PreloadedScript.doneCallback
+        }
+        self.queueHintEvent(.load);
+        manager.evaluate();
+    }
+
+    pub fn errorCallback(ctx: *anyopaque, err: anyerror) void {
+        const self: *Script = @ptrCast(@alignCast(ctx));
+        if (self.status == 404) {
+            log.info(.http, "script 404", .{
+                .req = self.url,
+                .extra = std.meta.activeTag(self.extra),
+            });
+        } else {
+            log.warn(.http, "script fetch error", .{
+                .err = err,
+                .req = self.url,
+                .extra = std.meta.activeTag(self.extra),
+                .status = self.status,
+            });
+        }
+
+        if (self.extra == .frame and self.extra.frame.mode == .normal) {
+            // This is blocked in a loop at the end of addFromElement, setting
+            // it to complete with a status of 0 will signal the error.
+            self.status = 0;
+            self.complete = true;
+            return;
+        }
+
+        const manager = self.manager;
+        manager.scriptList(self).remove(&self.node);
+        if (manager.shutdown) {
+            self.deinit();
+            return;
+        }
+
+        switch (self.extra) {
+            .import_async => |ia| ia.callback(ia.data, err),
+            .import => {
+                const entry = manager.imported_modules.getPtr(self.url).?;
+                entry.state = .err;
+            },
+            .frame => self.executeCallback(comptime .wrap("error")),
+            .preload => unreachable, // preloads use ScriptManager.PreloadedScript.errorCallback
+        }
+        self.queueHintEvent(.@"error");
+        self.deinit();
+        manager.evaluate();
+    }
+
+    // Owner-driven teardown (Frame / WorkerGlobalScope) killed this module
+    // fetch via Transfer.kill, which fires shutdown_callback — NOT
+    // error_callback (error_callback runs JS via manager.evaluate(), unsafe
+    // mid-teardown). Registered only on `.import` requests (preloadImport).
+    // Move the imported_modules entry off `.loading` to `.err` so a
+    // synchronous waitForImport returns error.Failed instead of spinning
+    // forever. We must not run JS or touch lists here; the orphaned Script is
+    // reaped by manager.reset()'s clearList over async_scripts.
+    pub fn shutdownCallback(ctx: *anyopaque) void {
+        const self: *Script = @ptrCast(@alignCast(ctx));
+        const entry = self.manager.imported_modules.getPtr(self.url) orelse return;
+        switch (entry.state) {
+            .loading => entry.state = .err,
+            .done, .err => {},
+        }
+    }
+
+    // Frame-only. Asserts extra == .frame; callers from the worker path never
+    // reach here (workers only produce .import / .import_async).
+    pub fn eval(self: *Script) void {
+        const fe = self.extra.frame;
+        const frame = fe.frame;
+
+        if (frame.isGoingAway()) {
+            // don't evaluate scripts for a dying frame.
+            return;
+        }
+
+        const previous_script = frame.document._current_script;
+        frame.document._current_script = fe.script_element;
+        defer frame.document._current_script = previous_script;
+
+        // Clear the document.write insertion point for this script
+        const previous_write_insertion_point = frame.document._write_insertion_point;
+        frame.document._write_insertion_point = null;
+        defer frame.document._write_insertion_point = previous_write_insertion_point;
+
+        // inline scripts aren't cached. remote ones are.
+        const cacheable = self.source == .remote;
+
+        const url = self.url;
+
+        log.info(.browser, "executing script", .{
+            .src = url,
+            .kind = fe.kind,
+            .cacheable = cacheable,
+        });
+
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        const local = &ls.local;
+
+        // Per spec, trigger any microtasks BEFORE execution in case the parser
+        // (e.g. via event callbacks) queued anything.
+        local.runMicrotasks();
+
+        // Handle importmap special case here: the content is a JSON containing imports.
+        // Multiple <script type="importmap"> elements merge with first-wins semantics.
+        if (fe.kind == .importmap) {
+            self.manager.importmap.merge(frame.arena, frame.base(), self.source.content()) catch |err| {
+                log.err(.browser, "parse importmap script", .{
+                    .err = err,
+                    .src = url,
+                    .kind = fe.kind,
+                    .cacheable = cacheable,
+                });
+                self.executeCallback(comptime .wrap("error"));
+                return;
+            };
+            self.executeCallback(comptime .wrap("load"));
+            return;
+        }
+
+        defer frame._event_manager.clearIgnoreList();
+
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(local);
+        defer try_catch.deinit();
+
+        // Custom-element reactions: the script body is a JS-execution
+        // boundary. Open a scope so any reactions it queues (or that were
+        // queued by the parser since the previous boundary) drain at the
+        // end of the script, before the parser resumes.
+        const ce_checkpoint = frame._ce_reactions.push();
+        defer frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
+
+        const EvalOutcome = enum { success, element_error, exception };
+        var error_report: ?js.TryCatch.ErrorReport = null;
+        const outcome: EvalOutcome = blk: {
+            const content = self.source.content();
+            switch (fe.kind) {
+                .javascript => {
+                    const compiled = local.compile(content, url) catch {
+                        if (!try_catch.hasCaught()) break :blk .element_error;
+                        error_report = try_catch.captureUncaught(frame.local_arena, url) catch |err| {
+                            log.warn(.js, "capture script compilation error", .{ .url = url, .err = err });
+                            break :blk .exception;
+                        };
+                        break :blk .exception;
+                    };
+                    _ = compiled.run() catch {
+                        error_report = try_catch.captureUncaught(frame.local_arena, url) catch |err| {
+                            log.warn(.js, "capture uncaught script error", .{ .url = url, .err = err });
+                            break :blk .exception;
+                        };
+                        break :blk .exception;
+                    };
+                },
+                .module => {
+                    // We don't care about waiting for the evaluation promise,
+                    // but synchronous top-level evaluation errors need their
+                    // original exception for Window ErrorEvent identity.
+                    frame.js.moduleWithWindowErrorReport(
+                        false,
+                        local,
+                        content,
+                        url,
+                        cacheable,
+                        frame.url,
+                        frame.local_arena,
+                        &error_report,
+                    ) catch |err| {
+                        if (err == error.EvaluationError and error_report != null) {
+                            break :blk .exception;
+                        }
+                        // CompileModule reports a syntax exception through the
+                        // surrounding TryCatch. Module graph fetch/resolve
+                        // failures do not have such a caught V8 exception and
+                        // remain element load failures.
+                        if (try_catch.hasCaught()) {
+                            error_report = try_catch.captureUncaught(frame.local_arena, url) catch |capture_err| {
+                                log.warn(.js, "capture module compilation error", .{ .url = url, .err = capture_err });
+                                break :blk .exception;
+                            };
+                            break :blk .exception;
+                        }
+                        break :blk .element_error;
+                    };
+                },
+                .importmap => unreachable, // handled before the try/catch.
+            }
+            break :blk .success;
+        };
+
+        if (comptime IS_DEBUG) {
+            log.debug(.browser, "executed script", .{ .src = url, .outcome = outcome });
+        }
+
+        defer {
+            local.runMacrotasks(); // also runs microtasks
+            frame.js.env.runMacrotasks() catch |err| {
+                log.err(.frame, "scheduler", .{ .err = err });
+            };
+        }
+
+        switch (outcome) {
+            .success => self.executeCallback(comptime .wrap("load")),
+            .element_error => {
+                const caught = try_catch.caughtOrError(frame.local_arena, error.Unknown);
+                log.warn(.js, "load/instantiate script", .{
+                    .url = url,
+                    .caught = caught,
+                    .cacheable = cacheable,
+                });
+                self.executeCallback(comptime .wrap("error"));
+            },
+            .exception => {
+                if (error_report) |*report| {
+                    frame.window.dispatchUncaughtScriptError(report, self.muted_errors, frame) catch |err| {
+                        report.releaseError();
+                        log.warn(.js, "dispatch uncaught script error", .{ .url = url, .err = err });
+                    };
+                }
+                // HTML marks a successfully fetched external script loaded
+                // even when compilation or evaluation raises an exception.
+                // Window error is dispatched first, then element load.
+                self.executeCallback(comptime .wrap("load"));
+            },
+        }
+    }
+
+    // Frame-only: fires load/error on the <script> element itself,
+    // synchronously. Hint <link> events go through queueHintEvent instead.
+    pub fn executeCallback(self: *const Script, typ: String) void {
+        // Inline scripts have no request-backed script element load/error
+        // lifecycle. Their runtime failures are reported only to Window.
+        if (self.source != .remote) return;
+        const fe = self.extra.frame;
+        const frame = fe.frame;
+        const Event = @import("webapi/Event.zig");
+        const event = Event.initTrusted(typ, .{}, frame._page) catch |err| {
+            log.warn(.js, "script internal callback", .{
+                .url = self.url,
+                .type = typ,
+                .err = err,
+            });
+            return;
+        };
+        frame._event_manager.dispatchOpts(fe.script_element.asNode().asEventTarget(), event, .{ .apply_ignore = true }) catch |err| {
+            log.warn(.js, "script callback", .{
+                .url = self.url,
+                .type = typ,
+                .err = err,
+            });
+        };
+    }
+
+    // Fire the hint <link>'s load/error event, queued on the scheduler rather
+    // than dispatched inline: done/error callbacks run inside HTTP pumps
+    // (possibly mid sync-wait, or inside V8's module-resolve callback for
+    // imports), where dispatching user JS would be a novel re-entrancy point.
+    // Browsers queue these as tasks anyway. The queued entry holds only the
+    // element, so it stays valid even if the script is adopted/freed first.
+    pub fn queueHintEvent(self: *const Script, kind: Frame.QueuedEvent.Kind) void {
+        const element = self.hint_element orelse return;
+        // hints only originate from a <link> in a frame, never from a worker
+        const frame = self.manager.owner.frame;
+        frame.queueElementEvent(element, kind) catch |err| {
+            log.warn(.js, "script hint event", .{ .url = self.url, .kind = kind, .err = err });
+        };
+    }
+};
+
+pub const ImportAsync = struct {
+    data: *anyopaque,
+    callback: ImportAsync.Callback,
+
+    pub const Callback = *const fn (ptr: *anyopaque, result: anyerror!ModuleSource) void;
+};
+
+pub const ModuleSource = struct {
+    shared: bool,
+    script: *Script,
+    buffer: std.ArrayList(u8),
+
+    pub fn deinit(self: *ModuleSource) void {
+        if (self.shared == false) {
+            self.script.deinit();
+        }
+    }
+
+    pub fn src(self: *const ModuleSource) []const u8 {
+        return self.buffer.items;
+    }
+};
+
+pub const ImportedModule = struct {
+    waiters: u16 = 1,
+    // Created by a <link rel=modulepreload> hint and not yet claimed by a real
+    // import. While set, the single waiter slot belongs to the hint, which
+    // will never collect it (see preloadModuleHint). A dynamic import may
+    // adopt a hint entry outright (see getAsyncImport).
+    hint: bool = false,
+    state: State,
+    buffer: std.ArrayList(u8) = .{},
+
+    pub const State = union(enum) {
+        err,
+        loading: *Script,
+        done: *Script,
+    };
+};
+
+const testing = @import("../testing.zig");
+
+test "ScriptManagerBase: shutdownCallback fails a .loading module" {
+    defer testing.reset();
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const sm = &frame._script_manager.base;
+    const url: [:0]const u8 = "http://127.0.0.1:9582/killed-module.js";
+
+    // Build a `.loading` import entry directly (mirroring preloadImport) so the
+    // test doesn't depend on the network. The orphaned Script is reaped by
+    // reset()'s clearList over async_scripts.
+    const arena = try sm.acquireArena(.large, "test.shutdown");
+    const script = try arena.create(Script);
+    script.* = .{
+        .arena = arena,
+        .url = url,
+        .node = .{},
+        .manager = sm,
+        .complete = false,
+        .source = .{ .remote = .{} },
+        .extra = .import,
+        .hint_element = null,
+    };
+    try sm.imported_modules.put(sm.allocator, url, .{ .state = .{ .loading = script } });
+    sm.async_scripts.append(&script.node);
+
+    // Transfer.kill fires this on owner teardown. It must move the entry off
+    // `.loading` so a synchronous waitForImport returns instead of hanging.
+    Script.shutdownCallback(script);
+
+    try testing.expect(sm.imported_modules.getPtr(url).?.state == .err);
+    try testing.expectError(error.Failed, sm.waitForImport(url));
+}

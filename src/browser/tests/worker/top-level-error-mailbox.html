@@ -1,0 +1,152 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>DedicatedWorker top-level error mailbox</title>
+<script src="../testing.js"></script>
+
+<script id="worker_top_level_error_mailbox" type="module">
+  const state = await testing.async();
+  const reports = {};
+  const workers = [];
+
+  const start = (kind, url, options) => {
+    const worker = new Worker(url, options);
+    workers.push(worker);
+    worker.onerror = event => {
+      // Suppress the expected uncaught-error report while retaining all of
+      // the creator-side ErrorEvent data produced at the mailbox boundary.
+      event.preventDefault();
+      reports[kind] = {
+        constructor: event.constructor.name,
+        type: event.type,
+        targetIsWorker: event.target === worker,
+        trusted: event.isTrusted,
+        bubbles: event.bubbles,
+        cancelable: event.cancelable,
+        message: event.message,
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+        errorIsNull: event.error === null,
+      };
+      worker.terminate();
+      if (reports.classic && reports.module) state.resolve(reports);
+    };
+  };
+
+  start('classic', './top-level-error-classic.js');
+  start('module', './top-level-error-module.js', { type: 'module' });
+
+  const timeout = setTimeout(
+    () => state.resolve({ timeout: true }),
+    2000,
+  );
+
+  await state.done(result => {
+    clearTimeout(timeout);
+    testing.expectEqual(undefined, result.timeout);
+
+    for (const report of [result.classic, result.module]) {
+      testing.expectEqual('ErrorEvent', report.constructor);
+      testing.expectEqual('error', report.type);
+      testing.expectTrue(report.targetIsWorker);
+      testing.expectTrue(report.trusted);
+      testing.expectFalse(report.bubbles);
+      testing.expectTrue(report.cancelable);
+      testing.expectTrue(report.filename.startsWith(location.origin + '/'));
+      testing.expectTrue(report.lineno > 0);
+      testing.expectTrue(report.colno > 0);
+      testing.expectTrue(report.errorIsNull);
+    }
+
+    testing.expectEqual(
+      'Uncaught Error: classic worker top-level mailbox marker',
+      result.classic.message,
+    );
+    testing.expectTrue(result.classic.filename.endsWith('/top-level-error-classic.js'));
+    testing.expectEqual(3, result.classic.lineno);
+    testing.expectEqual(1, result.classic.colno);
+
+    testing.expectEqual(
+      'Uncaught TypeError: module worker top-level mailbox marker',
+      result.module.message,
+    );
+    testing.expectTrue(result.module.filename.endsWith('/top-level-error-module.js'));
+    testing.expectEqual(3, result.module.lineno);
+    testing.expectEqual(7, result.module.colno);
+  });
+
+  for (const worker of workers) worker.terminate();
+
+  // V8's error report stringifies a non-Error thrown value, but Chromium does
+  // not inspect arbitrary `message` or `stack` properties while transporting
+  // the report to the creator isolate.
+  {
+    const accessorState = await testing.async();
+    const markers = [];
+    const worker = new Worker('./top-level-error-accessors.js');
+    const timeout = setTimeout(
+      () => accessorState.resolve({ timeout: true }),
+      2000,
+    );
+    worker.onmessage = event => markers.push(event.data);
+    worker.onerror = event => {
+      event.preventDefault();
+      setTimeout(() => accessorState.resolve({
+        markers,
+        message: event.message,
+        errorIsNull: event.error === null,
+      }), 0);
+    };
+
+    await accessorState.done(result => {
+      clearTimeout(timeout);
+      testing.expectEqual(undefined, result.timeout);
+      testing.expectEqual(['toString'], result.markers);
+      testing.expectEqual('Uncaught accessor-object', result.message);
+      testing.expectTrue(result.errorIsNull);
+    });
+    worker.terminate();
+  }
+
+  // An uncancelled Worker ErrorEvent propagates to the creator Window. The
+  // Window event remains cancelable and also carries a null cross-agent error.
+  {
+    const propagationState = await testing.async();
+    const order = [];
+    const worker = new Worker('./top-level-error-propagate.js');
+    const timeout = setTimeout(
+      () => propagationState.resolve({ timeout: true, order }),
+      2000,
+    );
+    const onWindowError = event => {
+      if (!event.message.includes('parent propagation marker')) return;
+      order.push({
+        where: 'window',
+        target: event.target === window,
+        errorIsNull: event.error === null,
+      });
+      event.preventDefault();
+      window.removeEventListener('error', onWindowError);
+      propagationState.resolve(order);
+    };
+    window.addEventListener('error', onWindowError);
+    worker.onerror = event => {
+      order.push({
+        where: 'worker',
+        target: event.target === worker,
+        errorIsNull: event.error === null,
+      });
+      // Deliberately do not cancel: this is what triggers parent propagation.
+    };
+
+    await propagationState.done(result => {
+      clearTimeout(timeout);
+      testing.expectEqual(undefined, result.timeout);
+      testing.expectEqual([
+        { where: 'worker', target: true, errorIsNull: true },
+        { where: 'window', target: true, errorIsNull: true },
+      ], result);
+    });
+    worker.terminate();
+  }
+</script>

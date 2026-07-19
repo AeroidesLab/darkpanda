@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id="Image">
+{
+    let i1 = new Image()
+    testing.expectEqual(0, i1.width);
+    testing.expectEqual(null, i1.getAttribute('width'));
+    testing.expectEqual(0, i1.height);
+    testing.expectEqual(null, i1.getAttribute('height'));
+
+    let i2 = new Image(10)
+    testing.expectEqual(10, i2.width);
+    testing.expectEqual('10', i2.getAttribute('width'));
+    testing.expectEqual(0, i2.height);
+    testing.expectEqual(null, i2.getAttribute('height'));
+
+    let i3 = new Image(10, 20)
+    testing.expectEqual(10, i3.width);
+    testing.expectEqual('10', i3.getAttribute('width'));
+    testing.expectEqual(20, i3.height);
+    testing.expectEqual('20', i3.getAttribute('height'));
+}
+</script>
+
+<script id="src_alt">
+{
+    const img = document.createElement('img');
+
+    testing.expectEqual('', img.src);
+    testing.expectEqual('', img.alt);
+    testing.expectEqual('', img.currentSrc);
+
+    img.src = ' \t/image/slow.png\n';
+    // URL selection trims HTML whitespace while the content attribute keeps
+    // the author's exact text. currentSrc remains empty until terminal load.
+    testing.expectEqual(testing.ORIGIN + '/image/slow.png', img.src);
+    testing.expectEqual('', img.currentSrc);
+    testing.expectEqual(false, img.complete);
+    testing.expectEqual(' \t/image/slow.png\n', img.getAttribute('src'));
+
+    img.removeAttribute('src');
+    testing.expectEqual('', img.src);
+    testing.expectEqual('', img.currentSrc);
+    testing.expectEqual(true, img.complete);
+
+    img.alt = 'Test image';
+    testing.expectEqual('Test image', img.alt);
+    testing.expectEqual('Test image', img.getAttribute('alt'));
+}
+</script>
+
+<script id="width_height_setters">
+{
+    const img = document.createElement('img');
+
+    img.width = 100;
+    testing.expectEqual(100, img.width);
+    testing.expectEqual('100', img.getAttribute('width'));
+
+    img.height = 200;
+    testing.expectEqual(200, img.height);
+    testing.expectEqual('200', img.getAttribute('height'));
+
+    img.setAttribute('width', '50');
+    testing.expectEqual(50, img.width);
+
+    img.setAttribute('height', 'invalid');
+    testing.expectEqual(0, img.height);
+}
+</script>
+
+<script id="crossOrigin">
+{
+    const img = document.createElement('img');
+
+    testing.expectEqual(null, img.crossOrigin);
+
+    img.crossOrigin = 'anonymous';
+    testing.expectEqual('anonymous', img.crossOrigin);
+    testing.expectEqual('anonymous', img.getAttribute('crossorigin'));
+
+    img.crossOrigin = null;
+    testing.expectEqual(null, img.crossOrigin);
+    testing.expectEqual(null, img.getAttribute('crossorigin'));
+}
+</script>
+
+<script id="loading">
+{
+    const img = document.createElement('img');
+
+    testing.expectEqual('eager', img.loading);
+
+    img.loading = 'lazy';
+    testing.expectEqual('lazy', img.loading);
+    testing.expectEqual('lazy', img.getAttribute('loading'));
+}
+</script>
+
+<script id="complete">
+{
+    // Image with no src is complete per spec
+    const img = document.createElement('img');
+    testing.expectEqual(true, img.complete);
+
+    // A selected resource is incomplete until the asynchronous request ends.
+    img.src = '/image/slow.png';
+    testing.expectEqual(false, img.complete);
+    testing.expectEqual('', img.currentSrc);
+    img.removeAttribute('src');
+    testing.expectEqual(true, img.complete);
+
+    // Image constructor also complete
+    const img2 = new Image();
+    testing.expectEqual(true, img2.complete);
+}
+</script>
+
+<body></body>
+
+<script id="img-load-event" type=module>
+  // An img fires a load event when src is set.
+  const state = await testing.async();
+  const img = document.createElement("img");
+
+  img.addEventListener("load", (e) => state.resolve({ event: e, kind: "load" }));
+  img.addEventListener("error", (e) => state.resolve({ event: e, kind: "error" }));
+  img.src = "/image/valid.png";
+
+  testing.expectEqual(false, img.complete);
+  testing.expectEqual('', img.currentSrc);
+
+  await state.done(({ event: e, kind }) => {
+    testing.expectEqual("load", kind);
+    testing.expectEqual(false, e.bubbles);
+    testing.expectEqual(false, e.cancelBubble);
+    testing.expectEqual(false, e.cancelable);
+    testing.expectEqual(false, e.composed);
+    testing.expectEqual(true, e.isTrusted);
+    testing.expectEqual(img, e.target);
+    testing.expectEqual(true, img.complete);
+    testing.expectEqual(testing.ORIGIN + '/image/valid.png', img.currentSrc);
+    testing.expectEqual(3, img.naturalWidth);
+    testing.expectEqual(2, img.naturalHeight);
+
+    const entries = performance.getEntriesByName(img.currentSrc, "resource");
+    const entry = entries[entries.length - 1];
+    testing.expectEqual(true, entry instanceof PerformanceResourceTiming);
+    testing.expectEqual("img", entry.initiatorType);
+    testing.expectEqual(200, entry.responseStatus);
+  });
+</script>
+
+<script id="img-no-load-without-src">
+{
+  // An img without src should not fire a load event.
+  let fired = false;
+  const img = document.createElement("img");
+  img.addEventListener("load", () => { fired = true; });
+  document.body.appendChild(img);
+  testing.onload(() => testing.expectEqual(false, fired));
+}
+</script>
+
+<script id="lazy-src-set" type=module>
+  {
+  // Append to DOM first, then set src — load should still fire.
+  const state = await testing.async();
+  const img = document.createElement("img");
+  img.onload = () => state.resolve(true);
+  document.body.appendChild(img);
+  img.src = "/image/valid.png";
+
+  await state.done((result) => testing.expectEqual(true, result));
+  }
+</script>
+
+<script id="detached-setattribute-load" type=module>
+  {
+    const state = await testing.async();
+    const img = new Image();
+    img.addEventListener('load', event => state.resolve(event));
+    img.setAttribute('src', '/image/valid.png');
+
+    testing.expectEqual(false, img.complete);
+    testing.expectEqual('', img.currentSrc);
+    await state.done(event => {
+      testing.expectEqual(true, event.isTrusted);
+      testing.expectEqual(img, event.target);
+      testing.expectEqual(3, img.naturalWidth);
+      testing.expectEqual(2, img.naturalHeight);
+    });
+  }
+</script>
+
+<script id="invalid-image-error" type=module>
+  {
+    const state = await testing.async();
+    const img = new Image();
+    img.addEventListener('error', event => state.resolve(event));
+    img.src = '/image/invalid.png';
+
+    await state.done(event => {
+      testing.expectEqual(true, event.isTrusted);
+      testing.expectEqual(false, event.bubbles);
+      testing.expectEqual(true, img.complete);
+      testing.expectEqual(testing.ORIGIN + '/image/invalid.png', img.currentSrc);
+      testing.expectEqual(0, img.naturalWidth);
+      testing.expectEqual(0, img.naturalHeight);
+    });
+  }
+</script>
+
+<script id="http-status-image-error" type=module>
+  {
+    const state = await testing.async();
+    const img = new Image();
+    img.addEventListener('error', event => state.resolve(event));
+    img.src = '/image/404.png';
+
+    await state.done(event => {
+      testing.expectEqual(true, event.isTrusted);
+      testing.expectEqual(true, img.complete);
+      testing.expectEqual(testing.ORIGIN + '/image/404.png', img.currentSrc);
+      testing.expectEqual(0, img.naturalWidth);
+    });
+  }
+</script>
+
+<script id="src-replacement-discards-stale" type=module>
+  {
+    const state = await testing.async();
+    const img = new Image();
+    const events = [];
+    img.addEventListener('load', () => {
+      events.push('load:' + img.currentSrc);
+      // The superseded slow transfer has enough time to finish after the
+      // selected resource. A stale terminal callback/event must still remain
+      // invisible after the newer generation has loaded.
+      setTimeout(() => state.resolve(events.slice()), 300);
+    });
+    img.addEventListener('error', () => events.push('error:' + img.currentSrc));
+
+    img.src = '/image/slow.png';
+    img.src = '/image/valid.png';
+
+    await state.done(result => {
+      testing.expectEqual(1, result.length);
+      testing.expectEqual('load:' + testing.ORIGIN + '/image/valid.png', result[0]);
+      testing.expectEqual(true, img.complete);
+      testing.expectEqual(3, img.naturalWidth);
+    });
+  }
+</script>
+
+<script id="owner-teardown-cancels-image" type=module>
+  {
+    const state = await testing.async();
+    const marker = 'image-owner-request-started';
+    const iframe = document.createElement('iframe');
+
+    const onMessage = event => {
+      if (event.data !== marker) return;
+      window.removeEventListener('message', onMessage);
+      iframe.remove();
+
+      // Let the underlying delayed response finish. Frame retirement must
+      // have cancelled its deferred callback context without dispatching into
+      // the destroyed realm (the suite tracking allocator catches leaks).
+      setTimeout(() => state.resolve(true), 450);
+    };
+    window.addEventListener('message', onMessage);
+    iframe.srcdoc = `<!doctype html><script>
+      const image = new Image();
+      image.src = '${testing.ORIGIN}/image/teardown-slow.png';
+      parent.postMessage('${marker}', '*');
+    <\/script>`;
+    document.body.appendChild(iframe);
+
+    await state.done(result => testing.expectEqual(true, result));
+  }
+</script>
+
+<script id="src-setter-single-request" type=module>
+  {
+    const state = await testing.async();
+    await fetch('/image/count/reset');
+
+    const img = new Image();
+    img.onload = async () => {
+      const response = await fetch('/image/count');
+      state.resolve(Number(await response.text()));
+    };
+    img.src = '/image/counted.png';
+
+    await state.done(count => testing.expectEqual(1, count));
+  }
+</script>
+
+<img id="parser-created-image" src="/image/slow.png">
+<script id="parser-created-load" type=module>
+  {
+    const state = await testing.async();
+    const img = document.getElementById('parser-created-image');
+    img.addEventListener('load', event => state.resolve(event));
+    await state.done(event => {
+      testing.expectEqual(true, event.isTrusted);
+      testing.expectEqual(3, img.naturalWidth);
+      testing.expectEqual(2, img.naturalHeight);
+    });
+  }
+</script>
+
+<script id=url_encode>
+  {
+    let img = document.createElement('img');
+    img.src = '/image/valid.png?hello=world !';
+    testing.expectEqual('/image/valid.png?hello=world !', img.getAttribute('src'));
+    testing.expectEqual(testing.ORIGIN + '/image/valid.png?hello=world%20!', img.src);
+    img.removeAttribute('src');
+  }
+</script>

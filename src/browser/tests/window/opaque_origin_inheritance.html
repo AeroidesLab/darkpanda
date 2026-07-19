@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="data_document_about_blank_inherits_opaque_origin" type="module">
+{
+  const state = await testing.async();
+  const timeout = setTimeout(() => state.reject(new Error('opaque-origin fixture timeout')), 5000);
+
+  window.addEventListener('message', event => {
+    if (event.data?.kind !== 'opaque-origin-result') return;
+    clearTimeout(timeout);
+    state.resolve(event.data);
+  });
+
+  const source = `<!doctype html><body><script>
+    const result = {
+      kind: 'opaque-origin-result',
+      parentOrigin: location.origin,
+      received: {},
+      setupError: null,
+    };
+
+    function inspect(name, frame) {
+      const item = {accessible: false, origin: null, error: null};
+      try {
+        item.accessible = frame.contentDocument !== null;
+        item.origin = frame.contentWindow.location.origin;
+      } catch (caught) {
+        item.error = {name: caught.name, message: caught.message};
+      }
+      result[name] = item;
+      return item;
+    }
+
+    function listenAndPost(name, frame) {
+      try {
+        frame.contentWindow.addEventListener('message', event => {
+          result.received[name] = event.data;
+        });
+        // Omitted targetOrigin defaults to "/" and therefore compares the
+        // unguessable opaque identity, not just the serialized "null" origin.
+        frame.contentWindow.postMessage(name + '-default-slash');
+      } catch (caught) {
+        result[name].error ||= {name: caught.name, message: caught.message};
+      }
+    }
+
+    try {
+      const blank = document.createElement('iframe');
+      blank.src = 'about:blank';
+      document.body.appendChild(blank);
+      inspect('blank', blank);
+      listenAndPost('blank', blank);
+
+      const srcdoc = document.createElement('iframe');
+      srcdoc.src = 'about:srcdoc';
+      document.body.appendChild(srcdoc);
+      inspect('srcdoc', srcdoc);
+      listenAndPost('srcdoc', srcdoc);
+
+      const blobURL = URL.createObjectURL(new Blob([
+        '<!doctype html><p id="blob-marker">opaque blob child</p>',
+      ], {type: 'text/html'}));
+      const blob = document.createElement('iframe');
+      blob.src = blobURL;
+      document.body.appendChild(blob);
+      inspect('blob', blob);
+      try {
+        result.blob.marker = blob.contentDocument
+          ?.getElementById('blob-marker')?.textContent;
+      } catch (caught) {
+        result.blob.error ||= {name: caught.name, message: caught.message};
+      }
+      listenAndPost('blob', blob);
+      URL.revokeObjectURL(blobURL);
+    } catch (caught) {
+      result.setupError = {name: caught.name, message: caught.message};
+    }
+
+    // All potentially cross-origin reads above are guarded. Even a regression
+    // now posts a diagnostic result instead of throwing inside this timer and
+    // leaving the outer test to fail only as an opaque timeout.
+    setTimeout(() => parent.postMessage(result, '*'), 25);
+  <\/script>`;
+
+  const frame = document.createElement('iframe');
+  frame.src = 'data:text/html,' + encodeURIComponent(source);
+  document.body.appendChild(frame);
+
+  await state.done(result => {
+    testing.expectEqual('null', result.parentOrigin);
+    testing.expectEqual(null, result.setupError);
+
+    for (const name of ['blank', 'srcdoc', 'blob']) {
+      testing.expectTrue(result[name].accessible);
+      testing.expectEqual('null', result[name].origin);
+      testing.expectEqual(null, result[name].error);
+      testing.expectEqual(name + '-default-slash', result.received[name]);
+    }
+    testing.expectEqual('opaque blob child', result.blob.marker);
+  });
+}
+</script>

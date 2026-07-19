@@ -1,0 +1,58 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<body>
+<script id="writer-script">
+  const captureWrite = callback => {
+    try { callback(); return null; } catch (error) { return error; }
+  };
+
+  const blocked = captureWrite(() => document.write('<span id="blocked-write">blocked</span>'));
+
+  const policy = trustedTypes.createPolicy('writer', { createHTML: input => input });
+  document.write(policy.createHTML('<span id="trusted-write">trusted</span>'));
+
+  const calls = [];
+  trustedTypes.createPolicy('default', {
+    createHTML(input, type, sink) {
+      calls.push([input, type, sink]);
+      return input;
+    },
+  });
+  document.write(
+    policy.createHTML('<b id="mixed-a">A</b>'),
+    '<i id="mixed-b">B</i>',
+    policy.createHTML('<u id="mixed-c">C</u>'),
+  );
+
+  document.writeln('<span id="written-line">line</span>');
+
+  testing.onload(() => {
+    testing.expectEqual('TypeError', blocked && blocked.name);
+    testing.expectEqual(
+      "Failed to execute 'write' on 'Document': This document requires 'TrustedHTML' assignment.",
+      blocked && blocked.message,
+    );
+    testing.expectEqual(null, document.getElementById('blocked-write'));
+    testing.expectEqual('trusted', document.getElementById('trusted-write').textContent);
+
+    testing.expectEqual(
+      [[
+        '<b id="mixed-a">A</b><i id="mixed-b">B</i><u id="mixed-c">C</u>',
+        'TrustedHTML',
+        'Document write',
+      ]],
+      calls.slice(0, 1),
+    );
+    testing.expectEqual('A', document.getElementById('mixed-a').textContent);
+    testing.expectEqual('B', document.getElementById('mixed-b').textContent);
+    testing.expectEqual('C', document.getElementById('mixed-c').textContent);
+
+    testing.expectEqual(
+      ['<span id="written-line">line</span>', 'TrustedHTML', 'Document writeln'],
+      calls[1],
+    );
+    testing.expectEqual(false, calls[1][0].endsWith('\n'));
+    testing.expectEqual('line', document.getElementById('written-line').textContent);
+  });
+</script>
+</body>

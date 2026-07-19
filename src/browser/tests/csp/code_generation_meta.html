@@ -1,0 +1,29 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<meta http-equiv="Content-Security-Policy"
+      content="script-src 'unsafe-inline' 'wasm-unsafe-eval'">
+<script id="csp-meta">
+  const cspMetaBytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+  const captureMeta = callback => {
+    try {
+      callback();
+      return null;
+    } catch (error) {
+      return error;
+    }
+  };
+
+  testing.expectEqual('EvalError', captureMeta(() => eval('1')).name);
+  testing.expectEqual('EvalError', captureMeta(() => new Function('return 1')()).name);
+
+  // wasm-unsafe-eval permits Wasm but does not permit string compilation.
+  testing.expectEqual('[object WebAssembly.Module]',
+    Object.prototype.toString.call(new WebAssembly.Module(cspMetaBytes)));
+
+  // Attribute changes process another policy. Policies intersect, so changing
+  // this meta to a stricter value cannot relax its earlier eval restriction.
+  const meta = document.querySelector('meta[http-equiv]');
+  meta.content = "script-src 'unsafe-inline'";
+  const wasmError = captureMeta(() => new WebAssembly.Module(cspMetaBytes));
+  testing.expectEqual('CompileError', wasmError && wasmError.name);
+</script>

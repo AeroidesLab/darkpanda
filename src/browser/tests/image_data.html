@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=constructor-basic>
+  {
+    const img = new ImageData(10, 20);
+    testing.expectEqual(10, img.width);
+    testing.expectEqual(20, img.height);
+    testing.expectEqual("srgb", img.colorSpace);
+    testing.expectEqual("rgba-unorm8", img.pixelFormat);
+  }
+</script>
+
+<script id=chrome149-prototype-shape>
+  {
+    testing.expectEqual(
+      ["width", "height", "colorSpace", "data", "pixelFormat", "constructor"],
+      Object.getOwnPropertyNames(ImageData.prototype),
+    );
+    for (const name of ["width", "height", "colorSpace", "data", "pixelFormat"]) {
+      const descriptor = Object.getOwnPropertyDescriptor(ImageData.prototype, name);
+      testing.expectEqual("function", typeof descriptor.get);
+      testing.expectEqual(undefined, descriptor.set);
+      testing.expectEqual(true, descriptor.enumerable);
+      testing.expectEqual(true, descriptor.configurable);
+    }
+    testing.expectEqual(2, ImageData.length);
+  }
+</script>
+
+<script id=data-property>
+  {
+    const img = new ImageData(2, 3);
+    const data = img.data;
+    testing.expectEqual(true, data instanceof Uint8ClampedArray);
+    // 2 * 3 * 4 (RGBA) = 24 bytes
+    testing.expectEqual(24, data.length);
+    testing.expectEqual(["data"], Reflect.ownKeys(img));
+    testing.expectEqual(
+      { value: data, writable: false, enumerable: true, configurable: true },
+      Object.getOwnPropertyDescriptor(img, "data"),
+    );
+  }
+</script>
+
+<script id=data-initialized-to-zero>
+  {
+    const img = new ImageData(2, 2);
+    const data = img.data;
+    for (let i = 0; i < data.length; i++) {
+      testing.expectEqual(0, data[i]);
+    }
+  }
+</script>
+
+<script id=data-mutability>
+  {
+    const img = new ImageData(1, 1);
+    const data = img.data;
+    // Set pixel to red (RGBA)
+    data[0] = 255;
+    data[1] = 0;
+    data[2] = 0;
+    data[3] = 255;
+
+    // Read back through the same accessor
+    const data2 = img.data;
+    testing.expectEqual(255, data2[0]);
+    testing.expectEqual(0, data2[1]);
+    testing.expectEqual(0, data2[2]);
+    testing.expectEqual(255, data2[3]);
+  }
+</script>
+
+<script id=constructor-with-settings>
+  {
+    const img = new ImageData(5, 5, { colorSpace: "display-p3" });
+    testing.expectEqual(5, img.width);
+    testing.expectEqual(5, img.height);
+    testing.expectEqual("display-p3", img.colorSpace);
+  }
+</script>
+
+<script id=pixel-format-selects-array-type>
+  {
+    const u8 = new ImageData(1, 1, { pixelFormat: "rgba-unorm8" });
+    const f16 = new ImageData(1, 1, { pixelFormat: "rgba-float16" });
+    const f32 = new ImageData(1, 1, { colorSpace: "display-p3", pixelFormat: "rgba-float32" });
+    testing.expectEqual("Uint8ClampedArray", u8.data.constructor.name);
+    testing.expectEqual("Float16Array", f16.data.constructor.name);
+    testing.expectEqual("Float32Array", f32.data.constructor.name);
+    testing.expectEqual(4, u8.data.byteLength);
+    testing.expectEqual(8, f16.data.byteLength);
+    testing.expectEqual(16, f32.data.byteLength);
+    testing.expectEqual("rgba-float16", f16.pixelFormat);
+    testing.expectEqual("rgba-float32", f32.pixelFormat);
+    testing.expectEqual("display-p3", f32.colorSpace);
+    testing.expectEqual([], Reflect.ownKeys(f16));
+    testing.expectEqual([], Reflect.ownKeys(f32));
+  }
+</script>
+
+<script id=typed-array-constructor-overloads>
+  {
+    const u8 = new Uint8ClampedArray(8);
+    const u8Image = new ImageData(u8, 1);
+    testing.expectEqual(2, u8Image.height);
+    testing.expectEqual(true, u8Image.data === u8);
+    testing.expectEqual(2, new ImageData(u8, 1, undefined).height);
+    testing.expectEqual(2, new ImageData(u8, 1, undefined, undefined).height);
+    testing.expectError("IndexSizeError", () => new ImageData(u8, 1, undefined, null));
+    testing.expectError("IndexSizeError", () => new ImageData(u8, 1, undefined, { colorSpace: "display-p3" }));
+
+    const f16 = new Float16Array(8);
+    const f16Image = new ImageData(f16, 1, 2, { pixelFormat: "rgba-float16" });
+    testing.expectEqual(true, f16Image.data === f16);
+    testing.expectEqual("rgba-float16", f16Image.pixelFormat);
+    testing.expectError(
+      "IndexSizeError",
+      () => new ImageData(f16, 1, undefined, { pixelFormat: "rgba-float16" }),
+    );
+
+    const f32 = new Float32Array(8);
+    const f32Image = new ImageData(f32, 1, 2, { pixelFormat: "rgba-float32" });
+    testing.expectEqual(true, f32Image.data === f32);
+    testing.expectEqual("rgba-float32", f32Image.pixelFormat);
+  }
+</script>
+
+<script id=dynamic-settings-structured-clone>
+  {
+    const source = new ImageData(1, 1, { colorSpace: "display-p3", pixelFormat: "rgba-float16" });
+    source.data[0] = 0.5;
+    const clone = structuredClone(source);
+    testing.expectEqual("display-p3", clone.colorSpace);
+    testing.expectEqual("rgba-float16", clone.pixelFormat);
+    testing.expectEqual("Float16Array", clone.data.constructor.name);
+    testing.expectEqual(0.5, clone.data[0]);
+  }
+</script>
+
+<script id=single-pixel>
+  {
+    const img = new ImageData(1, 1);
+    testing.expectEqual(4, img.data.length);
+    testing.expectEqual(1, img.width);
+    testing.expectEqual(1, img.height);
+  }
+</script>
+
+<script id=too-large>
+  testing.expectError("IndexSizeError", () => new ImageData(2_147_483_648, 2_147_483_648));
+  testing.expectError("TypeError", () => new ImageData(1, 1, { colorSpace: "rec2020" }));
+  testing.expectError("TypeError", () => new ImageData(1, 1, { pixelFormat: "rgb10a2" }));
+  testing.expectError("InvalidStateError", () => new ImageData(new Float16Array(4), 1));
+</script>
+
+<script id=chrome149-constructor-errors>
+  {
+    const capture = fn => {
+      try { fn(); testing.fail("expected constructor failure"); }
+      catch (error) { return error; }
+    };
+    const verifyDOM = (fn, name, reason) => {
+      const error = capture(fn);
+      const message = `Failed to construct 'ImageData': ${reason}`;
+      testing.expectEqual(name, error.name);
+      testing.expectEqual(message, error.message);
+      testing.expectEqual(`${name}: ${message}`, String(error));
+      testing.expectEqual(`${name}: ${message}`, String(error.stack).split("\n")[0]);
+    };
+    const verifyType = (fn, reason, stackReason = reason) => {
+      const error = capture(fn);
+      const message = `Failed to construct 'ImageData': ${reason}`;
+      testing.expectEqual("TypeError", error.name);
+      testing.expectEqual(message, error.message);
+      testing.expectEqual(`TypeError: ${stackReason}`, String(error.stack).split("\n")[0]);
+      testing.expectEqual(
+        { value: message, writable: true, enumerable: true, configurable: true },
+        Object.getOwnPropertyDescriptor(error, "message"),
+      );
+    };
+
+    verifyType(
+      () => new ImageData(1, 1, { colorSpace: "rec2020" }),
+      "The provided value 'rec2020' is not a valid enum value of the type PredefinedColorSpace.",
+    );
+    verifyType(
+      () => new ImageData(1, 1, { pixelFormat: "rgb10a2" }),
+      "Failed to read the 'pixelFormat' property from 'ImageDataSettings': The provided value 'rgb10a2' is not a valid enum value of type ImageDataPixelFormat.",
+      "The provided value 'rgb10a2' is not a valid enum value of type ImageDataPixelFormat.",
+    );
+    verifyDOM(() => new ImageData(0, 1), "IndexSizeError", "The source width is zero or not a number.");
+    verifyDOM(() => new ImageData(1, 0), "IndexSizeError", "The source height is zero or not a number.");
+    verifyDOM(
+      () => new ImageData(2_147_483_648, 1),
+      "IndexSizeError",
+      "The requested image size exceeds the supported range.",
+    );
+    verifyDOM(
+      () => new ImageData(new Uint8ClampedArray(4), 1, 1, { pixelFormat: "rgba-float16" }),
+      "InvalidStateError",
+      "Uint8ClampedArray must use rgba-unorm8 pixelFormat.",
+    );
+    verifyDOM(
+      () => new ImageData(new Float16Array(4), 1),
+      "InvalidStateError",
+      "Float16Array must use rgba-float16 pixelFormat.",
+    );
+    verifyDOM(
+      () => new ImageData(new Uint8ClampedArray(5), 1),
+      "InvalidStateError",
+      "The input data length is not a multiple of 4.",
+    );
+    verifyDOM(
+      () => new ImageData(new Uint8ClampedArray(8), 3),
+      "IndexSizeError",
+      "The input data length is not a multiple of (4 * width).",
+    );
+    verifyDOM(
+      () => new ImageData(new Uint8ClampedArray(8), 1, 1),
+      "IndexSizeError",
+      "The input data length is not equal to (4 * width * height).",
+    );
+    verifyDOM(
+      () => new ImageData(new Uint8ClampedArray(8), 1, undefined, null),
+      "IndexSizeError",
+      "The source height is zero or not a number.",
+    );
+    // Unsupported views take the numeric overload; Uint32 conversion of this
+    // Int8Array is zero, so Blink reports the width validation error.
+    verifyDOM(
+      () => new ImageData(new Int8Array(4), 1),
+      "IndexSizeError",
+      "The source width is zero or not a number.",
+    );
+  }
+</script>

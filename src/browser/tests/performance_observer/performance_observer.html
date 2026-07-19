@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="observe_performance_mark">
+{
+  const observer = new PerformanceObserver((list, observer) => {
+    testing.expectEqual(true, list instanceof PerformanceObserverEntryList);
+    testing.expectEqual(true, observer instanceof PerformanceObserver);
+
+    const entries = list.getEntries();
+    testing.expectEqual(true, entries instanceof Array);
+    testing.expectEqual(2, entries.length);
+
+    {
+      const { name, startTime, duration, entryType } = entries[0];
+      testing.expectEqual("operationStart", name);
+      testing.expectEqual(20, startTime);
+      testing.expectEqual(0, duration);
+      testing.expectEqual("mark", entryType);
+    }
+
+    {
+      const { name, startTime, duration, entryType } = entries[1];
+      testing.expectEqual("operationEnd", name);
+      testing.expectEqual(34.0, startTime);
+      testing.expectEqual(0, duration);
+      testing.expectEqual("mark", entryType);
+    }
+
+    observer.disconnect();
+  });
+
+  // Look for performance marks.
+  observer.observe({ type: "mark" });
+  performance.mark("operationStart", { startTime: 20.0 });
+  performance.mark("operationEnd", { startTime: 34.0 });
+}
+</script>
+
+<script id="microtask_access_to_list" type=module>
+  const state = await testing.async();
+
+  let savedList;
+  const promise = new Promise((resolve) => {
+    const observer = new PerformanceObserver((list, observer) => {
+      savedList = list;
+      resolve();
+      observer.disconnect();
+    });
+    observer.observe({ type: "mark" });
+    performance.mark("testMark");
+  });
+
+  await promise;
+  // force a call_depth reset, which will clear the call_arena
+  document.getElementsByTagName('*');
+
+  const entries = savedList.getEntries();
+  const entriesIsArray = entries instanceof Array;
+  const entriesLen = entries.length;
+  const firstName = entries[0].name;
+  const firstType = entries[0].entryType;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, entriesIsArray);
+    testing.expectEqual(1, entriesLen);
+    testing.expectEqual("testMark", firstName);
+    testing.expectEqual("mark", firstType);
+  });
+</script>
+
+<script>
+  testing.expectEqual([
+    'element',
+    'event',
+    'first-input',
+    'largest-contentful-paint',
+    'layout-shift',
+    'long-animation-frame',
+    'longtask',
+    'mark',
+    'measure',
+    'navigation',
+    'paint',
+    'resource',
+    'visibility-state',
+  ], PerformanceObserver.supportedEntryTypes);
+</script>
+
+<script id="supported_entry_types_frozen_same_object">
+{
+  const first = PerformanceObserver.supportedEntryTypes;
+  const second = PerformanceObserver.supportedEntryTypes;
+  testing.expectEqual(first, second);
+  testing.expectEqual(true, Array.isArray(first));
+  testing.expectEqual(true, Object.isFrozen(first));
+  testing.expectEqual(false, Object.isExtensible(first));
+}
+</script>
+
+<script id="list_get_entries_by_type">
+{
+  performance.clearMarks();
+  performance.clearMeasures();
+
+  const observer = new PerformanceObserver((list) => {
+    const marks = list.getEntriesByType("mark");
+    testing.expectEqual(true, marks instanceof Array);
+    testing.expectEqual(2, marks.length);
+    testing.expectEqual("lbt1", marks[0].name);
+    testing.expectEqual("mark", marks[0].entryType);
+    testing.expectEqual("lbt2", marks[1].name);
+
+    const measures = list.getEntriesByType("measure");
+    testing.expectEqual(1, measures.length);
+    testing.expectEqual("lbtMeasure", measures[0].name);
+    testing.expectEqual("measure", measures[0].entryType);
+
+    // A type that's observed but has no entries returns an empty array.
+    const resources = list.getEntriesByType("resource");
+    testing.expectEqual(true, resources instanceof Array);
+    testing.expectEqual(0, resources.length);
+
+    observer.disconnect();
+  });
+
+  observer.observe({ entryTypes: ["mark", "measure"] });
+  performance.mark("lbt1");
+  performance.mark("lbt2");
+  performance.measure("lbtMeasure");
+}
+</script>
+
+<script id="list_get_entries_by_name">
+{
+  performance.clearMarks();
+  performance.clearMeasures();
+
+  const observer = new PerformanceObserver((list) => {
+    // Without entryType, any type matching the name is returned.
+    const shared = list.getEntriesByName("lbnShared");
+    testing.expectEqual(true, shared instanceof Array);
+    testing.expectEqual(2, shared.length);
+
+    // With entryType, only entries of that type are returned.
+    const sharedMark = list.getEntriesByName("lbnShared", "mark");
+    testing.expectEqual(1, sharedMark.length);
+    testing.expectEqual("mark", sharedMark[0].entryType);
+
+    const sharedMeasure = list.getEntriesByName("lbnShared", "measure");
+    testing.expectEqual(1, sharedMeasure.length);
+    testing.expectEqual("measure", sharedMeasure[0].entryType);
+
+    // Name mismatch -> empty array.
+    const missing = list.getEntriesByName("lbnMissing");
+    testing.expectEqual(0, missing.length);
+
+    // Name matches but type doesn't -> empty array.
+    const wrongType = list.getEntriesByName("lbnOnlyMark", "measure");
+    testing.expectEqual(0, wrongType.length);
+
+    observer.disconnect();
+  });
+
+  observer.observe({ entryTypes: ["mark", "measure"] });
+  performance.mark("lbnShared");
+  performance.measure("lbnShared");
+  performance.mark("lbnOnlyMark");
+}
+</script>
+
+<script id="buffered_option">
+{
+  // Clear marks from previous tests so we get a precise count
+  performance.clearMarks();
+
+  // Create marks BEFORE the observer
+  performance.mark("early1", { startTime: 1.0 });
+  performance.mark("early2", { startTime: 2.0 });
+
+  let receivedEntries = null;
+  const observer = new PerformanceObserver((list) => {
+    receivedEntries = list.getEntries();
+    // Disconnect as soon as the buffered entries arrive so later marks
+    // (e.g. from other tests sharing the global performance buffer) don't
+    // trigger a second callback that overwrites receivedEntries.
+    observer.disconnect();
+  });
+
+  // With buffered: true, existing marks should be delivered
+  observer.observe({ type: "mark", buffered: true });
+
+  testing.onload(() => {
+    testing.expectEqual(true, receivedEntries !== null);
+    testing.expectEqual(2, receivedEntries.length);
+    testing.expectEqual("early1", receivedEntries[0].name);
+    testing.expectEqual("early2", receivedEntries[1].name);
+  });
+}
+</script>

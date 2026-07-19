@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<head>
+  <title>Chromium synchronous WebAssembly constructor limits</title>
+  <script src="./testing.js"></script>
+</head>
+
+<script id="wasm_sync_constructor_limits" type="module">
+  const state = await testing.async();
+  const limit = 1 << 23;
+  const moduleMessage =
+    'WebAssembly.Compile is disallowed on the main thread, ' +
+    'if the buffer size is larger than 8MB. Use ' +
+    'WebAssembly.compile, compile on a worker thread, or use the flag ' +
+    '`--enable-features=WebAssemblyUnlimitedSyncCompilation`.';
+  const instanceMessage =
+    'WebAssembly.Instance is disallowed on the main thread, ' +
+    'if the buffer size is larger than 8MB. Use ' +
+    'WebAssembly.instantiate, or use the flag ' +
+    '`--enable-features=WebAssemblyUnlimitedSyncCompilation`.';
+
+  function capture(fn) {
+    try {
+      return { threw: false, name: '', message: '', value: fn() };
+    } catch (error) {
+      return { threw: true, name: error.name, message: error.message };
+    }
+  }
+
+  function uleb32(value) {
+    const bytes = [];
+    do {
+      let byte = value & 0x7f;
+      value >>>= 7;
+      if (value !== 0) byte |= 0x80;
+      bytes.push(byte);
+    } while (value !== 0);
+    return bytes;
+  }
+
+  // A valid module whose only payload is a custom section. This lets the test
+  // choose the wire-byte length exactly without generating executable code.
+  function customSectionModule(totalSize) {
+    for (let width = 1; width <= 5; width++) {
+      const sectionSize = totalSize - 9 - width;
+      if (sectionSize < 1) continue;
+      const encodedSize = uleb32(sectionSize);
+      if (encodedSize.length !== width) continue;
+
+      const bytes = new Uint8Array(totalSize);
+      bytes.set([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+      bytes[8] = 0; // custom section
+      bytes.set(encodedSize, 9);
+      // The zero-filled section starts with a zero-length custom-section name.
+      return bytes;
+    }
+    throw new Error('could not encode requested WebAssembly wire size');
+  }
+
+  const exactlyLimitInvalid = new Uint8Array(limit);
+  const exactlyLimitModule = capture(
+    () => new WebAssembly.Module(exactlyLimitInvalid),
+  );
+
+  const overLimitInvalid = new Uint8Array(limit + 1);
+  const overLimitView = capture(
+    () => new WebAssembly.Module(overLimitInvalid),
+  );
+  const overLimitBuffer = capture(
+    () => new WebAssembly.Module(overLimitInvalid.buffer),
+  );
+
+  const exactWireModule = await WebAssembly.compile(customSectionModule(limit));
+  const overWireModule = await WebAssembly.compile(customSectionModule(limit + 1));
+  const exactInstance = capture(() => new WebAssembly.Instance(exactWireModule));
+  const overInstance = capture(() => new WebAssembly.Instance(overWireModule));
+
+  const workerResult = await new Promise(resolve => {
+    const worker = new Worker('./worker/wasm-sync-limit-worker.js');
+    worker.onmessage = event => {
+      worker.terminate();
+      resolve(event.data);
+    };
+  });
+
+  state.resolve({
+    exactlyLimitModule,
+    overLimitView,
+    overLimitBuffer,
+    exactInstance,
+    overInstance,
+    workerResult,
+  });
+
+  await state.done(result => {
+    // The Blink comparison is strictly greater-than: exactly 8MiB reaches V8
+    // and fails here only because the deliberately invalid bytes lack a header.
+    testing.expectTrue(result.exactlyLimitModule.threw);
+    testing.expectEqual('CompileError', result.exactlyLimitModule.name);
+
+    testing.expectTrue(result.overLimitView.threw);
+    testing.expectEqual('RangeError', result.overLimitView.name);
+    testing.expectEqual(moduleMessage, result.overLimitView.message);
+    testing.expectTrue(result.overLimitBuffer.threw);
+    testing.expectEqual('RangeError', result.overLimitBuffer.name);
+    testing.expectEqual(moduleMessage, result.overLimitBuffer.message);
+
+    testing.expectFalse(result.exactInstance.threw);
+    testing.expectTrue(result.exactInstance.value instanceof WebAssembly.Instance);
+    testing.expectTrue(result.overInstance.threw);
+    testing.expectEqual('RangeError', result.overInstance.name);
+    testing.expectEqual(instanceMessage, result.overInstance.message);
+
+    // Chrome exempts workers. Lightpanda workers share an isolate with Window,
+    // so this also guards the realm-aware embedder callback dispatch.
+    testing.expectEqual('', result.workerResult.fatal || '');
+    testing.expectEqual('CompileError', result.workerResult.moduleErrorName);
+    testing.expectTrue(result.workerResult.instanceCreated);
+  });
+</script>

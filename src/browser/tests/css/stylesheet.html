@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="document_styleSheets">
+{
+    const sheets = document.styleSheets;
+    testing.expectTrue(sheets !== null);
+    testing.expectEqual(0, sheets.length);
+
+    // Should return same instance
+    const sheets2 = document.styleSheets;
+    testing.expectTrue(sheets === sheets2);
+}
+</script>
+
+<script id="CSSStyleSheet_basic">
+{
+    const sheets = document.styleSheets;
+    testing.expectEqual('StyleSheetList', sheets.constructor.name);
+
+    // Test indexed access on empty list
+    testing.expectEqual(undefined, sheets[0]);
+    testing.expectEqual(undefined, sheets[99]);
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_basic">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Set single property
+    style.cssText = 'color: red';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual(1, style.length);
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_multiple">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Set multiple properties
+    style.cssText = 'color: red; background: blue; margin: 10px';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual('blue', style.getPropertyValue('background'));
+    testing.expectEqual('10px', style.getPropertyValue('margin'));
+    testing.expectEqual(3, style.length);
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_important">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Set property with !important
+    style.cssText = 'color: red !important';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual('important', style.getPropertyPriority('color'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_important_multiple">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Mix of important and non-important
+    style.cssText = 'color: red !important; background: blue; margin: 10px !important';
+    testing.expectEqual('important', style.getPropertyPriority('color'));
+    testing.expectEqual('', style.getPropertyPriority('background'));
+    testing.expectEqual('important', style.getPropertyPriority('margin'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_whitespace">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Test whitespace handling
+    style.cssText = '  color  :  red  ;  background  :  blue  ';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual('blue', style.getPropertyValue('background'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_trailing_semicolon">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Trailing semicolon should be handled
+    style.cssText = 'color: red;';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual(1, style.length);
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_no_semicolon">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Single property without semicolon
+    style.cssText = 'color: red';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual(1, style.length);
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_empty_declarations">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Multiple semicolons should be ignored
+    style.cssText = 'color: red;;; background: blue';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual('blue', style.getPropertyValue('background'));
+    testing.expectEqual(2, style.length);
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_replace">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Set initial properties
+    style.cssText = 'color: red; background: blue';
+    testing.expectEqual(2, style.length);
+
+    // Replace with new properties
+    style.cssText = 'margin: 10px';
+    testing.expectEqual('', style.getPropertyValue('color'));
+    testing.expectEqual('', style.getPropertyValue('background'));
+    testing.expectEqual('10px', style.getPropertyValue('margin'));
+    testing.expectEqual(1, style.length);
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_clear">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    style.cssText = 'color: red; background: blue';
+    testing.expectEqual(2, style.length);
+
+    // Clear all properties
+    style.cssText = '';
+    testing.expectEqual(0, style.length);
+    testing.expectEqual('', style.getPropertyValue('color'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_colon_in_value">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // URL value with colon
+    style.cssText = 'background: url(http://example.com/image.png)';
+    testing.expectEqual('url(http://example.com/image.png)', style.getPropertyValue('background'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_important_whitespace">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Various whitespace around !important
+    style.cssText = 'color: red!important';
+    testing.expectEqual('important', style.getPropertyPriority('color'));
+
+    style.cssText = 'color: red  !  important';
+    testing.expectEqual('important', style.getPropertyPriority('color'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_case_insensitive_property">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Property names should be normalized to lowercase
+    style.cssText = 'COLOR: red; BACKGROUND: blue';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual('blue', style.getPropertyValue('background'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_exclamation_not_important">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Exclamation mark without "important" should be kept in value
+    style.cssText = 'content: "hello!"';
+    testing.expectEqual('"hello!"', style.getPropertyValue('content'));
+    testing.expectEqual('', style.getPropertyPriority('content'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_style_syncs_to_attribute">
+{
+    // JS style modifications must be reflected in getAttribute.
+    const div = document.createElement('div');
+
+    // Named property assignment (element.style.X = ...)
+    div.style.opacity = '0';
+    testing.expectEqual('opacity: 0;', div.getAttribute('style'));
+
+    // Update existing property
+    div.style.opacity = '1';
+    testing.expectEqual('opacity: 1;', div.getAttribute('style'));
+
+    // Add a second property
+    div.style.color = 'red';
+    testing.expectTrue(div.getAttribute('style').includes('opacity: 1'));
+    testing.expectTrue(div.getAttribute('style').includes('color: red'));
+
+    // removeProperty syncs back
+    div.style.removeProperty('opacity');
+    testing.expectTrue(!div.getAttribute('style').includes('opacity'));
+    testing.expectTrue(div.getAttribute('style').includes('color: red'));
+
+    // setCssText syncs back
+    div.style.cssText = 'filter: blur(0px)';
+    testing.expectEqual('filter: blur(0px);', div.getAttribute('style'));
+
+    // setCssText with empty string clears attribute
+    div.style.cssText = '';
+    testing.expectEqual('', div.getAttribute('style'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_outerHTML_reflects_style_changes">
+{
+    // outerHTML must reflect JS-modified styles (regression test for
+    // DOM serialization reading stale HTML-parsed attribute values).
+    const div = document.createElement('div');
+    div.setAttribute('style', 'filter:blur(10px);opacity:0');
+
+    div.style.filter = 'blur(0px)';
+    div.style.opacity = '1';
+
+    const html = div.outerHTML;
+    testing.expectTrue(html.includes('filter: blur(0px)'));
+    testing.expectTrue(html.includes('opacity: 1'));
+    testing.expectTrue(!html.includes('blur(10px)'));
+    testing.expectTrue(!html.includes('opacity:0'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_non_ascii_custom_property">
+{
+    // Regression test: accessing element.style must not crash when the inline
+    // style attribute contains CSS custom properties with non-ASCII (UTF-8
+    // multibyte) names, such as French accented characters.
+    // The CSS Tokenizer's consumeName() must advance over whole UTF-8 sequences
+    // rather than byte-by-byte to avoid landing on a continuation byte.
+    const div = document.createElement('div');
+    div.setAttribute('style',
+        '--color-store-bulles-\u00e9t\u00e9-fg: #6a818f;' +
+        '--color-store-soir\u00e9es-odl-fg: #56b3b3;' +
+        'color: red;'
+    );
+
+    // Must not crash, and ASCII properties that follow non-ASCII ones must be readable.
+    testing.expectEqual('red', div.style.getPropertyValue('color'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_normalize_zero_to_0px">
+{
+    // Per CSSOM spec, unitless zero in length properties should serialize as "0px"
+    const div = document.createElement('div');
+
+    div.style.width = '0';
+    testing.expectEqual('0px', div.style.width);
+
+    div.style.margin = '0';
+    testing.expectEqual('0px', div.style.margin);
+
+    div.style.padding = '0';
+    testing.expectEqual('0px', div.style.padding);
+
+    div.style.top = '0';
+    testing.expectEqual('0px', div.style.top);
+
+    // Scroll properties
+    div.style.scrollMarginTop = '0';
+    testing.expectEqual('0px', div.style.scrollMarginTop);
+
+    div.style.scrollPaddingBottom = '0';
+    testing.expectEqual('0px', div.style.scrollPaddingBottom);
+
+    // Multi-column
+    div.style.columnWidth = '0';
+    testing.expectEqual('0px', div.style.columnWidth);
+
+    div.style.columnRuleWidth = '0';
+    testing.expectEqual('0px', div.style.columnRuleWidth);
+
+    // Outline shorthand
+    div.style.outline = '0';
+    testing.expectEqual('0px', div.style.outline);
+
+    // Shapes
+    div.style.shapeMargin = '0';
+    testing.expectEqual('0px', div.style.shapeMargin);
+
+    // Non-length properties should not be affected
+    div.style.opacity = '0';
+    testing.expectEqual('0', div.style.opacity);
+
+    div.style.zIndex = '0';
+    testing.expectEqual('0', div.style.zIndex);
+}
+</script>
+
+<script id="CSSStyleDeclaration_normalize_first_baseline">
+{
+    // "first baseline" should serialize canonically as "baseline"
+    const div = document.createElement('div');
+
+    div.style.alignItems = 'first baseline';
+    testing.expectEqual('baseline', div.style.alignItems);
+
+    div.style.alignContent = 'first baseline';
+    testing.expectEqual('baseline', div.style.alignContent);
+
+    div.style.alignSelf = 'first baseline';
+    testing.expectEqual('baseline', div.style.alignSelf);
+
+    div.style.justifySelf = 'first baseline';
+    testing.expectEqual('baseline', div.style.justifySelf);
+
+    // "last baseline" should remain unchanged
+    div.style.alignItems = 'last baseline';
+    testing.expectEqual('last baseline', div.style.alignItems);
+}
+</script>
+
+<script id="CSSStyleDeclaration_normalize_duplicate_values">
+{
+    // For 2-value shorthand properties, "X X" should collapse to "X"
+    const div = document.createElement('div');
+
+    div.style.placeContent = 'center center';
+    testing.expectEqual('center', div.style.placeContent);
+
+    div.style.placeContent = 'start start';
+    testing.expectEqual('start', div.style.placeContent);
+
+    div.style.gap = '10px 10px';
+    testing.expectEqual('10px', div.style.gap);
+
+    // Different values should not collapse
+    div.style.placeContent = 'center start';
+    testing.expectEqual('center start', div.style.placeContent);
+
+    div.style.gap = '10px 20px';
+    testing.expectEqual('10px 20px', div.style.gap);
+
+    // New shorthands
+    div.style.overflow = 'hidden hidden';
+    testing.expectEqual('hidden', div.style.overflow);
+
+    div.style.scrollSnapAlign = 'start start';
+    testing.expectEqual('start', div.style.scrollSnapAlign);
+
+    div.style.overscrollBehavior = 'auto auto';
+    testing.expectEqual('auto', div.style.overscrollBehavior);
+}
+</script>
+
+<script id="CSSStyleDeclaration_normalize_anchor_size">
+{
+    // anchor-size() should serialize with dashed ident (anchor name) before size keyword
+    const div = document.createElement('div');
+
+    // Already canonical order - should stay the same
+    div.style.width = 'anchor-size(--foo width)';
+    testing.expectEqual('anchor-size(--foo width)', div.style.width);
+
+    // Non-canonical order - should be reordered
+    div.style.width = 'anchor-size(width --foo)';
+    testing.expectEqual('anchor-size(--foo width)', div.style.width);
+
+    // With fallback value
+    div.style.width = 'anchor-size(height --bar, 100px)';
+    testing.expectEqual('anchor-size(--bar height, 100px)', div.style.width);
+
+    // Different size keywords
+    div.style.width = 'anchor-size(block --baz)';
+    testing.expectEqual('anchor-size(--baz block)', div.style.width);
+
+    div.style.width = 'anchor-size(inline --qux)';
+    testing.expectEqual('anchor-size(--qux inline)', div.style.width);
+
+    div.style.width = 'anchor-size(self-block --test)';
+    testing.expectEqual('anchor-size(--test self-block)', div.style.width);
+
+    div.style.width = 'anchor-size(self-inline --test)';
+    testing.expectEqual('anchor-size(--test self-inline)', div.style.width);
+
+    // Without anchor name (implicit default anchor)
+    div.style.width = 'anchor-size(width)';
+    testing.expectEqual('anchor-size(width)', div.style.width);
+
+    // Nested anchor-size in fallback
+    div.style.width = 'anchor-size(width --foo, anchor-size(height --bar))';
+    testing.expectEqual('anchor-size(--foo width, anchor-size(--bar height))', div.style.width);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_deleteRule">
+{
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    testing.expectEqual(0, sheet.cssRules.length);
+
+    sheet.insertRule('.test { color: green; }', 0);
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual('.test', sheet.cssRules[0].selectorText);
+    testing.expectEqual('green', sheet.cssRules[0].style.color);
+
+    sheet.deleteRule(0);
+    testing.expectEqual(0, sheet.cssRules.length);
+
+    let caught = false;
+    try {
+        sheet.deleteRule(5);
+    } catch (e) {
+        caught = true;
+        testing.expectEqual('IndexSizeError', e.name);
+    }
+    testing.expectTrue(caught);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_default_index">
+{
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    testing.expectEqual(0, sheet.cssRules.length);
+
+    // Call without index, should default to 0
+    sheet.insertRule('.test-default { color: blue; }');
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual('.test-default', sheet.cssRules[0].selectorText);
+
+    // Insert another rule without index, should default to 0 and push the first one to index 1
+    sheet.insertRule('.test-at-0 { color: red; }');
+    testing.expectEqual(2, sheet.cssRules.length);
+    testing.expectEqual('.test-at-0', sheet.cssRules[0].selectorText);
+    testing.expectEqual('.test-default', sheet.cssRules[1].selectorText);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_semicolon">
+{
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    // Should not throw even with trailing semicolon
+    sheet.insertRule('*{};');
+    testing.expectEqual(1, sheet.cssRules.length);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_multiple_rules">
+{
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    let caught = false;
+    try {
+        sheet.insertRule('a { color: red; } b { color: blue; }');
+    } catch (e) {
+        caught = true;
+        testing.expectEqual('SyntaxError', e.name);
+    }
+    testing.expectTrue(caught);
+    testing.expectEqual(0, sheet.cssRules.length);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_out_of_range_index">
+{
+    // Our lack of fully processing sources (e.g. @import, @font-face) means that
+    // our indexes are sometimes not what libraries expect. As a workaround we
+    // clamp the index to the end of the rule list. See #2214.
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    const returned = sheet.insertRule('.out-of-range { color: red; }', 99);
+    testing.expectEqual(0, returned);
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual('.out-of-range', sheet.cssRules[0].selectorText);
+
+    // And at the tail of a non-empty sheet
+    const tail = sheet.insertRule('.tail { color: blue; }', 99);
+    testing.expectEqual(1, tail);
+    testing.expectEqual(2, sheet.cssRules.length);
+    testing.expectEqual('.tail', sheet.cssRules[1].selectorText);
+}
+</script>
+
+<script id="CSSStyleSheet_replaceSync" type=module>
+    const state = await testing.async();
+
+    const sheet = new CSSStyleSheet();
+    const initialLen = sheet.cssRules.length;
+
+    sheet.replaceSync('.test { color: blue; }');
+    const afterSyncLen = sheet.cssRules.length;
+    const afterSyncSelector = sheet.cssRules[0].selectorText;
+    const afterSyncColor = sheet.cssRules[0].style.color;
+
+    const result = await sheet.replace('.async-test { margin: 10px; }');
+    const afterAsyncLen = sheet.cssRules.length;
+    const afterAsyncSelector = sheet.cssRules[0].selectorText;
+
+    state.resolve();
+    await state.done(() => {
+        testing.expectEqual(0, initialLen);
+        testing.expectEqual(1, afterSyncLen);
+        testing.expectEqual('.test', afterSyncSelector);
+        testing.expectEqual('blue', afterSyncColor);
+
+        testing.expectTrue(result === sheet);
+        testing.expectEqual(1, afterAsyncLen);
+        testing.expectEqual('.async-test', afterAsyncSelector);
+    });
+</script>
+
+<script id="CSSStyleRule_cssText">
+{
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync('.test { color: red; margin: 10px; }');
+
+    // Check serialization format
+    const cssText = sheet.cssRules[0].cssText;
+    testing.expectTrue(cssText.includes('.test { '));
+    testing.expectTrue(cssText.includes('color: red;'));
+    testing.expectTrue(cssText.includes('margin: 10px;'));
+    testing.expectTrue(cssText.includes('}'));
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_keyframes_surfaces">
+{
+    // Regression test for #2459: at-rules must surface in cssRules so that
+    // CSS-in-JS libraries (styled-components, emotion, ...) don't fall back
+    // to per-render <style> element injection. Before the fix insertRule
+    // silently swallowed at-rules and returned a fake index, leaving
+    // cssRules.length at 0.
+    const sheet = new CSSStyleSheet();
+
+    const idx = sheet.insertRule('@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }');
+    testing.expectEqual(0, idx);
+    testing.expectEqual(1, sheet.cssRules.length);
+
+    const rule = sheet.cssRules[0];
+    testing.expectEqual(CSSRule.KEYFRAMES_RULE, rule.type);
+    testing.expectTrue(rule.cssText.includes('@keyframes'));
+    testing.expectTrue(rule.cssText.includes('spin'));
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_media_surfaces">
+{
+    const sheet = new CSSStyleSheet();
+
+    const idx = sheet.insertRule('@media screen and (min-width: 600px) { .test { color: red; } }');
+    testing.expectEqual(0, idx);
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual(CSSRule.MEDIA_RULE, sheet.cssRules[0].type);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_atrule_mixed_with_style">
+{
+    // CSS-in-JS dedup paths read back cssRules.length and per-index types
+    // after insertion; both must be correct when style and at-rules are
+    // interleaved.
+    const sheet = new CSSStyleSheet();
+
+    sheet.insertRule('.first { color: red; }', 0);
+    sheet.insertRule('@keyframes spin { from {} to {} }', 1);
+    sheet.insertRule('.last { color: blue; }', 2);
+
+    testing.expectEqual(3, sheet.cssRules.length);
+    testing.expectEqual(CSSRule.STYLE_RULE, sheet.cssRules[0].type);
+    testing.expectEqual(CSSRule.KEYFRAMES_RULE, sheet.cssRules[1].type);
+    testing.expectEqual(CSSRule.STYLE_RULE, sheet.cssRules[2].type);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_vendor_prefixed_keyframes">
+{
+    const sheet = new CSSStyleSheet();
+
+    sheet.insertRule('@-webkit-keyframes spin { from {} to {} }');
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual(CSSRule.KEYFRAMES_RULE, sheet.cssRules[0].type);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_supports_surfaces">
+{
+    const sheet = new CSSStyleSheet();
+
+    sheet.insertRule('@supports (display: grid) { .grid { display: grid; } }');
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual(CSSRule.SUPPORTS_RULE, sheet.cssRules[0].type);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_font_face_surfaces">
+{
+    const sheet = new CSSStyleSheet();
+
+    sheet.insertRule("@font-face { font-family: 'Test'; src: url('test.woff2'); }");
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual(CSSRule.FONT_FACE_RULE, sheet.cssRules[0].type);
+}
+</script>
+
+<script id="CSSStyleSheet_replaceSync_preserves_atrules">
+{
+    // replaceSync goes through the same parser path; at-rules in the
+    // replacement source should also surface in cssRules.
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync('.a { color: red; } @keyframes spin { from {} to {} } .b { color: blue; }');
+
+    testing.expectEqual(3, sheet.cssRules.length);
+    testing.expectEqual(CSSRule.STYLE_RULE, sheet.cssRules[0].type);
+    testing.expectEqual(CSSRule.KEYFRAMES_RULE, sheet.cssRules[1].type);
+    testing.expectEqual(CSSRule.STYLE_RULE, sheet.cssRules[2].type);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_atrule_repeated_no_growth">
+{
+    // The CSS-in-JS dedup pattern: insert a hash-keyed at-rule, read back
+    // cssRules to check whether it's already there, skip if so. Before the
+    // fix the read-back was always empty, so the library re-inserted every
+    // render -- and (separately) created a fresh <style> element each time.
+    // After the fix the read-back finds the rule and the library can dedup.
+    const sheet = new CSSStyleSheet();
+
+    sheet.insertRule('@keyframes spin { from {} to {} }');
+    testing.expectEqual(1, sheet.cssRules.length);
+
+    // Library checks cssRules and finds the rule -- doesn't re-insert.
+    const exists = Array.from(sheet.cssRules).some(
+        r => r.type === CSSRule.KEYFRAMES_RULE && r.cssText.includes('spin')
+    );
+    testing.expectTrue(exists);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_unknown_at_rule_typed_as_zero">
+{
+  const sheet = new CSSStyleSheet();
+  sheet.insertRule('@layer utilities { .x { color: red; } }');
+  testing.expectEqual(1, sheet.cssRules.length);
+  testing.expectEqual(0, sheet.cssRules[0].type);
+  testing.expectTrue(sheet.cssRules[0].cssText.includes('@layer'));
+}
+</script>

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+<script id=local_storage>
+  testing.expectEqual(localStorage, window.localStorage);
+  testing.expectEqual('object', typeof localStorage);
+
+  testing.expectEqual(0, localStorage.length);
+
+  localStorage.setItem('key1', 'value1');
+  testing.expectEqual('value1', localStorage.getItem('key1'));
+  testing.expectEqual(1, localStorage.length);
+
+  localStorage.setItem('key2', 'value2');
+  localStorage.setItem('key3', 'value3');
+  testing.expectEqual('value2', localStorage.getItem('key2'));
+  testing.expectEqual('value3', localStorage.getItem('key3'));
+  testing.expectEqual(3, localStorage.length);
+
+  localStorage.setItem('key1', 'updated_value1');
+  testing.expectEqual('updated_value1', localStorage.getItem('key1'));
+  testing.expectEqual(3, localStorage.length);
+
+  testing.expectEqual(null, localStorage.getItem('nonexistent'));
+
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    keys.push(localStorage.key(i));
+  }
+  testing.expectEqual(true, keys.includes('key1'));
+  testing.expectEqual(true, keys.includes('key2'));
+  testing.expectEqual(true, keys.includes('key3'));
+
+  testing.expectEqual(null, localStorage.key(999));
+
+  localStorage.removeItem('key2');
+  testing.expectEqual(null, localStorage.getItem('key2'));
+  testing.expectEqual(2, localStorage.length);
+
+  localStorage.removeItem('nonexistent');
+  testing.expectEqual(2, localStorage.length);
+
+  localStorage.clear();
+  testing.expectEqual(0, localStorage.length);
+  testing.expectEqual(null, localStorage.getItem('key1'));
+  testing.expectEqual(null, localStorage.getItem('key3'));
+
+  localStorage.setItem('empty', '');
+  testing.expectEqual('', localStorage.getItem('empty'));
+  testing.expectEqual(1, localStorage.length);
+
+  localStorage.setItem('number', '123');
+  testing.expectEqual('123', localStorage.getItem('number'));
+
+  // null/undefined keys are stringified per WebIDL (DOMString coercion).
+  localStorage.setItem(null, 'null_key_value');
+  testing.expectEqual('null_key_value', localStorage.getItem(null));
+  testing.expectEqual('null_key_value', localStorage.getItem('null'));
+
+  localStorage.setItem(undefined, 'undefined_key_value');
+  testing.expectEqual('undefined_key_value', localStorage.getItem(undefined));
+  testing.expectEqual('undefined_key_value', localStorage.getItem('undefined'));
+
+  localStorage.clear();
+  testing.expectEqual(0, localStorage.length);
+</script>
+
+<script id="legacy">
+  localStorage.clear();
+  testing.expectEqual(0, localStorage.length);
+  testing.expectEqual(null, localStorage.getItem('foo'));
+  testing.expectEqual(null, localStorage.key(0));
+
+  localStorage.setItem('foo', 'bar');
+  testing.expectEqual(1, localStorage.length)
+  testing.expectEqual('bar', localStorage.getItem('foo'));
+  testing.expectEqual('foo', localStorage.key(0));
+  testing.expectEqual(null, localStorage.key(1));
+
+  localStorage.removeItem('foo');
+  testing.expectEqual(0, localStorage.length)
+  testing.expectEqual(null, localStorage.getItem('foo'));
+
+  localStorage['foo'] = 'bar';
+  testing.expectEqual(1, localStorage.length);
+  testing.expectEqual('bar', localStorage['foo']);
+
+  localStorage.setItem('a', '1');
+  localStorage.setItem('b', '2');
+  localStorage.setItem('c', '3');
+  testing.expectEqual(4, localStorage.length)
+  localStorage.clear();
+  testing.expectEqual(0, localStorage.length)
+</script>
+
+<script id="localstorage_limits">
+  localStorage.clear();
+  // Chrome's per-area quota is 10 MiB and every UTF-16 code unit in both the
+  // key and value costs two bytes. U+1F320 occupies two UTF-16 code units.
+  const quotaUnits = 5 * 1024 * 1024;
+  const key = '🌠';
+  const exact = 'v'.repeat(quotaUnits - 2);
+  localStorage.setItem(key, exact);
+  // A same-value modification is accepted and is not an observable mutation.
+  localStorage.setItem(key, exact);
+
+  let quotaError;
+  try {
+    localStorage.setItem(key, exact + 'v');
+  } catch (error) {
+    quotaError = {
+      name: error.name,
+      code: error.code,
+      message: error.message,
+    };
+  }
+  testing.expectEqual({
+    name: 'QuotaExceededError',
+    code: 22,
+    message: "Failed to execute 'setItem' on 'Storage': Setting the value of '🌠' exceeded the quota.",
+  }, quotaError);
+
+  // A shrinking replacement remains allowed even after a failed growing one.
+  localStorage.setItem(key, 'small');
+  testing.expectEqual('small', localStorage.getItem(key));
+  localStorage.clear();
+</script>

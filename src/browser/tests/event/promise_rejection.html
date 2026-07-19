@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=constructor_contract>
+  {
+    testing.expectEqual(2, PromiseRejectionEvent.length);
+    const keys = Reflect.ownKeys(PromiseRejectionEvent.prototype);
+    testing.expectEqual('promise', keys[0]);
+    testing.expectEqual('reason', keys[1]);
+
+    const expectConstructorError = (expected, callback) => testing.withError((error) => {
+      testing.expectEqual('TypeError', error.name);
+      testing.expectEqual(expected, error.message);
+    }, callback);
+
+    expectConstructorError(
+      "Failed to construct 'PromiseRejectionEvent': 2 arguments required, but only 0 present.",
+      () => new PromiseRejectionEvent()
+    );
+    expectConstructorError(
+      "Failed to construct 'PromiseRejectionEvent': 2 arguments required, but only 1 present.",
+      () => new PromiseRejectionEvent('rejectionhandled')
+    );
+    expectConstructorError(
+      "Failed to construct 'PromiseRejectionEvent': Failed to read the 'promise' property from 'PromiseRejectionEventInit': Required member is undefined.",
+      () => new PromiseRejectionEvent('rejectionhandled', {})
+    );
+  }
+</script>
+
+<script id=promise_conversion>
+  {
+    const actualPromise = Promise.resolve('tea');
+    const actual = new PromiseRejectionEvent('rejectionhandled', {promise: actualPromise});
+    testing.expectEqual(true, actual instanceof PromiseRejectionEvent);
+    testing.expectEqual(true, actual instanceof Event);
+    testing.expectEqual(actualPromise, actual.promise);
+    testing.expectEqual(undefined, actual.reason);
+
+    const fromNull = new PromiseRejectionEvent('rejectionhandled', {promise: null});
+    testing.expectEqual(true, fromNull.promise instanceof Promise);
+
+    const fromUndefined = new PromiseRejectionEvent('rejectionhandled', {promise: undefined});
+    testing.expectEqual(true, fromUndefined.promise instanceof Promise);
+
+    const thenable = {then(resolve) { resolve('assimilated'); }};
+    const fromThenable = new PromiseRejectionEvent('rejectionhandled', {promise: thenable});
+    testing.expectEqual(true, fromThenable.promise instanceof Promise);
+    testing.expectEqual(false, fromThenable.promise === thenable);
+
+    const fromNumber = new PromiseRejectionEvent('rejectionhandled', {promise: 42});
+    testing.expectEqual(true, fromNumber.promise instanceof Promise);
+
+    const withNullReason = new PromiseRejectionEvent('rejectionhandled', {
+      promise: actualPromise,
+      reason: null
+    });
+    testing.expectEqual(null, withNullReason.reason);
+  }
+</script>

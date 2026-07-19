@@ -1,0 +1,391 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Chrome Location LegacyUnforgeable parity</title>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="chrome_149_location_legacy_unforgeable">
+  // Chrome for Testing 149.0.7827.203
+  // chromium/src@48860e577c01de4a313192cc79596c46b52efb3a
+  //
+  // Location is unusual even among [LegacyUnforgeable] interfaces. Blink
+  // installs the Web IDL surface on every Location instance, adds an own
+  // Object.prototype.valueOf alias, installs an own undefined @@toPrimitive,
+  // and gives the wrapper an immutable [[Prototype]]. Keep this fixture
+  // focused on those observable wrapper invariants rather than navigation.
+  const frame = document.createElement('iframe');
+  document.body.appendChild(frame);
+
+  const child = frame.contentWindow;
+  const sample = child.location;
+  const prototype = child.Location.prototype;
+  const own = (object, key) =>
+    Object.prototype.hasOwnProperty.call(object, key);
+  const label = key => {
+    if (key === Symbol.toPrimitive) return 'Symbol.toPrimitive';
+    if (key === Symbol.toStringTag) return 'Symbol.toStringTag';
+    if (key === Symbol.iterator) return 'Symbol.iterator';
+    return key;
+  };
+
+  const assertFunctionMetadata = (
+    fn,
+    name,
+    length,
+    hasPrototype = false,
+  ) => {
+    testing.expectEqual('function', typeof fn);
+    testing.expectEqual(name, fn.name);
+    testing.expectEqual(length, fn.length);
+    testing.expectEqual(hasPrototype, own(fn, 'prototype'));
+    testing.expectEqual(
+      `function ${name}() { [native code] }`,
+      Function.prototype.toString.call(fn),
+    );
+
+    const nameDescriptor = Object.getOwnPropertyDescriptor(fn, 'name');
+    testing.expectFalse(nameDescriptor.writable);
+    testing.expectFalse(nameDescriptor.enumerable);
+    testing.expectTrue(nameDescriptor.configurable);
+
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(fn, 'length');
+    testing.expectFalse(lengthDescriptor.writable);
+    testing.expectFalse(lengthDescriptor.enumerable);
+    testing.expectTrue(lengthDescriptor.configurable);
+  };
+
+  const ownKeyOrder = [
+    'valueOf',
+    'ancestorOrigins',
+    'href',
+    'origin',
+    'protocol',
+    'host',
+    'hostname',
+    'port',
+    'pathname',
+    'search',
+    'hash',
+    'assign',
+    'reload',
+    'replace',
+    'toString',
+    'Symbol.toPrimitive',
+  ];
+  const enumerableKeyOrder = [
+    'ancestorOrigins',
+    'href',
+    'origin',
+    'protocol',
+    'host',
+    'hostname',
+    'port',
+    'pathname',
+    'search',
+    'hash',
+    'assign',
+    'reload',
+    'replace',
+    'toString',
+  ];
+
+  testing.expectEqual(ownKeyOrder, Reflect.ownKeys(sample).map(label));
+  testing.expectEqual(enumerableKeyOrder, Object.keys(sample));
+  testing.expectEqual(
+    ownKeyOrder.slice(0, -1),
+    Object.getOwnPropertyNames(sample),
+  );
+  testing.expectEqual(
+    ['Symbol.toPrimitive'],
+    Object.getOwnPropertySymbols(sample).map(label),
+  );
+
+  testing.expectEqual(prototype, Object.getPrototypeOf(sample));
+  testing.expectEqual(child.Object.prototype, Object.getPrototypeOf(prototype));
+  testing.expectEqual(
+    ['constructor', 'Symbol.toStringTag'],
+    Reflect.ownKeys(prototype).map(label),
+  );
+  testing.expectEqual([], Object.keys(prototype));
+  testing.expectEqual(['constructor'], Object.getOwnPropertyNames(prototype));
+  testing.expectEqual(
+    ['Symbol.toStringTag'],
+    Object.getOwnPropertySymbols(prototype).map(label),
+  );
+
+  const constructorDescriptor = Object.getOwnPropertyDescriptor(
+    prototype,
+    'constructor',
+  );
+  testing.expectEqual(child.Location, constructorDescriptor.value);
+  testing.expectTrue(constructorDescriptor.writable);
+  testing.expectFalse(constructorDescriptor.enumerable);
+  testing.expectTrue(constructorDescriptor.configurable);
+  assertFunctionMetadata(child.Location, 'Location', 0, true);
+
+  const tagDescriptor = Object.getOwnPropertyDescriptor(
+    prototype,
+    Symbol.toStringTag,
+  );
+  testing.expectEqual('Location', tagDescriptor.value);
+  testing.expectFalse(tagDescriptor.writable);
+  testing.expectFalse(tagDescriptor.enumerable);
+  testing.expectTrue(tagDescriptor.configurable);
+  testing.expectEqual('[object Location]', Object.prototype.toString.call(sample));
+
+  // Location.prototype itself also has V8's immutable-prototype bit. Use the
+  // target realm's intrinsics here: V8 formats its own realm's object as
+  // '#<Location>'; a foreign-realm Object.setPrototypeOf instead formats the
+  // same wrapper as '[object Location]'.
+  const prototypePrototype = child.Object.getPrototypeOf(prototype);
+  testing.expectEqual(child.Object.prototype, prototypePrototype);
+  testing.expectTrue(
+    child.Reflect.setPrototypeOf(prototype, prototypePrototype),
+  );
+  testing.expectEqual(
+    prototype,
+    child.Object.setPrototypeOf(prototype, prototypePrototype),
+  );
+  for (const replacement of [null, child.Object.create(null)]) {
+    testing.expectFalse(child.Reflect.setPrototypeOf(prototype, replacement));
+    let error;
+    try {
+      child.Object.setPrototypeOf(prototype, replacement);
+    } catch (caught) {
+      error = caught;
+    }
+    testing.expectEqual('TypeError', error && error.name);
+    testing.expectEqual(
+      "Immutable prototype object '#<Location>' cannot have their prototype " +
+        'set',
+      error && error.message,
+    );
+    testing.expectTrue(error instanceof child.TypeError);
+    testing.expectFalse(error instanceof TypeError);
+    testing.expectEqual(
+      prototypePrototype,
+      child.Object.getPrototypeOf(prototype),
+    );
+  }
+
+  const valueOfDescriptor = Object.getOwnPropertyDescriptor(sample, 'valueOf');
+  testing.expectEqual(child.Object.prototype.valueOf, valueOfDescriptor.value);
+  testing.expectEqual(child.Object.prototype.valueOf, sample.valueOf);
+  testing.expectEqual(child.Object.prototype.valueOf, prototype.valueOf);
+  testing.expectFalse(valueOfDescriptor.writable);
+  testing.expectFalse(valueOfDescriptor.enumerable);
+  testing.expectFalse(valueOfDescriptor.configurable);
+  testing.expectTrue(own(sample, 'valueOf'));
+  testing.expectFalse(own(prototype, 'valueOf'));
+  // The iframe has a distinct realm, so the alias must not be borrowed from
+  // the caller realm's Object.prototype.
+  testing.expectFalse(sample.valueOf === Object.prototype.valueOf);
+  assertFunctionMetadata(sample.valueOf, 'valueOf', 0);
+
+  const readonlyAttributes = ['ancestorOrigins', 'origin'];
+  const writableAttributes = [
+    'href',
+    'protocol',
+    'host',
+    'hostname',
+    'port',
+    'pathname',
+    'search',
+    'hash',
+  ];
+  for (const name of readonlyAttributes.concat(writableAttributes)) {
+    const descriptor = Object.getOwnPropertyDescriptor(sample, name);
+    testing.expectTrue(descriptor.enumerable);
+    testing.expectFalse(descriptor.configurable);
+    assertFunctionMetadata(descriptor.get, `get ${name}`, 0);
+    if (readonlyAttributes.includes(name)) {
+      testing.expectEqual(undefined, descriptor.set);
+    } else {
+      assertFunctionMetadata(descriptor.set, `set ${name}`, 1);
+    }
+    testing.expectFalse(own(prototype, name));
+  }
+
+  // An initial about:blank child inherits its creator's origin. Chromium
+  // exposes the single embedding ancestor through one stable DOMStringList
+  // wrapper rather than allocating a new list for every getter call.
+  const ancestorOrigins = sample.ancestorOrigins;
+  testing.expectEqual(ancestorOrigins, sample.ancestorOrigins);
+  testing.expectEqual(
+    '[object DOMStringList]',
+    Object.prototype.toString.call(ancestorOrigins),
+  );
+  testing.expectEqual(
+    child.DOMStringList.prototype,
+    Object.getPrototypeOf(ancestorOrigins),
+  );
+  testing.expectTrue(ancestorOrigins instanceof child.DOMStringList);
+  testing.expectFalse(ancestorOrigins instanceof DOMStringList);
+  testing.expectEqual(1, ancestorOrigins.length);
+  testing.expectEqual(location.origin, ancestorOrigins[0]);
+  testing.expectEqual(location.origin, ancestorOrigins.item(0));
+  testing.expectEqual(null, ancestorOrigins.item(1));
+  testing.expectTrue(ancestorOrigins.contains(location.origin));
+  testing.expectEqual(
+    [
+      'length',
+      'contains',
+      'item',
+      'constructor',
+      'Symbol.toStringTag',
+      'Symbol.iterator',
+    ],
+    Reflect.ownKeys(child.DOMStringList.prototype).map(label),
+  );
+  testing.expectEqual(
+    child.Array.prototype.values,
+    child.DOMStringList.prototype[Symbol.iterator],
+  );
+  for (const nonStandard of ['keys', 'values', 'entries', 'forEach']) {
+    testing.expectEqual(undefined, ancestorOrigins[nonStandard]);
+  }
+
+  const methods = [
+    ['assign', 1],
+    ['reload', 0],
+    ['replace', 1],
+    ['toString', 0],
+  ];
+  for (const [name, length] of methods) {
+    const descriptor = Object.getOwnPropertyDescriptor(sample, name);
+    testing.expectFalse(descriptor.writable);
+    testing.expectTrue(descriptor.enumerable);
+    testing.expectFalse(descriptor.configurable);
+    testing.expectEqual(sample[name], descriptor.value);
+    assertFunctionMetadata(descriptor.value, name, length);
+    testing.expectFalse(own(prototype, name));
+  }
+
+  const primitiveDescriptor = Object.getOwnPropertyDescriptor(
+    sample,
+    Symbol.toPrimitive,
+  );
+  testing.expectTrue(own(sample, Symbol.toPrimitive));
+  testing.expectFalse(own(prototype, Symbol.toPrimitive));
+  testing.expectEqual(undefined, primitiveDescriptor.value);
+  testing.expectFalse(primitiveDescriptor.writable);
+  testing.expectFalse(primitiveDescriptor.enumerable);
+  testing.expectFalse(primitiveDescriptor.configurable);
+  testing.expectEqual('undefined', typeof sample[Symbol.toPrimitive]);
+  testing.expectEqual('about:blank', String(sample));
+  testing.expectEqual('about:blank', `${sample}`);
+  testing.expectTrue(Number.isNaN(Number(sample)));
+
+  const strictDelete = Function(
+    'object',
+    'key',
+    '"use strict"; return delete object[key];',
+  );
+  for (const key of ['href', 'assign', 'toString', Symbol.toPrimitive]) {
+    testing.expectFalse(Reflect.deleteProperty(sample, key));
+    let error;
+    try {
+      strictDelete(sample, key);
+    } catch (caught) {
+      error = caught;
+    }
+    const printableKey = typeof key === 'symbol' ? String(key) : key;
+    testing.expectEqual('TypeError', error && error.name);
+    testing.expectEqual(
+      `Cannot delete property '${printableKey}' of [object Location]`,
+      error && error.message,
+    );
+    testing.expectTrue(error instanceof TypeError);
+  }
+
+  const hrefDescriptor = Object.getOwnPropertyDescriptor(sample, 'href');
+  testing.expectEqual(
+    sample,
+    Object.defineProperty(sample, 'href', hrefDescriptor),
+  );
+  testing.expectFalse(Reflect.defineProperty(sample, 'href', {value: 'x'}));
+  let redefineError;
+  try {
+    Object.defineProperty(sample, 'href', {value: 'x'});
+  } catch (caught) {
+    redefineError = caught;
+  }
+  testing.expectEqual('TypeError', redefineError && redefineError.name);
+  testing.expectEqual(
+    'Cannot redefine property: href',
+    redefineError && redefineError.message,
+  );
+  testing.expectTrue(redefineError instanceof TypeError);
+
+  testing.expectTrue(Reflect.defineProperty(sample, 'probe', {
+    value: 17,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  }));
+  testing.expectEqual({
+    value: 17,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  }, Object.getOwnPropertyDescriptor(sample, 'probe'));
+  testing.expectTrue(Reflect.deleteProperty(sample, 'probe'));
+
+  const originalPrototype = Object.getPrototypeOf(sample);
+  testing.expectTrue(Reflect.setPrototypeOf(sample, originalPrototype));
+  testing.expectEqual(
+    sample,
+    Object.setPrototypeOf(sample, originalPrototype),
+  );
+  for (const replacement of [{foreign: true}, null]) {
+    testing.expectFalse(Reflect.setPrototypeOf(sample, replacement));
+    let error;
+    try {
+      Object.setPrototypeOf(sample, replacement);
+    } catch (caught) {
+      error = caught;
+    }
+    testing.expectEqual('TypeError', error && error.name);
+    testing.expectEqual(
+      "Immutable prototype object '[object Location]' cannot have their " +
+        'prototype set',
+      error && error.message,
+    );
+    testing.expectTrue(error instanceof TypeError);
+    testing.expectEqual(originalPrototype, Object.getPrototypeOf(sample));
+  }
+
+  testing.expectTrue(Object.isExtensible(sample));
+  testing.expectEqual(sample, Object.preventExtensions(sample));
+  testing.expectFalse(Object.isExtensible(sample));
+  testing.expectFalse(Reflect.defineProperty(sample, 'afterPreventExtensions', {
+    value: true,
+  }));
+  // Setting an immutable object's prototype to its current value is still a
+  // success after the object becomes non-extensible.
+  testing.expectTrue(Reflect.setPrototypeOf(sample, originalPrototype));
+
+  const attachedAncestorOrigins = sample.ancestorOrigins;
+  const ownerDOMStringListPrototype = child.DOMStringList.prototype;
+  frame.remove();
+
+  // Blink invalidates a non-empty cached ancestor list when the owning
+  // Document detaches. The replacement is empty, stable, and still belongs
+  // to the detached Location's relevant Realm.
+  testing.expectEqual('about:blank', sample.href);
+  const detachedAncestorOrigins = sample.ancestorOrigins;
+  testing.expectEqual(null, frame.contentWindow);
+  testing.expectEqual(null, frame.contentDocument);
+  testing.expectTrue(child.closed);
+  testing.expectEqual(null, child.parent);
+  testing.expectEqual(null, child.top);
+  testing.expectEqual(null, child.frameElement);
+  testing.expectEqual(0, child.length);
+  testing.expectFalse(detachedAncestorOrigins === attachedAncestorOrigins);
+  testing.expectEqual(0, detachedAncestorOrigins.length);
+  testing.expectEqual(detachedAncestorOrigins, sample.ancestorOrigins);
+  testing.expectEqual(
+    ownerDOMStringListPrototype,
+    Object.getPrototypeOf(detachedAncestorOrigins),
+  );
+</script>

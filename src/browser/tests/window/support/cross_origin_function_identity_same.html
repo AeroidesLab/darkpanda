@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>same-origin WindowProxy function-identity target</title>
+<script>
+  // This function must be compiled in this iframe's realm.  Calling a
+  // parent-created function with this iframe as `this` would still execute in
+  // the parent's realm and would not test Blink's current-context behavior.
+  window.captureCrossOriginSurface = target => {
+    const method = target.postMessage;
+    return {
+      method,
+      methodDescriptor:
+        Object.getOwnPropertyDescriptor(target, 'postMessage'),
+      windowDescriptor:
+        Object.getOwnPropertyDescriptor(target, 'window'),
+      locationDescriptor:
+        Object.getOwnPropertyDescriptor(target, 'location'),
+      locationReplace: target.location.replace,
+      locationReplaceDescriptor:
+        Object.getOwnPropertyDescriptor(target.location, 'replace'),
+      locationHrefDescriptor:
+        Object.getOwnPropertyDescriptor(target.location, 'href'),
+    };
+  };
+</script>

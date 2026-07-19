@@ -1,0 +1,25 @@
+<!doctype html>
+<script>
+  window.__storageEvents = [];
+  window.onstorage = (event) => {
+    const local = event.storageArea === localStorage;
+    const session = event.storageArea === sessionStorage;
+    window.__storageEvents.push({
+      kind: local ? 'local' : session ? 'session' : 'unknown',
+      key: event.key,
+      oldValue: event.oldValue,
+      newValue: event.newValue,
+      url: event.url,
+      bubbles: event.bubbles,
+      cancelable: event.cancelable,
+      composed: event.composed,
+      isTrusted: event.isTrusted,
+      storageAreaMatches: local || session,
+      targetIsWindow: event.target === window,
+      constructorMatches: event.constructor === StorageEvent,
+      prototypeMatches: Object.getPrototypeOf(event) === StorageEvent.prototype,
+    });
+    parent.__storageTaskOrder.push(`${local ? 'local' : 'session'}:${event.key}`);
+  };
+  parent.postMessage('storage-event-ready', '*');
+</script>

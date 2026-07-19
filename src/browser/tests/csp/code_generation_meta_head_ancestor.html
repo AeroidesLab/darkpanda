@@ -1,0 +1,40 @@
+<!doctype html>
+<head><script src="../testing.js"></script></head>
+<body>
+<script id="csp-meta-head-ancestor">
+  const captureHeadAncestorMeta = callback => {
+    try {
+      callback();
+      return null;
+    } catch (error) {
+      return error;
+    }
+  };
+
+  // A connected meta owned by another Document must not affect this realm.
+  const foreignDocument = document.implementation.createHTMLDocument('foreign');
+  const foreignWrapper = foreignDocument.createElement('div');
+  foreignDocument.head.append(foreignWrapper);
+  const foreignMeta = foreignDocument.createElement('meta');
+  foreignWrapper.append(foreignMeta);
+  foreignMeta.content = "script-src 'none'";
+  foreignMeta.httpEquiv = 'Content-Security-Policy';
+  testing.expectEqual(2, eval('1 + 1'));
+
+  // Chromium's InDocumentHead accepts any HTMLHeadElement ancestor, including
+  // a script-created non-canonical head, and does not require a direct parent.
+  const syntheticHead = document.createElement('head');
+  document.body.append(syntheticHead);
+  const wrapper = document.createElement('div');
+  syntheticHead.append(wrapper);
+  const nestedMeta = document.createElement('meta');
+  wrapper.append(nestedMeta);
+  nestedMeta.content = "script-src 'none'";
+  nestedMeta.httpEquiv = 'Content-Security-Policy';
+
+  testing.expectEqual(
+    'EvalError',
+    captureHeadAncestorMeta(() => eval('1')).name,
+  );
+</script>
+</body>

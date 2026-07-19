@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../testing.js"></script>
+<script id="worker-policy-network-delayed-no-inheritance">
+  testing.expectTrue(true);
+  (async () => {
+    const state = await testing.async();
+    const worker = new Worker('worker_policy_probe.js?policy=none&delay_ms=150');
+    worker.onmessage = event => state.resolve(event.data);
+    worker.onerror = event => state.resolve({workerError: event.message});
+
+    // Even though the response cannot complete until a later server turn,
+    // HTTP(S) entry scripts use their final response container and never
+    // clone a creator meta installed while the fetch is in flight.
+    const meta = document.createElement('meta');
+    document.head.append(meta);
+    meta.content = "script-src 'self' 'unsafe-inline'; worker-src 'self'";
+    meta.httpEquiv = 'Content-Security-Policy';
+
+    await state.done(result => {
+      worker.terminate();
+      testing.expectEqual(undefined, result.workerError);
+      testing.expectEqual({value: 4}, result.eval);
+    });
+  })();
+</script>

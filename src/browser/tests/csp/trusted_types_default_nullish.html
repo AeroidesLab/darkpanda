@@ -1,0 +1,19 @@
+<!doctype html>
+<head>
+<script src="../testing.js"></script>
+</head>
+<body>
+<div id="target"></div>
+<script id="trusted-types-default-nullish">
+testing.onload(() => {
+  trustedTypes.createPolicy('default', { createHTML: () => null });
+  let error = null;
+  try { document.getElementById('target').innerHTML = 'blocked'; } catch (caught) { error = caught; }
+  testing.expectEqual('TypeError', error && error.name);
+  testing.expectEqual(
+    "Failed to set the 'innerHTML' property on 'Element': This document requires 'TrustedHTML' assignment and the 'default' policy failed to execute.",
+    error && error.message,
+  );
+});
+</script>
+</body>

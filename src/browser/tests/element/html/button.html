@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<!-- Button elements -->
+<button id="button1">Click me</button>
+<button id="button2" disabled>Disabled button</button>
+
+<!-- Form association tests -->
+<form id="form1">
+  <button id="button_in_form">In form</button>
+</form>
+
+<form id="form2"></form>
+<button id="button_with_form_attr" form="form2">With form attr</button>
+
+<button id="button_no_form">No form</button>
+
+<form id="form3">
+  <button id="button_invalid_form_attr" form="nonexistent">Invalid form</button>
+</form>
+
+<script id="disabled_initial">
+  testing.expectEqual(false, $('#button1').disabled)
+  testing.expectEqual(true, $('#button2').disabled)
+</script>
+
+<script id="disabled_set">
+  $('#button1').disabled = true
+  testing.expectEqual(true, $('#button1').disabled)
+
+  $('#button2').disabled = false
+  testing.expectEqual(false, $('#button2').disabled)
+</script>
+
+<script id="form_ancestor">
+  const buttonInForm = $('#button_in_form')
+  testing.expectEqual('FORM', buttonInForm.form.tagName)
+  testing.expectEqual('form1', buttonInForm.form.id)
+</script>
+
+<script id="form_attribute">
+  const buttonWithFormAttr = $('#button_with_form_attr')
+  testing.expectEqual('FORM', buttonWithFormAttr.form.tagName)
+  testing.expectEqual('form2', buttonWithFormAttr.form.id)
+</script>
+
+<script id="form_null">
+  const buttonNoForm = $('#button_no_form')
+  testing.expectEqual(null, buttonNoForm.form)
+</script>
+
+<script id="form_invalid_attribute">
+  const buttonInvalidFormAttr = $('#button_invalid_form_attr')
+  testing.expectEqual(null, buttonInvalidFormAttr.form)
+</script>
+
+<button id="named1" name="submit-btn"></button>
+<button id="named2"></button>
+
+<button id="required1" required></button>
+<button id="required2"></button>
+
+<script id="name_initial">
+  testing.expectEqual('submit-btn', $('#named1').name)
+  testing.expectEqual('', $('#named2').name)
+</script>
+
+<script id="name_set">
+  {
+    const button = document.createElement('button')
+    testing.expectEqual('', button.name)
+
+    button.name = 'action'
+    testing.expectEqual('action', button.name)
+    testing.expectEqual('action', button.getAttribute('name'))
+
+    button.name = 'submit'
+    testing.expectEqual('submit', button.name)
+    testing.expectEqual('submit', button.getAttribute('name'))
+  }
+</script>
+
+<script id="name_reflects_to_attribute">
+  {
+    const button = document.createElement('button')
+    testing.expectEqual(null, button.getAttribute('name'))
+
+    button.name = 'fieldname'
+    testing.expectEqual('fieldname', button.getAttribute('name'))
+    testing.expectTrue(button.outerHTML.includes('name="fieldname"'))
+  }
+</script>
+
+<script id="required_initial">
+  testing.expectEqual(true, $('#required1').required)
+  testing.expectEqual(false, $('#required2').required)
+</script>
+
+<script id="required_set">
+  {
+    const button = document.createElement('button')
+    testing.expectEqual(false, button.required)
+
+    button.required = true
+    testing.expectEqual(true, button.required)
+    testing.expectEqual('', button.getAttribute('required'))
+
+    button.required = false
+    testing.expectEqual(false, button.required)
+    testing.expectEqual(null, button.getAttribute('required'))
+  }
+</script>
+
+<script id="required_reflects_to_attribute">
+  {
+    const button = document.createElement('button')
+    testing.expectEqual(null, button.getAttribute('required'))
+    testing.expectFalse(button.outerHTML.includes('required'))
+
+    button.required = true
+    testing.expectEqual('', button.getAttribute('required'))
+    testing.expectTrue(button.outerHTML.includes('required'))
+
+    button.required = false
+    testing.expectEqual(null, button.getAttribute('required'))
+    testing.expectFalse(button.outerHTML.includes('required'))
+  }
+</script>
+
+<script id="validity_state_identity">
+  testing.expectEqual($('#button1').validity, $('#button1').validity)
+</script>
+
+<script id="invalid_event_is_trusted">
+  {
+    const b = document.createElement('button')
+    document.body.appendChild(b)
+    b.setCustomValidity('nope')
+    let captured = null
+    b.addEventListener('invalid', (e) => { captured = e })
+    b.checkValidity()
+    testing.expectEqual(true, captured.isTrusted)
+  }
+</script>
+
+<!-- Test fixtures for form submission attribute overrides -->
+<button id="btn_no_overrides"></button>
+<button id="btn_with_overrides"
+        formaction="/override" formmethod="POST"
+        formenctype="text/plain" formtarget="_blank" formnovalidate></button>
+<button id="btn_invalid_overrides"
+        formmethod="WEIRD" formenctype="bogus"></button>
+
+<script id="form_action_initial">
+  // Missing: returns the document URL per spec.
+  testing.expectEqual(location.href, $('#btn_no_overrides').formAction)
+
+  // Present: resolved against the document URL.
+  testing.expectEqual(testing.ORIGIN + '/override', $('#btn_with_overrides').formAction)
+</script>
+
+<script id="form_action_set">
+  {
+    const b = document.createElement('button')
+    testing.expectEqual(location.href, b.formAction)
+
+    b.formAction = 'hello'
+    testing.expectEqual(testing.BASE_URL + 'element/html/hello', b.formAction)
+
+    b.formAction = '/hello'
+    testing.expectEqual(testing.ORIGIN + '/hello', b.formAction)
+
+    b.formAction = 'https://lightpanda.io/hello'
+    testing.expectEqual('https://lightpanda.io/hello', b.formAction)
+  }
+</script>
+
+<script id="form_enctype_initial">
+  // Missing-value default on overrides: empty string (so `submitter.formEnctype ||
+  // form.enctype` falls through to the form's value).
+  testing.expectEqual('', $('#btn_no_overrides').formEnctype)
+  testing.expectEqual('text/plain', $('#btn_with_overrides').formEnctype)
+
+  // Invalid-value default: "application/x-www-form-urlencoded"
+  testing.expectEqual('application/x-www-form-urlencoded', $('#btn_invalid_overrides').formEnctype)
+</script>
+
+<script id="form_enctype_set">
+  {
+    const b = document.createElement('button')
+    testing.expectEqual('', b.formEnctype)
+
+    b.formEnctype = 'multipart/form-data'
+    testing.expectEqual('multipart/form-data', b.formEnctype)
+    testing.expectEqual('multipart/form-data', b.getAttribute('formenctype'))
+  }
+</script>
+
+<script id="form_method_initial">
+  testing.expectEqual('', $('#btn_no_overrides').formMethod)
+  testing.expectEqual('post', $('#btn_with_overrides').formMethod)
+
+  // Invalid-value default: "get"
+  testing.expectEqual('get', $('#btn_invalid_overrides').formMethod)
+</script>
+
+<script id="form_method_normalization">
+  {
+    const b = document.createElement('button')
+    testing.expectEqual('', b.formMethod)
+
+    b.setAttribute('formmethod', 'POST')
+    testing.expectEqual('post', b.formMethod)
+
+    b.setAttribute('formmethod', 'DIALOG')
+    testing.expectEqual('dialog', b.formMethod)
+
+    b.setAttribute('formmethod', '')
+    testing.expectEqual('get', b.formMethod)
+
+    b.formMethod = 'GET'
+    testing.expectEqual('get', b.formMethod)
+    testing.expectEqual('GET', b.getAttribute('formmethod'))
+  }
+</script>
+
+<script id="form_target_initial">
+  testing.expectEqual('', $('#btn_no_overrides').formTarget)
+  testing.expectEqual('_blank', $('#btn_with_overrides').formTarget)
+</script>
+
+<script id="form_target_set">
+  {
+    const b = document.createElement('button')
+    testing.expectEqual('', b.formTarget)
+
+    b.formTarget = '_self'
+    testing.expectEqual('_self', b.formTarget)
+    testing.expectEqual('_self', b.getAttribute('formtarget'))
+  }
+</script>
+
+<script id="form_no_validate_initial">
+  testing.expectEqual(false, $('#btn_no_overrides').formNoValidate)
+  testing.expectEqual(true, $('#btn_with_overrides').formNoValidate)
+</script>
+
+<script id="form_no_validate_set">
+  {
+    const b = document.createElement('button')
+    testing.expectEqual(false, b.formNoValidate)
+
+    b.formNoValidate = true
+    testing.expectEqual(true, b.formNoValidate)
+    testing.expectEqual('', b.getAttribute('formnovalidate'))
+
+    b.formNoValidate = false
+    testing.expectEqual(false, b.formNoValidate)
+    testing.expectEqual(null, b.getAttribute('formnovalidate'))
+  }
+</script>

@@ -1,0 +1,110 @@
+<!doctype html>
+<script src="testing.js"></script>
+
+<script id="resource_timing_real_network" type="module">
+  const state = await testing.async();
+  performance.clearResourceTimings();
+
+  const observed = [];
+  const observer = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) observed.push(entry.name);
+  });
+  observer.observe({ type: "resource" });
+
+  const fetchUrl = `${testing.ORIGIN}/xhr`;
+  const xhrUrl = `${testing.ORIGIN}/xhr/json`;
+  const scriptUrl = `${testing.BASE_URL}performance_resource_timing_fixture.js`;
+  const iframeUrl = `${testing.BASE_URL}performance_resource_timing_fixture.html`;
+
+  const fetchResponse = await fetch(fetchUrl);
+  await fetchResponse.text();
+
+  await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", xhrUrl);
+    xhr.onload = resolve;
+    xhr.onerror = reject;
+    xhr.send();
+  });
+
+  await new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = scriptUrl;
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+
+  await new Promise((resolve, reject) => {
+    const iframe = document.createElement("iframe");
+    iframe.src = iframeUrl;
+    iframe.onload = resolve;
+    iframe.onerror = reject;
+    document.body.appendChild(iframe);
+  });
+
+  // Observer delivery is a queued task; resource entries themselves are
+  // already visible before each fetch/load completion callback.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const entries = performance.getEntriesByType("resource");
+  const byName = new Map(entries.map((entry) => [entry.name, entry]));
+  const initiators = [fetchUrl, xhrUrl, scriptUrl, iframeUrl].map(
+    (url) => byName.get(url)?.initiatorType,
+  );
+  const fetchEntry = byName.get(fetchUrl);
+  const json = fetchEntry?.toJSON();
+  const sorted = entries.every(
+    (entry, index) => index === 0 || entries[index - 1].startTime <= entry.startTime,
+  );
+
+  let bufferedEntries = null;
+  const bufferedDone = new Promise((resolve) => {
+    const bufferedObserver = new PerformanceObserver((list, self) => {
+      bufferedEntries = list.getEntriesByType("resource");
+      self.disconnect();
+      resolve();
+    });
+    bufferedObserver.observe({ type: "resource", buffered: true });
+  });
+  await bufferedDone;
+  observer.disconnect();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, PerformanceObserver.supportedEntryTypes.includes("resource"));
+    testing.expectEqual(4, entries.length);
+    testing.expectEqual(["fetch", "xmlhttprequest", "script", "iframe"], initiators);
+    testing.expectEqual(true, sorted);
+    testing.expectEqual(true, observed.includes(fetchUrl));
+    testing.expectEqual(true, observed.includes(xhrUrl));
+    testing.expectEqual(true, observed.includes(scriptUrl));
+    testing.expectEqual(true, observed.includes(iframeUrl));
+    testing.expectEqual(4, bufferedEntries.length);
+
+    testing.expectEqual(true, fetchEntry instanceof PerformanceResourceTiming);
+    testing.expectEqual(true, fetchEntry instanceof PerformanceEntry);
+    testing.expectEqual("resource", fetchEntry.entryType);
+    testing.expectEqual("http/1.1", fetchEntry.nextHopProtocol);
+    testing.expectEqual(200, fetchEntry.responseStatus);
+    testing.expectEqual(100, fetchEntry.encodedBodySize);
+    testing.expectEqual(100, fetchEntry.decodedBodySize);
+    testing.expectEqual(400, fetchEntry.transferSize);
+    testing.expectEqual(true, fetchEntry.startTime > 0);
+    testing.expectEqual(true, fetchEntry.requestStart >= fetchEntry.startTime);
+    testing.expectEqual(true, fetchEntry.responseStart >= fetchEntry.requestStart);
+    testing.expectEqual(true, fetchEntry.responseEnd >= fetchEntry.responseStart);
+    testing.expectEqual(true, fetchEntry.responseEnd > fetchEntry.startTime);
+    testing.expectEqual(true, fetchEntry.responseEnd <= performance.now());
+    testing.expectEqual(fetchEntry.responseEnd - fetchEntry.startTime, fetchEntry.duration);
+
+    testing.expectEqual(fetchUrl, json.name);
+    testing.expectEqual("resource", json.entryType);
+    testing.expectEqual("fetch", json.initiatorType);
+    testing.expectEqual("http/1.1", json.nextHopProtocol);
+    testing.expectEqual(100, json.encodedBodySize);
+    testing.expectEqual(100, json.decodedBodySize);
+    testing.expectEqual(true, Array.isArray(json.serverTiming));
+    testing.expectEqual(true, Object.prototype.hasOwnProperty.call(json, "finalResponseHeadersStart"));
+  });
+</script>

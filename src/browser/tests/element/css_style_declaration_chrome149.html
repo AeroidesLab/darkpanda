@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body>
+
+<!--
+  Differential baseline: Chrome 149.0.7827.203 / V8 14.9.207.35.
+  Generic CSSOM prototype topology and computed-declaration mutation errors.
+-->
+
+<script id="CSSStyleDeclaration_chrome149_prototype_order">
+{
+  const prototype = CSSStyleDeclaration.prototype;
+  testing.expectEqual([
+    'cssText',
+    'length',
+    'parentRule',
+    'cssFloat',
+    'getPropertyPriority',
+    'getPropertyValue',
+    'item',
+    'removeProperty',
+    'setProperty',
+    'constructor',
+    Symbol.toStringTag,
+    Symbol.iterator,
+  ], Reflect.ownKeys(prototype));
+
+  const descriptors = Object.getOwnPropertyDescriptors(prototype);
+  for (const name of ['cssText', 'length', 'parentRule', 'cssFloat']) {
+    testing.expectTrue(descriptors[name].enumerable);
+    testing.expectTrue(descriptors[name].configurable);
+    testing.expectEqual('function', typeof descriptors[name].get);
+  }
+  testing.expectEqual('function', typeof descriptors.cssText.set);
+  testing.expectEqual(undefined, descriptors.length.set);
+  testing.expectEqual(undefined, descriptors.parentRule.set);
+  testing.expectEqual('function', typeof descriptors.cssFloat.set);
+
+  for (const name of [
+    'getPropertyPriority',
+    'getPropertyValue',
+    'item',
+    'removeProperty',
+    'setProperty',
+  ]) {
+    testing.expectTrue(descriptors[name].writable);
+    testing.expectTrue(descriptors[name].enumerable);
+    testing.expectTrue(descriptors[name].configurable);
+    testing.expectEqual('function', typeof descriptors[name].value);
+  }
+}
+</script>
+
+<script id="CSSStyleDeclaration_chrome149_computed_mutation_errors">
+{
+  const element = document.createElement('div');
+  document.body.appendChild(element);
+  const computed = getComputedStyle(element);
+
+  const capture = callback => {
+    try {
+      callback();
+      return null;
+    } catch (error) {
+      return {
+        name: error.name,
+        message: error.message,
+        code: error.code,
+        stackFirst: String(error.stack).split('\n')[0],
+      };
+    }
+  };
+
+  const expectMutationError = (callback, message) => {
+    const actual = capture(callback);
+    testing.expectEqual('NoModificationAllowedError', actual?.name);
+    testing.expectEqual(message, actual?.message);
+    testing.expectEqual(7, actual?.code);
+    testing.expectEqual(`NoModificationAllowedError: ${message}`, actual?.stackFirst);
+  };
+
+  expectMutationError(
+    () => computed.setProperty('color', 'red'),
+    "Failed to execute 'setProperty' on 'CSSStyleDeclaration': These styles are computed, and therefore the 'color' property is read-only.",
+  );
+  expectMutationError(
+    () => computed.setProperty('BACKGROUND-COLOR', 'red'),
+    "Failed to execute 'setProperty' on 'CSSStyleDeclaration': These styles are computed, and therefore the 'BACKGROUND-COLOR' property is read-only.",
+  );
+  expectMutationError(
+    () => computed.removeProperty('color'),
+    "Failed to execute 'removeProperty' on 'CSSStyleDeclaration': These styles are computed, and therefore the 'color' property is read-only.",
+  );
+  expectMutationError(
+    () => { computed.cssText = 'color: red'; },
+    "Failed to set the 'cssText' property on 'CSSStyleDeclaration': These styles are computed, and therefore read-only.",
+  );
+  expectMutationError(
+    () => { computed.cssFloat = 'left'; },
+    "Failed to set the 'cssFloat' property on 'CSSStyleDeclaration': These styles are computed, and therefore the 'float' property is read-only.",
+  );
+  expectMutationError(
+    () => { computed.color = 'red'; },
+    "Failed to set a named property 'color' on 'CSSStyleDeclaration': These styles are computed, and therefore the 'color' property is read-only.",
+  );
+  expectMutationError(
+    () => { computed.backgroundColor = 'red'; },
+    "Failed to set a named property 'backgroundColor' on 'CSSStyleDeclaration': These styles are computed, and therefore the 'background-color' property is read-only.",
+  );
+}
+</script>

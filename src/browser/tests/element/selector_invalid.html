@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="container">
+    <p>Test</p>
+</div>
+
+<script id="empty_functional">
+{
+    const container = $('#container');
+
+    // Empty functional pseudo-classes should error
+    testing.expectError("SyntaxError", () => container.querySelector(':has()'));
+    testing.expectError("SyntaxError", () => container.querySelector(':not()'));
+    testing.expectError("SyntaxError", () => container.querySelector(':lang()'));
+}
+</script>
+
+<script id="invalid_patterns">
+{
+    const container = $('#container');
+
+    // Invalid nth patterns
+    testing.expectError("SyntaxError", () => container.querySelector(':nth-child(foo)'));
+    testing.expectError("SyntaxError", () => container.querySelector(':nth-child(-)'));
+    testing.expectError("SyntaxError", () => container.querySelector(':nth-child(+)'));
+}
+</script>
+
+<script id="unknown_pseudo">
+{
+    const container = $('#container');
+
+    // Unknown pseudo-classes
+    testing.expectError("SyntaxError", () => container.querySelector(':unknown'));
+    testing.expectError("SyntaxError", () => container.querySelector(':not-a-real-pseudo'));
+    testing.expectError("SyntaxError", () => container.querySelector(':fake(test)'));
+}
+</script>
+
+<script id="empty_selector">
+{
+    const container = $('#container');
+
+    // Empty selectors
+    testing.expectError("SyntaxError", () => container.querySelector(''));
+    testing.expectError("SyntaxError", () => document.querySelectorAll(''));
+}
+</script>
+
+<script id="invalid_combinators">
+{
+    const container = $('#container');
+
+    // Combinators with nothing after
+    testing.expectError("SyntaxError", () => container.querySelector('p >'));
+    testing.expectError("SyntaxError", () => container.querySelector('p +'));
+    testing.expectError("SyntaxError", () => container.querySelector('p ~'));
+}
+</script>

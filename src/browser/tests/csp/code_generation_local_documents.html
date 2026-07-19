@@ -1,0 +1,72 @@
+<!doctype html>
+<script src="../testing.js"></script>
+<meta http-equiv="Content-Security-Policy"
+      content="script-src 'self' 'unsafe-inline' blob:">
+
+<script id="csp-local-document-policy-container" type="module">
+{
+  const state = await testing.async();
+  const results = {};
+  window.__cspLocalDocumentResults = results;
+  const blobUrls = [];
+  const finish = (kind, value) => {
+    results[kind] = value;
+    if (Object.keys(results).length === 3) state.resolve(results);
+  };
+
+  window.addEventListener('message', event => {
+    if (!event.data?.kind?.startsWith('csp-local-')) return;
+    finish(event.data.kind, event.data.error);
+  });
+
+  const captureEval = realm => {
+    try {
+      realm.eval('1 + 1');
+      return null;
+    } catch (error) {
+      return {name: error.name, message: error.message};
+    }
+  };
+
+  // Initial about:blank creation can bypass the queued-navigation path, so it
+  // must inherit directly from its creator/parent policy container.
+  const blank = document.createElement('iframe');
+  document.body.appendChild(blank);
+  setTimeout(() => finish('csp-local-about', captureEval(blank.contentWindow)), 0);
+
+  // about:srcdoc inherits the parent policy, irrespective of which realm
+  // initiated the navigation.
+  const srcdoc = document.createElement('iframe');
+  srcdoc.srcdoc = `<script>
+    let error = null;
+    try { eval('1 + 1'); } catch (caught) {
+      error = {name: caught.name, message: caught.message};
+    }
+    parent.postMessage({kind: 'csp-local-srcdoc', error}, '*');
+  <\/script>`;
+  document.body.appendChild(srcdoc);
+
+  // blob: documents use the navigation initiator's policy snapshot. The
+  // creating document can disappear during a root swap, so the snapshot must
+  // not retain a raw Context pointer.
+  const blobSource = `<!doctype html><script>
+    let error = null;
+    try { eval('1 + 1'); } catch (caught) {
+      error = {name: caught.name, message: caught.message};
+    }
+    parent.postMessage({kind: 'csp-local-blob', error}, '*');
+  <\/script>`;
+  const blobUrl = URL.createObjectURL(new Blob([blobSource], {type: 'text/html'}));
+  blobUrls.push(blobUrl);
+  const blobFrame = document.createElement('iframe');
+  blobFrame.src = blobUrl;
+  document.body.appendChild(blobFrame);
+
+  await state.done(value => {
+    for (const url of blobUrls) URL.revokeObjectURL(url);
+    testing.expectEqual('EvalError', value['csp-local-about']?.name);
+    testing.expectEqual('EvalError', value['csp-local-srcdoc']?.name);
+    testing.expectEqual('EvalError', value['csp-local-blob']?.name);
+  });
+}
+</script>

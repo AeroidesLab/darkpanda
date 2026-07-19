@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<script>
+  let document_is_undefined = false;
+  let document_security_error = false;
+  try {
+    document_is_undefined = window.top.document === undefined;
+  } catch (error) {
+    document_is_undefined = true;
+    document_security_error = error instanceof DOMException &&
+      error.name === 'SecurityError' && error.code === 18;
+  }
+  window.top.postMessage({
+    url: location.toString(),
+    document_is_undefined,
+    document_security_error,
+  }, '*')
+</script>
