@@ -106,6 +106,15 @@ pub fn run(
         var runner = page._session.runner(.{});
         var timer = std.time.Timer.start() catch unreachable;
         while (promise.state() == .pending) {
+            // tickForFrame is the one-tick primitive and deliberately does
+            // not pass through Runner._wait's cooperative cancellation poll.
+            // Evaluate owns this outer promise loop, so it must check the
+            // Session hook itself before entering another tick. This lets
+            // embedders interrupt an otherwise permanently-pending Promise
+            // instead of waiting for promise_timeout_ms to expire.
+            if (page._session.isCancelled()) {
+                return .{ .text = "promise: cancelled", .is_error = true };
+            }
             const elapsed_ms: u32 = @intCast(timer.read() / std.time.ns_per_ms);
             if (elapsed_ms >= options.promise_timeout_ms) {
                 return .{ .text = "promise: timed out waiting for resolution", .is_error = true };
