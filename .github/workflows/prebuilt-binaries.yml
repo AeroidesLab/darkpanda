@@ -160,7 +160,9 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            cmake libfontconfig1-dev ninja-build nasm pkg-config rsync xz-utils
+            cmake libexpat1-dev libfontconfig1-dev libfreetype-dev \
+            libharfbuzz-dev libicu-dev libjpeg-dev libpng-dev \
+            nasm ninja-build pkg-config rsync xz-utils zlib1g-dev
 
       - name: Select full Xcode installation
         if: runner.os == 'macOS'
@@ -176,7 +178,11 @@ jobs:
             choco install nasm -y --no-progress
             echo "C:\Program Files\NASM" >> "$GITHUB_PATH"
           elif [[ "${{ runner.os }}" == "macOS" ]]; then
-            brew install nasm
+            brew install nasm pkg-config libpng libjpeg-turbo
+            # Skia's GN sets skia_use_system_libpng/libjpeg_turbo=true and
+            # discovers them via pkg-config; Homebrew libpng is keg-only so
+            # its .pc files live under the brew prefix, not the default path.
+            echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
           fi
 
       - name: Install Zig on Windows
@@ -421,7 +427,9 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($visualStudio)) {
             throw 'Visual Studio VC Redistributable installation was not found'
           }
-          $redistVersions = @(Get-ChildItem -LiteralPath (Join-Path $visualStudio 'VC/Redist/MSVC') -Directory | Sort-Object Name -Descending)
+          $redistVersions = @(Get-ChildItem -LiteralPath (Join-Path $visualStudio 'VC/Redist/MSVC') -Directory |
+            Where-Object { $_.Name -match '^\d+\.' } |
+            Sort-Object Name -Descending)
           if ($redistVersions.Count -eq 0) {
             throw 'Visual Studio VC Redistributable version directory was not found'
           }
