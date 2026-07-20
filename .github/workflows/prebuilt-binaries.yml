@@ -160,12 +160,24 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            cmake libfontconfig1-dev ninja-build pkg-config rsync xz-utils
+            cmake libfontconfig1-dev ninja-build nasm pkg-config rsync xz-utils
 
       - name: Select full Xcode installation
         if: runner.os == 'macOS'
         shell: bash
         run: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+
+      - name: Install NASM assembler
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            choco install nasm -y --no-progress
+            echo "C:\Program Files\NASM" >> "$GITHUB_PATH"
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+            brew install nasm
+          fi
 
       - name: Install Zig on Windows
         if: runner.os == 'Windows'
