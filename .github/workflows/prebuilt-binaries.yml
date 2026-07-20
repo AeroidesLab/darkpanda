@@ -178,11 +178,18 @@ jobs:
             choco install nasm -y --no-progress
             echo "C:\Program Files\NASM" >> "$GITHUB_PATH"
           elif [[ "${{ runner.os }}" == "macOS" ]]; then
-            brew install nasm pkg-config libpng libjpeg-turbo
-            # Skia's GN sets skia_use_system_libpng/libjpeg_turbo=true and
-            # discovers them via pkg-config; Homebrew libpng is keg-only so
-            # its .pc files live under the brew prefix, not the default path.
-            echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+            brew install nasm libpng libjpeg-turbo
+            # Skia's GN sets skia_use_system_libpng/libjpeg_turbo=true, but
+            # rust-skia's macOS platform code never queries pkg-config, so
+            # the keg-only Homebrew headers under the brew prefix are not on
+            # clang's default search path. Inject them via SKIA_GN_ARGS,
+            # which rust-skia appends verbatim to the GN --args string; the
+            # GN `+=` operator extends the default extra_cflags rather than
+            # replacing them.
+            brew_prefix="$(brew --prefix)"
+            {
+              echo "SKIA_GN_ARGS=extra_cflags+=[\"-I${brew_prefix}/include\"] extra_ldflags+=[\"-L${brew_prefix}/lib\"]"
+            } >> "$GITHUB_ENV"
           fi
 
       - name: Install Zig on Windows
