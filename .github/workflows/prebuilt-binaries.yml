@@ -17,6 +17,11 @@ on:
         description: Release tag for a manual publish (for example v1.0.0-ci.1)
         required: false
         type: string
+      canvas_validation_only:
+        description: Build and test the latest private Canvas source without packaging DarkPanda
+        required: true
+        default: false
+        type: boolean
   push:
     tags:
       - "v*"
@@ -46,8 +51,178 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "12.0"
 
 jobs:
+  canvas:
+    name: Canvas ${{ matrix.id }} (Chromium toolchain)
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x86_64
+            runner: windows-2022
+            python: python
+            jobs: 4
+          - id: linux-x86_64
+            runner: ubuntu-24.04
+            python: python3
+            jobs: 4
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out latest private Canvas source
+        uses: actions/checkout@main
+        with:
+          repository: AeroidesLab/canvas
+          ref: main
+          token: ${{ secrets.CANVAS_READ_TOKEN }}
+          fetch-depth: 1
+          path: canvas
+          persist-credentials: false
+
+      - name: Verify source-only repository contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '.selection_policy == "latest-at-build-start"' \
+            canvas/source-policy.json >/dev/null
+          test ! -d canvas/.github/workflows
+          forbidden=$(
+            git -C canvas ls-files |
+              grep -E '(^|/)(target|out|skia|chromium|tools-bin)/|Cargo\.lock$|\.(dll|dylib|so|lib|a|exe|pdb|obj|o|log)$' ||
+              true
+          )
+          if [[ -n "$forbidden" ]]; then
+            echo "::error::Generated or binary files are tracked by AeroidesLab/canvas"
+            printf '%s\n' "$forbidden"
+            exit 1
+          fi
+
+      - name: Install Linux prerequisites
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            ca-certificates git nasm python3 xz-utils
+
+      - name: Resolve latest Skia and Chromium toolchain declarations
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c core.autocrlf=false clone \
+            --depth 1 \
+            https://skia.googlesource.com/skia.git \
+            skia
+          git -c core.autocrlf=false clone \
+            --depth 1 \
+            --filter=blob:none \
+            --sparse \
+            https://chromium.googlesource.com/chromium/src.git \
+            chromium
+          git -C chromium sparse-checkout set \
+            tools/clang/scripts \
+            tools/rust
+          {
+            echo "CANVAS_REVISION=$(git -C canvas rev-parse HEAD)"
+            echo "SKIA_REVISION=$(git -C skia rev-parse HEAD)"
+            echo "CHROMIUM_REVISION=$(git -C chromium rev-parse HEAD)"
+          } >> "$GITHUB_ENV"
+
+      - name: Synchronize Skia dependencies and Chromium tools on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Push-Location skia
+          try {
+            python tools/git-sync-deps
+            python bin/fetch-gn
+            python bin/fetch-ninja
+          } finally {
+            Pop-Location
+          }
+          python chromium/tools/clang/scripts/update.py `
+            --output-dir="$env:GITHUB_WORKSPACE/toolchain/llvm"
+          python chromium/tools/rust/update_rust.py `
+            --output-dir="$env:GITHUB_WORKSPACE/toolchain/rust"
+
+      - name: Synchronize Skia dependencies and Chromium tools on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd skia
+            python3 tools/git-sync-deps
+            python3 bin/fetch-gn
+            python3 bin/fetch-ninja
+          )
+          python3 chromium/tools/clang/scripts/update.py \
+            --output-dir="$GITHUB_WORKSPACE/toolchain/llvm"
+          python3 chromium/tools/rust/update_rust.py \
+            --output-dir="$GITHUB_WORKSPACE/toolchain/rust"
+
+      - name: Build and test Canvas on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python canvas/tools/build.py `
+            --target windows-x86_64 `
+            --skia-dir "$env:GITHUB_WORKSPACE/skia" `
+            --clang-dir "$env:GITHUB_WORKSPACE/toolchain/llvm" `
+            --rust-dir "$env:GITHUB_WORKSPACE/toolchain/rust" `
+            --dist-dir "$env:GITHUB_WORKSPACE/canvas-dist/windows-x86_64" `
+            --jobs ${{ matrix.jobs }}
+
+      - name: Build and test Canvas on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 canvas/tools/build.py \
+            --target linux-x86_64 \
+            --skia-dir "$GITHUB_WORKSPACE/skia" \
+            --clang-dir "$GITHUB_WORKSPACE/toolchain/llvm" \
+            --rust-dir "$GITHUB_WORKSPACE/toolchain/rust" \
+            --dist-dir "$GITHUB_WORKSPACE/canvas-dist/linux-x86_64" \
+            --jobs '${{ matrix.jobs }}'
+
+      - name: Write Canvas build summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Canvas ${{ matrix.id }}"
+            echo
+            echo "- Canvas: \`${CANVAS_REVISION:-unresolved}\`"
+            echo "- Skia: \`${SKIA_REVISION:-unresolved}\`"
+            echo "- Chromium toolchain declaration: \`${CHROMIUM_REVISION:-unresolved}\`"
+            if [[ -f "canvas-dist/${{ matrix.id }}/metadata/build-info.json" ]]; then
+              echo
+              echo '```json'
+              cat "canvas-dist/${{ matrix.id }}/metadata/build-info.json"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Canvas library and reports
+        if: always()
+        uses: actions/upload-artifact@main
+        with:
+          name: canvas-${{ matrix.id }}
+          path: canvas-dist/${{ matrix.id }}
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 30
+
   build:
     name: ${{ matrix.id }}
+    needs: canvas
+    if: inputs.canvas_validation_only != true
     timeout-minutes: 360
     strategy:
       fail-fast: false
