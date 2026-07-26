@@ -29,6 +29,30 @@ class ChromiumToolchainManifestTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "escapes bundle root"):
                 verify_chromium_toolchain.bundle_relative(root, outside)
 
+    def test_internal_symlink_keeps_its_flavor_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            tools = root / "llvm" / "bin"
+            tools.mkdir(parents=True)
+            target = tools / "lld"
+            target.write_bytes(b"lld")
+            linker = tools / "ld.lld"
+            try:
+                linker.symlink_to(target.name)
+            except OSError as error:
+                self.skipTest(f"symlinks are unavailable: {error}")
+
+            self.assertEqual(
+                verify_chromium_toolchain.require_within(
+                    root, "llvm/bin/ld.lld"
+                ),
+                linker,
+            )
+            self.assertEqual(
+                verify_chromium_toolchain.bundle_relative(root, linker),
+                "llvm/bin/ld.lld",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

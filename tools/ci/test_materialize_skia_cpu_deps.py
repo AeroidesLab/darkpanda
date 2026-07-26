@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from tools.ci.materialize_skia_cpu_deps import tree_digest
+from tools.ci.verify_chromium_toolchain import tree_digest as verify_tree_digest
 
 
 class MaterializeSkiaCpuDepsTest(unittest.TestCase):
@@ -41,7 +42,9 @@ class MaterializeSkiaCpuDepsTest(unittest.TestCase):
                 expected.update(encoded)
                 expected.update(hashlib.sha256(files[relative]).digest())
 
-            self.assertEqual(tree_digest(root), (expected.hexdigest(), len(files)))
+            expected_digest = (expected.hexdigest(), len(files))
+            self.assertEqual(tree_digest(root), expected_digest)
+            self.assertEqual(verify_tree_digest(root), expected_digest)
 
 
 if __name__ == "__main__":

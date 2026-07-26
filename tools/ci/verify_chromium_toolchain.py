@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import ntpath
 import os
 import pathlib
 import subprocess
@@ -87,8 +88,14 @@ def sha256(path: pathlib.Path) -> str:
 def tree_digest(root: pathlib.Path) -> tuple[str, int]:
     digest = hashlib.sha256()
     count = 0
-    for path in sorted(item for item in root.rglob("*") if item.is_file()):
-        relative = path.relative_to(root).as_posix().encode("utf-8")
+    files = [
+        (path.relative_to(root).as_posix(), path)
+        for path in root.rglob("*")
+        if path.is_file()
+    ]
+    files.sort(key=lambda entry: (ntpath.normcase(entry[0]), entry[0]))
+    for relative_text, path in files:
+        relative = relative_text.encode("utf-8")
         digest.update(len(relative).to_bytes(8, "big"))
         digest.update(relative)
         digest.update(bytes.fromhex(sha256(path)))
@@ -110,11 +117,13 @@ def run_version(path: pathlib.Path) -> str:
 
 
 def require_within(root: pathlib.Path, relative: str) -> pathlib.Path:
-    path = (root / relative).resolve()
+    root = root.resolve()
+    path = pathlib.Path(os.path.abspath(root / relative))
+    resolved = path.resolve()
     try:
-        path.relative_to(root)
+        resolved.relative_to(root)
     except ValueError as exc:
-        raise RuntimeError(f"tool escapes bundle root: {path}") from exc
+        raise RuntimeError(f"tool escapes bundle root: {resolved}") from exc
     if not path.is_file():
         raise RuntimeError(f"required Chromium tool is missing: {path}")
     if os.name != "nt" and not os.access(path, os.X_OK):
@@ -124,11 +133,13 @@ def require_within(root: pathlib.Path, relative: str) -> pathlib.Path:
 
 def bundle_relative(root: pathlib.Path, path: pathlib.Path) -> str:
     root = root.resolve()
-    path = path.resolve()
+    path = pathlib.Path(os.path.abspath(path))
+    resolved = path.resolve()
     try:
         relative = path.relative_to(root)
+        resolved.relative_to(root)
     except ValueError as exc:
-        raise RuntimeError(f"path escapes bundle root: {path}") from exc
+        raise RuntimeError(f"path escapes bundle root: {resolved}") from exc
     if relative == pathlib.Path("."):
         raise RuntimeError(f"path does not name a bundle member: {path}")
     return relative.as_posix()
