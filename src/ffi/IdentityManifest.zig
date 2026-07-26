@@ -210,7 +210,7 @@ pub fn build(allocator: Allocator, app: *const App, browser: *const Browser) ![]
             .actualDriverQueried = false,
             .runtimeBackendAttested = false,
             .gpuAttested = false,
-            .implementationBoundary = "configured selection only; dynamic skia uses CPU rust-skia, not Chrome GPU raster/antialiasing; actual driver and fallback outcome are not queried",
+            .implementationBoundary = "configured selection only; dynamic Canvas uses the Chromium M149 Skia CPU backend through ABI v5, not Chrome GPU raster/antialiasing; actual driver and fallback outcome are not queried",
         },
         .transport = .{
             .backend = transport.backend,

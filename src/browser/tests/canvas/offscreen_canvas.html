@@ -28,6 +28,138 @@
 }
 </script>
 
+<script id=OffscreenCanvas#constructor-enforce-range>
+{
+  function capture(value, height = 7) {
+    try {
+      return {value: new OffscreenCanvas(value, height).width};
+    } catch (error) {
+      return {
+        name: error.name,
+        message: error.message,
+        stack0: String(error.stack).split('\n')[0],
+      };
+    }
+  }
+
+  testing.expectEqual({
+    name: 'TypeError',
+    message: "Failed to construct 'OffscreenCanvas': Value is outside the 'unsigned long' value range.",
+    stack0: "TypeError: Value is outside the 'unsigned long' value range.",
+  }, capture(-1));
+  testing.expectEqual({
+    name: 'TypeError',
+    message: "Failed to construct 'OffscreenCanvas': Value is not of type 'unsigned long'.",
+    stack0: "TypeError: Value is not of type 'unsigned long'.",
+  }, capture(NaN));
+  testing.expectEqual({
+    name: 'TypeError',
+    message: "Failed to construct 'OffscreenCanvas': Value is infinite and not of type 'unsigned long'.",
+    stack0: "TypeError: Value is infinite and not of type 'unsigned long'.",
+  }, capture(Infinity));
+  testing.expectEqual({
+    name: 'TypeError',
+    message: "Failed to construct 'OffscreenCanvas': Cannot convert a Symbol value to a number",
+    stack0: "TypeError: Cannot convert a Symbol value to a number",
+  }, capture(Symbol()));
+  testing.expectEqual({value: 0}, capture(-0.9));
+  testing.expectEqual({value: 3}, capture(3.9));
+  // Blink stores canvas dimensions in a signed integer after the unsigned
+  // Web IDL conversion, so accepted values above INT_MAX saturate.
+  testing.expectEqual({value: 2147483647}, capture(4294967295));
+
+  const order = [];
+  const width = {valueOf() { order.push('width'); return 2; }};
+  const height = {valueOf() { order.push('height'); return 3; }};
+  const ordered = new OffscreenCanvas(width, height);
+  testing.expectEqual('width,height', order.join(','));
+  testing.expectEqual(2, ordered.width);
+  testing.expectEqual(3, ordered.height);
+
+  order.length = 0;
+  const invalidWidth = {valueOf() { order.push('invalid-width'); return -1; }};
+  const unreadHeight = {valueOf() { order.push('unread-height'); return 3; }};
+  testing.expectError(
+    "Failed to construct 'OffscreenCanvas': Value is outside the 'unsigned long' value range.",
+    () => new OffscreenCanvas(invalidWidth, unreadHeight),
+  );
+  testing.expectEqual('invalid-width', order.join(','));
+}
+</script>
+
+<script id=OffscreenCanvas#dimension-setter-enforce-range>
+{
+  function assign(canvas, property, value) {
+    try {
+      canvas[property] = value;
+      return {width: canvas.width, height: canvas.height};
+    } catch (error) {
+      return {
+        name: error.name,
+        message: error.message,
+        stack0: String(error.stack).split('\n')[0],
+      };
+    }
+  }
+
+  const canvas = new OffscreenCanvas(11, 13);
+  testing.expectEqual({
+    name: 'TypeError',
+    message: "Failed to set the 'width' property on 'OffscreenCanvas': Value is outside the 'unsigned long' value range.",
+    stack0: "TypeError: Value is outside the 'unsigned long' value range.",
+  }, assign(canvas, 'width', -1));
+  testing.expectEqual(11, canvas.width);
+  testing.expectEqual(13, canvas.height);
+
+  testing.expectEqual({
+    name: 'TypeError',
+    message: "Failed to set the 'height' property on 'OffscreenCanvas': Value is not of type 'unsigned long'.",
+    stack0: "TypeError: Value is not of type 'unsigned long'.",
+  }, assign(canvas, 'height', undefined));
+  testing.expectEqual(11, canvas.width);
+  testing.expectEqual(13, canvas.height);
+
+  testing.expectEqual({
+    name: 'TypeError',
+    message: "Failed to set the 'height' property on 'OffscreenCanvas': Value is infinite and not of type 'unsigned long'.",
+    stack0: "TypeError: Value is infinite and not of type 'unsigned long'.",
+  }, assign(canvas, 'height', -Infinity));
+  testing.expectEqual(11, canvas.width);
+  testing.expectEqual(13, canvas.height);
+
+  testing.expectEqual({width: 0, height: 13}, assign(canvas, 'width', -0.9));
+  testing.expectEqual({width: 0, height: 12}, assign(canvas, 'height', '12.8'));
+
+  const authorError = new Error('author conversion failure');
+  let observed;
+  try {
+    canvas.width = {valueOf() { throw authorError; }};
+  } catch (error) {
+    observed = error;
+  }
+  testing.expectEqual(true, observed === authorError);
+  testing.expectEqual(0, canvas.width);
+  testing.expectEqual(12, canvas.height);
+}
+</script>
+
+<script id=OffscreenCanvas#failed-dimension-setter-preserves-bitmap>
+{
+  const canvas = new OffscreenCanvas(2, 2);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ff0000';
+  ctx.fillRect(0, 0, 1, 1);
+
+  testing.expectError(
+    "Failed to set the 'width' property on 'OffscreenCanvas': Value is infinite and not of type 'unsigned long'.",
+    () => { canvas.width = Infinity; },
+  );
+  testing.expectEqual(2, canvas.width);
+  testing.expectEqual(2, canvas.height);
+  testing.expectEqual([255, 0, 0, 255], Array.from(ctx.getImageData(0, 0, 1, 1).data));
+}
+</script>
+
 <script id=OffscreenCanvas#getContext>
 {
   const canvas = new OffscreenCanvas(64, 64);
@@ -38,16 +170,278 @@
 }
 </script>
 
-<script id=OffscreenCanvas#convertToBlob>
-{
+<script id=OffscreenCanvas#convertToBlob type="module">
+  const state = await testing.async();
   const canvas = new OffscreenCanvas(64, 64);
+  canvas.getContext('2d');
   const promise = canvas.convertToBlob();
   testing.expectEqual(true, promise instanceof Promise);
-  // The promise should resolve to a Blob (even if empty)
-  promise.then(blob => {
-    testing.expectEqual(true, blob instanceof Blob);
-    testing.expectEqual(blob.size, 0); // Empty since no rendering
+  const blob = await promise;
+  state.resolve(blob);
+  await state.done(value => {
+    testing.expectEqual(true, value instanceof Blob);
+    // The deterministic software test provider intentionally has no encoder
+    // and returns its historical empty Blob sentinel. A real ABI v5 backend must
+    // return a non-empty PNG; the Chrome parity probe locks that path exactly.
+    if (value.type === '') {
+      testing.expectEqual(0, value.size);
+    } else {
+      testing.expectEqual('image/png', value.type);
+      testing.expectEqual(true, value.size > 0);
+    }
   });
+</script>
+
+<script id="OffscreenCanvas#convertToBlob task order" type="module">
+  const state = await testing.async();
+  const canvas = new OffscreenCanvas(2, 2);
+  canvas.getContext('2d');
+  const order = [];
+
+  queueMicrotask(() => order.push('micro-before'));
+  setTimeout(() => order.push('timer-before'), 0);
+  const promise = canvas.convertToBlob().then(blob => {
+    order.push('blob');
+    return blob;
+  });
+  queueMicrotask(() => order.push('micro-after'));
+  setTimeout(() => order.push('timer-after'), 0);
+
+  const initial = order.slice();
+  const blob = await promise;
+  state.resolve({initial, order, blob});
+  await state.done(result => {
+    testing.expectEqual([], result.initial);
+    testing.expectEqual(
+      ['micro-before', 'micro-after', 'timer-before', 'timer-after', 'blob'],
+      result.order,
+    );
+    testing.expectEqual(true, result.blob instanceof Blob);
+  });
+</script>
+
+<script id="OffscreenCanvas#convertToBlob rejection order" type="module">
+  const state = await testing.async();
+  const order = [];
+
+  queueMicrotask(() => order.push('micro-before'));
+  const promise = new OffscreenCanvas(2, 2).convertToBlob();
+  promise.catch(() => order.push('reject'));
+  queueMicrotask(() => order.push('micro-after'));
+  setTimeout(() => order.push('timer'), 0);
+
+  const initial = order.slice();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  state.resolve({initial, order});
+  await state.done(result => {
+    testing.expectEqual([], result.initial);
+    testing.expectEqual(
+      ['micro-before', 'reject', 'micro-after', 'timer'],
+      result.order,
+    );
+  });
+</script>
+
+<script id="OffscreenCanvas#convertToBlob dictionary conversions" type="module">
+  const state = await testing.async();
+
+  function canvas() {
+    const value = new OffscreenCanvas(2, 2);
+    value.getContext('2d');
+    return value;
+  }
+
+  async function capture(options) {
+    let promise;
+    let syncError = null;
+    try {
+      promise = canvas().convertToBlob(options);
+    } catch (error) {
+      syncError = error;
+    }
+    let rejection = null;
+    try {
+      await promise;
+    } catch (error) {
+      rejection = error;
+    }
+    return {promise, syncError, rejection};
+  }
+
+  const quality = await capture({
+    quality: {valueOf() { return Symbol('quality'); }},
+  });
+  const qualityBigInt = await capture({
+    quality: {[Symbol.toPrimitive]() { return 1n; }},
+  });
+  const type = await capture({
+    type: {toString() { return Symbol('type'); }},
+  });
+
+  const authorError = new Error('quality author conversion');
+  const author = await capture({
+    quality: {valueOf() { throw authorError; }},
+  });
+
+  const order = [];
+  const ordered = await capture({
+    get quality() {
+      order.push('quality');
+      return {valueOf() {
+        order.push('quality-convert');
+        return Symbol('quality');
+      }};
+    },
+    get type() {
+      order.push('type');
+      return 'image/png';
+    },
+  });
+
+  state.resolve({quality, qualityBigInt, type, author, authorError, ordered, order});
+  await state.done(result => {
+    for (const captured of [
+      result.quality,
+      result.qualityBigInt,
+      result.type,
+      result.author,
+      result.ordered,
+    ]) {
+      testing.expectEqual(null, captured.syncError);
+      testing.expectEqual(true, captured.promise instanceof Promise);
+    }
+    for (const captured of [
+      result.quality,
+      result.qualityBigInt,
+      result.type,
+      result.ordered,
+    ]) {
+      testing.expectEqual(true, captured.rejection instanceof TypeError);
+    }
+
+    testing.expectEqual(
+      "Failed to execute 'convertToBlob' on 'OffscreenCanvas': Failed to read the 'quality' property from 'ImageEncodeOptions': Cannot convert a Symbol value to a number",
+      result.quality.rejection.message,
+    );
+    testing.expectEqual(
+      'TypeError: Cannot convert a Symbol value to a number',
+      String(result.quality.rejection.stack).split('\n')[0],
+    );
+    testing.expectEqual({
+      value: "Failed to execute 'convertToBlob' on 'OffscreenCanvas': Failed to read the 'quality' property from 'ImageEncodeOptions': Cannot convert a Symbol value to a number",
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    }, Object.getOwnPropertyDescriptor(result.quality.rejection, 'message'));
+    testing.expectEqual(
+      "Failed to execute 'convertToBlob' on 'OffscreenCanvas': Failed to read the 'quality' property from 'ImageEncodeOptions': Cannot convert a BigInt value to a number",
+      result.qualityBigInt.rejection.message,
+    );
+    testing.expectEqual(
+      'TypeError: Cannot convert a BigInt value to a number',
+      String(result.qualityBigInt.rejection.stack).split('\n')[0],
+    );
+    testing.expectEqual(
+      "Failed to execute 'convertToBlob' on 'OffscreenCanvas': Failed to read the 'type' property from 'ImageEncodeOptions': Cannot convert a Symbol value to a string",
+      result.type.rejection.message,
+    );
+    testing.expectEqual(
+      'TypeError: Cannot convert a Symbol value to a string',
+      String(result.type.rejection.stack).split('\n')[0],
+    );
+    testing.expectEqual(true, result.author.rejection === result.authorError);
+    testing.expectEqual(['quality', 'quality-convert'], result.order);
+    testing.expectEqual(
+      "Failed to execute 'convertToBlob' on 'OffscreenCanvas': Failed to read the 'quality' property from 'ImageEncodeOptions': Cannot convert a Symbol value to a number",
+      result.ordered.rejection.message,
+    );
+  });
+</script>
+
+<script id="OffscreenCanvas#convertToBlob requires a context" type="module">
+  const state = await testing.async();
+  let promise;
+  let syncError = null;
+  try {
+    promise = new OffscreenCanvas(1, 1).convertToBlob();
+  } catch (error) {
+    syncError = error;
+  }
+  let rejection = null;
+  try {
+    await promise;
+  } catch (error) {
+    rejection = error;
+  }
+  state.resolve({promise, syncError, rejection});
+  await state.done(result => {
+    testing.expectEqual(null, result.syncError);
+    testing.expectEqual(true, result.promise instanceof Promise);
+    testing.expectEqual(true, result.rejection instanceof DOMException);
+    testing.expectEqual('InvalidStateError', result.rejection.name);
+    testing.expectEqual(11, result.rejection.code);
+    testing.expectEqual(
+      "Failed to execute 'convertToBlob' on 'OffscreenCanvas': \"OffscreenCanvas\" has no rendering context.",
+      result.rejection.message,
+    );
+  });
+</script>
+
+<script id="OffscreenCanvas#getContext dictionary object conversions">
+{
+  function capture(member, value) {
+    try {
+      new OffscreenCanvas(1, 1).getContext('2d', {[member]: value});
+      return null;
+    } catch (error) {
+      return error;
+    }
+  }
+
+  for (const member of ['colorSpace', 'colorType', 'willReadFrequently']) {
+    const error = capture(member, {
+      toString() { return Symbol(member); },
+    });
+    testing.expectEqual(true, error instanceof TypeError);
+    testing.expectEqual(
+      `Failed to execute 'getContext' on 'OffscreenCanvas': Failed to read the '${member}' property from 'CanvasContextCreationAttributesModule': Cannot convert a Symbol value to a string`,
+      error.message,
+    );
+    testing.expectEqual(
+      'TypeError: Cannot convert a Symbol value to a string',
+      String(error.stack).split('\n')[0],
+    );
+  }
+
+  const authorError = new Error('context author conversion');
+  testing.expectEqual(
+    authorError,
+    capture('colorSpace', {toString() { throw authorError; }}),
+  );
+
+  const order = [];
+  let orderedError = null;
+  try {
+    new OffscreenCanvas(1, 1).getContext('2d', {
+      get colorSpace() {
+        order.push('colorSpace');
+        return {
+          toString() {
+            order.push('colorSpace-convert');
+            return Symbol('colorSpace');
+          },
+        };
+      },
+      get colorType() {
+        order.push('colorType');
+        return 'unorm8';
+      },
+    });
+  } catch (error) {
+    orderedError = error;
+  }
+  testing.expectEqual(['colorSpace', 'colorSpace-convert'], order);
+  testing.expectEqual(true, orderedError instanceof TypeError);
 }
 </script>
 
@@ -80,8 +474,12 @@
   testing.expectEqual(imageData.data[2], 0);
   testing.expectEqual(imageData.data[3], 0);
 
-  // Zero or negative dimensions should throw.
-  testing.expectError('Index or size', () => ctx.getImageData(0, 0, 0, 10));
-  testing.expectError('Index or size', () => ctx.getImageData(0, 0, 10, -5));
+  // Zero dimensions throw; negative dimensions are normalized per the Canvas
+  // specification instead of being rejected.
+  testing.expectError('The source width is 0.', () => ctx.getImageData(0, 0, 0, 10));
+  const normalized = ctx.getImageData(0, 0, 10, -5);
+  testing.expectEqual(normalized.width, 10);
+  testing.expectEqual(normalized.height, 5);
+  testing.expectEqual(normalized.data.length, 10 * 5 * 4);
 }
 </script>

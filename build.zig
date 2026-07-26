@@ -51,47 +51,52 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{ .default_target = default_target });
     const optimize = b.standardOptimizeOption(.{});
     const strip_release = optimize != .Debug;
-    const cargo_path = b.option(
-        []const u8,
-        "cargo_path",
-        "Exact Cargo executable used for all Rust dependencies",
-    ) orelse "cargo";
-    const canvas_backend_target_dir = b.option(
-        []const u8,
-        "canvas_backend_target_dir",
-        "Explicit Cargo target directory for the Canvas backend",
-    );
-
-    // Canvas is an optional runtime-loaded component. These explicit steps do
-    // not make the large Skia dependency part of the default browser build.
-    try addCanvasBackendSteps(b, target, optimize, cargo_path, canvas_backend_target_dir);
-    const canvas_only = b.option(
-        bool,
-        "canvas_only",
-        "Construct only Canvas build/smoke steps (do not inspect V8, wreq, or browser caches)",
-    ) orelse false;
-    if (canvas_only) return;
-
     const prebuilt_v8_path = b.option(
         []const u8,
         "prebuilt_v8_path",
         "Path to prebuilt libc_v8.a or complete Windows c_v8_standalone.lib",
     );
-    const prebuilt_wreq_library = b.option(
-        []const u8,
-        "prebuilt_wreq_library",
-        "Path to a prebuilt DarkPanda wreq shared library",
+    const canvas_dist = componentDistOption(
+        b,
+        "canvas_dist",
+        "Absolute path to the Canvas component dist/<target> directory",
     );
-    const wreq_transport_target_dir = b.option(
-        []const u8,
-        "wreq_transport_target_dir",
-        "Explicit Cargo target directory for source-built wreq_transport",
+    const html5ever_dist = componentDistOption(
+        b,
+        "html5ever_dist",
+        "Absolute path to the HTML5ever component dist/<target> directory",
     );
-    const prebuilt_boringssl_dir = b.option(
-        []const u8,
-        "prebuilt_boringssl_dir",
-        "Windows directory containing MSVC /MT crypto.lib for WebCrypto (TLS uses wreq)",
+    const wreq_dist = componentDistOption(
+        b,
+        "wreq_dist",
+        "Absolute path to the wreq component dist/<target> directory",
     );
+    const boringssl_dist = componentDistOption(
+        b,
+        "boringssl_dist",
+        "Absolute path to the BoringSSL component dist/<target> directory",
+    );
+    // Keep formatting and option discovery usable without materialized native
+    // components. Every compile/install/run/test entry below depends on this
+    // gate, so a real build can never silently omit one of the four dist sets.
+    const component_dist_gate: ?*Build.Step = if (canvas_dist != null and
+        html5ever_dist != null and
+        wreq_dist != null and
+        boringssl_dist != null)
+        null
+    else
+        &b.addFail(
+            "DarkPanda native builds require absolute -Dcanvas_dist, -Dhtml5ever_dist, -Dwreq_dist, and -Dboringssl_dist paths",
+        ).step;
+
+    const canvas_artifact = if (canvas_dist) |dist|
+        installCanvasDist(b, target.result.os.tag, dist)
+    else
+        null;
+    const wreq_artifact = if (wreq_dist) |dist|
+        installRuntimeDist(b, dist, wreqLibraryName(target.result.os.tag))
+    else
+        null;
     const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
     const wpt_extensions = b.option(bool, "wpt_extensions", "Extend WebAPI with WPT driver behavior") orelse false;
     const test_cdp_port = b.option(
@@ -117,15 +122,6 @@ pub fn build(b: *Build) !void {
     const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer") orelse false;
     const enable_asan = b.option(bool, "asan", "Enable Address Sanitizer") orelse false;
     const enable_csan = b.option(std.zig.SanitizeC, "csan", "Enable C Sanitizers");
-
-    const wreq_transport_artifact = try buildWreqTransport(
-        b,
-        target.result,
-        optimize,
-        prebuilt_wreq_library,
-        wreq_transport_target_dir,
-        cargo_path,
-    );
 
     var html5ever_artifact: ?Html5EverArtifact = null;
     const darkpanda_module = blk: {
@@ -161,9 +157,14 @@ pub fn build(b: *Build) !void {
         // that must not make a native Linux artifact graph differ from the
         // Windows graph. Run `zig build fmt` in a normalized checkout.
 
-        try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
-        try linkWebCrypto(b, mod, prebuilt_boringssl_dir);
-        html5ever_artifact = try linkHtml5Ever(b, mod, cargo_path);
+        // Do not start an expensive V8 dependency build when the component
+        // contract is incomplete. Compile/install/run/test steps all depend on
+        // the fail gate above and therefore stop before doing native work.
+        if (component_dist_gate == null) {
+            try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
+            linkWebCryptoDist(b, mod, boringssl_dist.?);
+            html5ever_artifact = linkHtml5EverDist(b, mod, html5ever_dist.?);
+        }
 
         if (target.result.os.tag == .windows) {
             const f128_shims = b.addObject(.{
@@ -192,6 +193,7 @@ pub fn build(b: *Build) !void {
         .root_module = darkpanda_module,
     });
     check.dependOn(&check_lib.step);
+    if (component_dist_gate) |gate| check_lib.step.dependOn(gate);
 
     // Extras (snapshot_creator) are off the default install to
     // avoid paying for three exe compiles on every edit. Build explicitly
@@ -235,7 +237,14 @@ pub fn build(b: *Build) !void {
         // Chromium clang_rt archive intentionally lacks Zig's binary128 ABI
         // helpers (__netf2, __multf3, and related symbols).
         b.installArtifact(exe);
-        b.getInstallStep().dependOn(&wreq_transport_artifact.install.step);
+        if (component_dist_gate) |gate| b.getInstallStep().dependOn(gate);
+        if (canvas_artifact) |artifact| {
+            b.getInstallStep().dependOn(&artifact.runtime.install.step);
+            b.getInstallStep().dependOn(&artifact.header_install.step);
+        }
+        if (wreq_artifact) |artifact| {
+            b.getInstallStep().dependOn(&artifact.install.step);
+        }
         if (html5ever_artifact) |artifact| {
             b.getInstallStep().dependOn(&artifact.install.step);
         }
@@ -245,17 +254,18 @@ pub fn build(b: *Build) !void {
             .root_module = exe.root_module,
         });
         check.dependOn(&exe_check.step);
+        if (component_dist_gate) |gate| exe_check.step.dependOn(gate);
 
         const run_cmd = b.addRunArtifact(exe);
-        run_cmd.step.dependOn(&wreq_transport_artifact.install.step);
-        run_cmd.setEnvironmentVariable(
-            "DARKPANDA_WREQ_LIBRARY",
-            b.getInstallPath(.bin, wreqLibraryName(target.result.os.tag)),
+        configureRuntimeRun(
+            b,
+            run_cmd,
+            target.result.os.tag,
+            component_dist_gate,
+            canvas_artifact,
+            wreq_artifact,
+            html5ever_artifact,
         );
-        if (html5ever_artifact) |artifact| {
-            run_cmd.step.dependOn(&artifact.install.step);
-            run_cmd.setEnvironmentVariable("PATH", b.getInstallPath(.bin, ""));
-        }
         if (b.args) |args| {
             run_cmd.addArgs(args);
         }
@@ -264,6 +274,15 @@ pub fn build(b: *Build) !void {
 
         const version_info_step = b.step("version", "Print the resolved version information");
         const version_info_run = b.addRunArtifact(exe);
+        configureRuntimeRun(
+            b,
+            version_info_run,
+            target.result.os.tag,
+            component_dist_gate,
+            canvas_artifact,
+            wreq_artifact,
+            html5ever_artifact,
+        );
         version_info_run.addArg("version");
         version_info_step.dependOn(&version_info_run.step);
     }
@@ -315,7 +334,15 @@ pub fn build(b: *Build) !void {
         const ffi_step = b.step("ffi", "Build and install the native C ABI library");
         ffi_step.dependOn(&ffi_install.step);
         ffi_step.dependOn(&header_install.step);
-        ffi_step.dependOn(&wreq_transport_artifact.install.step);
+        if (component_dist_gate) |gate| {
+            ffi_install.step.dependOn(gate);
+            ffi_step.dependOn(gate);
+        }
+        if (canvas_artifact) |artifact| {
+            ffi_step.dependOn(&artifact.runtime.install.step);
+            ffi_step.dependOn(&artifact.header_install.step);
+        }
+        if (wreq_artifact) |artifact| ffi_step.dependOn(&artifact.install.step);
         if (html5ever_artifact) |artifact| ffi_step.dependOn(&artifact.install.step);
 
         // Compile-only coverage for the C ABI root is part of `zig build check`.
@@ -325,6 +352,7 @@ pub fn build(b: *Build) !void {
             .root_module = ffi_module,
         });
         check.dependOn(&ffi_check.step);
+        if (component_dist_gate) |gate| ffi_check.step.dependOn(gate);
     }
 
     {
@@ -341,15 +369,33 @@ pub fn build(b: *Build) !void {
                 },
             }),
         });
-        extras_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
+        const extras_install = b.addInstallArtifact(exe, .{});
+        extras_step.dependOn(&extras_install.step);
+        if (component_dist_gate) |gate| extras_install.step.dependOn(gate);
+        if (canvas_artifact) |artifact| {
+            extras_step.dependOn(&artifact.runtime.install.step);
+            extras_step.dependOn(&artifact.header_install.step);
+        }
+        if (wreq_artifact) |artifact| extras_step.dependOn(&artifact.install.step);
+        if (html5ever_artifact) |artifact| extras_step.dependOn(&artifact.install.step);
 
         const exe_check = b.addLibrary(.{
             .name = "snapshot_creator_check",
             .root_module = exe.root_module,
         });
         check.dependOn(&exe_check.step);
+        if (component_dist_gate) |gate| exe_check.step.dependOn(gate);
 
         const run_cmd = b.addRunArtifact(exe);
+        configureRuntimeRun(
+            b,
+            run_cmd,
+            target.result.os.tag,
+            component_dist_gate,
+            canvas_artifact,
+            wreq_artifact,
+            html5ever_artifact,
+        );
         if (b.args) |args| {
             run_cmd.addArgs(args);
         }
@@ -365,221 +411,106 @@ pub fn build(b: *Build) !void {
             .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
         });
         const run_tests = b.addRunArtifact(tests);
-        run_tests.step.dependOn(&wreq_transport_artifact.install.step);
-        run_tests.setEnvironmentVariable(
-            "DARKPANDA_WREQ_LIBRARY",
-            b.getInstallPath(.bin, wreqLibraryName(target.result.os.tag)),
+        configureRuntimeRun(
+            b,
+            run_tests,
+            target.result.os.tag,
+            component_dist_gate,
+            canvas_artifact,
+            wreq_artifact,
+            html5ever_artifact,
         );
-        if (html5ever_artifact) |artifact| {
-            run_tests.step.dependOn(&artifact.install.step);
-            run_tests.setEnvironmentVariable("PATH", b.getInstallPath(.bin, ""));
-        }
         const test_compile_step = b.step("test-compile", "Compile unit tests without running them");
         test_compile_step.dependOn(&tests.step);
+        if (component_dist_gate) |gate| tests.step.dependOn(gate);
         const test_step = b.step("test", "Run unit tests");
         test_step.dependOn(&run_tests.step);
     }
 }
 
-const CargoBuildProfile = struct {
-    name: []const u8,
-    output_dir: []const u8,
-};
-
-fn addCanvasBackendSteps(
-    b: *Build,
-    target: Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    cargo_path: []const u8,
-    target_dir: ?[]const u8,
-) !void {
-    const rust_target = canvasBackendRustTarget(target.result);
-    const profile = cargoBuildProfile(optimize == .Debug);
-    const library_name = canvasBackendLibraryName(target.result.os.tag);
-
-    const exec_cargo = b.addSystemCommand(&.{
-        cargo_path,                      "build",
-        "--locked",                      "--profile",
-        profile.name,                    "--manifest-path",
-        "src/canvas_backend/Cargo.toml", "--target",
-        rust_target,
-    });
-    for ([_][]const u8{
-        "src/canvas_backend/Cargo.toml",
-        "src/canvas_backend/Cargo.lock",
-        "src/canvas_backend/src/lib.rs",
-        "src/canvas_backend/include/darkpanda_canvas_backend.h",
-    }) |path| {
-        exec_cargo.addFileInput(b.path(path));
-    }
-    const library: Build.LazyPath = if (target_dir) |path| blk: {
-        exec_cargo.addArgs(&.{ "--target-dir", path });
-        break :blk .{ .cwd_relative = b.pathJoin(&.{
-            path,
-            rust_target,
-            profile.output_dir,
-            library_name,
-        }) };
-    } else blk: {
-        var out_dir = exec_cargo.addPrefixedOutputDirectoryArg("--target-dir=", "canvas_backend");
-        out_dir = out_dir.path(b, rust_target);
-        out_dir = out_dir.path(b, profile.output_dir);
-        break :blk out_dir.path(b, library_name);
-    };
-
-    const install_library = b.addInstallBinFile(library, library_name);
-    install_library.step.dependOn(&exec_cargo.step);
-    const install_header = b.addInstallHeaderFile(
-        b.path("src/canvas_backend/include/darkpanda_canvas_backend.h"),
-        "darkpanda_canvas_backend.h",
-    );
-    const backend_step = b.step(
-        "canvas-backend",
-        "Build and install the optional rust-skia/fake Canvas backend",
-    );
-    backend_step.dependOn(&install_library.step);
-    backend_step.dependOn(&install_header.step);
-
-    const smoke = b.addExecutable(.{
-        .name = "canvas_backend_abi_smoke",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/canvas_backend_smoke.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    if (target.result.os.tag != .windows) {
-        smoke.linkLibC();
-        if (target.result.os.tag == .linux) {
-            smoke.linkSystemLibrary("dl");
-        }
-    }
-    const run_smoke = b.addRunArtifact(smoke);
-    run_smoke.step.dependOn(&install_library.step);
-    run_smoke.setEnvironmentVariable(
-        "DARKPANDA_CANVAS_BACKEND_LIBRARY",
-        b.getInstallPath(.bin, library_name),
-    );
-    const smoke_step = b.step(
-        "canvas-backend-smoke",
-        "Build Canvas backend and run its Zig ABI smoke test",
-    );
-    smoke_step.dependOn(&run_smoke.step);
-}
-
-fn canvasBackendRustTarget(target: std.Target) []const u8 {
-    return switch (target.os.tag) {
-        .windows => switch (target.cpu.arch) {
-            .x86_64 => if (target.abi == .msvc)
-                "x86_64-pc-windows-msvc"
-            else
-                @panic("Canvas backend supports native Windows through the MSVC ABI"),
-            .aarch64 => if (target.abi == .msvc)
-                "aarch64-pc-windows-msvc"
-            else
-                @panic("Canvas backend supports native Windows through the MSVC ABI"),
-            else => @panic("unsupported Windows architecture for Canvas backend"),
-        },
-        .linux => switch (target.cpu.arch) {
-            .x86_64 => if (target.abi == .musl)
-                "x86_64-unknown-linux-musl"
-            else
-                "x86_64-unknown-linux-gnu",
-            .aarch64 => if (target.abi == .musl)
-                "aarch64-unknown-linux-musl"
-            else
-                "aarch64-unknown-linux-gnu",
-            else => @panic("unsupported Linux architecture for Canvas backend"),
-        },
-        .macos => switch (target.cpu.arch) {
-            .x86_64 => "x86_64-apple-darwin",
-            .aarch64 => "aarch64-apple-darwin",
-            else => @panic("unsupported macOS architecture for Canvas backend"),
-        },
-        else => @panic("Canvas backend supports Windows, Linux, and macOS"),
-    };
-}
-
-fn canvasBackendLibraryName(os: std.Target.Os.Tag) []const u8 {
-    return switch (os) {
-        .windows => "darkpanda_canvas_backend.dll",
-        .macos => "libdarkpanda_canvas_backend.dylib",
-        else => "libdarkpanda_canvas_backend.so",
-    };
-}
-
-fn cargoBuildProfile(is_debug: bool) CargoBuildProfile {
-    return if (is_debug)
-        .{ .name = "dev", .output_dir = "debug" }
-    else
-        .{ .name = "release", .output_dir = "release" };
-}
-
-test "Cargo built-in profile output directories" {
-    const debug = cargoBuildProfile(true);
-    try std.testing.expectEqualStrings("dev", debug.name);
-    try std.testing.expectEqualStrings("debug", debug.output_dir);
-
-    const release = cargoBuildProfile(false);
-    try std.testing.expectEqualStrings("release", release.name);
-    try std.testing.expectEqualStrings("release", release.output_dir);
-}
-
-const WreqTransportArtifact = struct {
-    dll: Build.LazyPath,
+const RuntimeDistArtifact = struct {
+    source: Build.LazyPath,
     install: *Build.Step.InstallFile,
 };
 
-fn buildWreqTransport(
-    b: *Build,
-    target: std.Target,
-    optimize: std.builtin.OptimizeMode,
-    prebuilt_dll: ?[]const u8,
-    target_dir: ?[]const u8,
-    cargo_path: []const u8,
-) !WreqTransportArtifact {
-    var cargo_step: ?*Build.Step = null;
-    const installed_library_name = wreqLibraryName(target.os.tag);
-    const cargo_library_name = wreqCargoLibraryName(target.os.tag);
-    const dll: Build.LazyPath = if (prebuilt_dll) |path|
-        .{ .cwd_relative = path }
-    else blk: {
-        const rust_target = wreqRustTarget(target);
-        const profile = cargoBuildProfile(optimize == .Debug);
-        const exec_cargo = b.addSystemCommand(&.{
-            cargo_path,                      "build",
-            "--locked",                      "--profile",
-            profile.name,                    "--manifest-path",
-            "src/wreq_transport/Cargo.toml", "--target",
-            rust_target,
-        });
-        for ([_][]const u8{
-            "src/wreq_transport/Cargo.toml",
-            "src/wreq_transport/Cargo.lock",
-            "src/wreq_transport/src/lib.rs",
-            "src/wreq_transport/include/wreq_transport.h",
-        }) |path| {
-            exec_cargo.addFileInput(b.path(path));
-        }
-        if (target_dir) |path| {
-            exec_cargo.addArgs(&.{ "--target-dir", path });
-            cargo_step = &exec_cargo.step;
-            break :blk .{ .cwd_relative = b.pathJoin(&.{
-                path,
-                rust_target,
-                profile.output_dir,
-                cargo_library_name,
-            }) };
-        }
-        var out_dir = exec_cargo.addPrefixedOutputDirectoryArg("--target-dir=", "wreq_transport");
-        out_dir = out_dir.path(b, rust_target);
-        out_dir = out_dir.path(b, profile.output_dir);
-        break :blk out_dir.path(b, cargo_library_name);
-    };
+const CanvasDistArtifact = struct {
+    runtime: RuntimeDistArtifact,
+    header_install: *Build.Step.InstallFile,
+};
 
-    const install = b.addInstallBinFile(dll, installed_library_name);
-    if (cargo_step) |step| install.step.dependOn(step);
-    return .{ .dll = dll, .install = install };
+fn componentDistOption(
+    b: *Build,
+    name: []const u8,
+    description: []const u8,
+) ?[]const u8 {
+    const path = b.option([]const u8, name, description) orelse return null;
+    if (!std.fs.path.isAbsolute(path)) {
+        @panic(b.fmt("-D{s} must be an absolute dist/<target> path", .{name}));
+    }
+    return path;
+}
+
+fn distFile(b: *Build, dist: []const u8, directory: []const u8, name: []const u8) Build.LazyPath {
+    return .{ .cwd_relative = b.pathJoin(&.{ dist, directory, name }) };
+}
+
+fn installRuntimeDist(b: *Build, dist: []const u8, name: []const u8) RuntimeDistArtifact {
+    const source = distFile(b, dist, "bin", name);
+    return .{
+        .source = source,
+        .install = b.addInstallBinFile(source, name),
+    };
+}
+
+fn installCanvasDist(b: *Build, os: std.Target.Os.Tag, dist: []const u8) CanvasDistArtifact {
+    return .{
+        .runtime = installRuntimeDist(b, dist, canvasLibraryName(os)),
+        .header_install = b.addInstallHeaderFile(
+            distFile(b, dist, "include", "canvas.h"),
+            "canvas.h",
+        ),
+    };
+}
+
+fn configureRuntimeRun(
+    b: *Build,
+    run: *Build.Step.Run,
+    os: std.Target.Os.Tag,
+    component_dist_gate: ?*Build.Step,
+    canvas: ?CanvasDistArtifact,
+    wreq: ?RuntimeDistArtifact,
+    html5ever: ?Html5EverArtifact,
+) void {
+    if (component_dist_gate) |gate| run.step.dependOn(gate);
+    if (canvas) |artifact| run.step.dependOn(&artifact.runtime.install.step);
+    if (wreq) |artifact| run.step.dependOn(&artifact.install.step);
+    if (html5ever) |artifact| run.step.dependOn(&artifact.install.step);
+
+    run.setEnvironmentVariable(
+        "DARKPANDA_WREQ_LIBRARY",
+        b.getInstallPath(.bin, wreqLibraryName(os)),
+    );
+    run.setEnvironmentVariable(
+        "DARKPANDA_CANVAS_BACKEND_LIBRARY",
+        b.getInstallPath(.bin, canvasLibraryName(os)),
+    );
+    run.setEnvironmentVariable("DARKPANDA_CANVAS_DRIVER", "dynamic");
+    run.setEnvironmentVariable("DARKPANDA_CANVAS_BACKEND_FALLBACK", "disabled");
+    const runtime_bin = b.getInstallPath(.bin, "");
+    switch (os) {
+        .windows => run.setEnvironmentVariable("PATH", runtime_bin),
+        .linux => run.setEnvironmentVariable("LD_LIBRARY_PATH", runtime_bin),
+        .macos => run.setEnvironmentVariable("DYLD_LIBRARY_PATH", runtime_bin),
+        else => {},
+    }
+}
+
+fn canvasLibraryName(os: std.Target.Os.Tag) []const u8 {
+    return switch (os) {
+        .windows => "canvas.dll",
+        .macos => "libcanvas.dylib",
+        else => "libcanvas.so",
+    };
 }
 
 fn wreqLibraryName(os_tag: std.Target.Os.Tag) []const u8 {
@@ -590,35 +521,11 @@ fn wreqLibraryName(os_tag: std.Target.Os.Tag) []const u8 {
     };
 }
 
-// Keep Cargo's crate/output name distinct from the public runtime filename.
-// Naming this Rust crate `wreq` would shadow the upstream `wreq` dependency
-// throughout lib.rs. The install step above performs the public rename.
-fn wreqCargoLibraryName(os_tag: std.Target.Os.Tag) []const u8 {
-    return switch (os_tag) {
-        .windows => "wreq_transport.dll",
-        .macos => "libwreq_transport.dylib",
-        else => "libwreq_transport.so",
-    };
-}
-
-fn wreqRustTarget(target: std.Target) []const u8 {
-    return switch (target.os.tag) {
-        .windows => switch (target.cpu.arch) {
-            .x86_64 => if (target.abi == .msvc) "x86_64-pc-windows-msvc" else @panic("wreq Windows requires MSVC"),
-            .aarch64 => if (target.abi == .msvc) "aarch64-pc-windows-msvc" else @panic("wreq Windows requires MSVC"),
-            else => @panic("unsupported Windows architecture for wreq"),
-        },
-        .linux => switch (target.cpu.arch) {
-            .x86_64 => if (target.abi == .musl) "x86_64-unknown-linux-musl" else "x86_64-unknown-linux-gnu",
-            .aarch64 => if (target.abi == .musl) "aarch64-unknown-linux-musl" else "aarch64-unknown-linux-gnu",
-            else => @panic("unsupported Linux architecture for wreq"),
-        },
-        .macos => switch (target.cpu.arch) {
-            .x86_64 => "x86_64-apple-darwin",
-            .aarch64 => "aarch64-apple-darwin",
-            else => @panic("unsupported macOS architecture for wreq"),
-        },
-        else => @panic("wreq transport supports Windows, Linux, and macOS"),
+fn html5everLibraryName(os: std.Target.Os.Tag) []const u8 {
+    return switch (os) {
+        .windows => "html5ever.dll",
+        .macos => "libhtml5ever.dylib",
+        else => "libhtml5ever.so",
     };
 }
 
@@ -672,91 +579,31 @@ fn addWindowsRuntimeLibrariesAfterV8(b: *Build, mod: *Build.Module, target: std.
     mod.linkSystemLibrary("libucrt", .{});
 }
 
-const Html5EverArtifact = struct {
-    dll: Build.LazyPath,
-    install: *Build.Step.InstallFile,
-};
+const Html5EverArtifact = RuntimeDistArtifact;
 
-fn linkHtml5Ever(b: *Build, mod: *Build.Module, cargo_path: []const u8) !?Html5EverArtifact {
-    const is_debug = if (mod.optimize.? == .Debug) true else false;
-    const profile = cargoBuildProfile(is_debug);
+fn linkHtml5EverDist(b: *Build, mod: *Build.Module, dist: []const u8) Html5EverArtifact {
     const target = mod.resolved_target.?.result;
-    const rust_target: ?[]const u8 = if (target.os.tag == .windows)
-        switch (target.cpu.arch) {
-            .x86_64 => if (target.abi == .msvc)
-                "x86_64-pc-windows-msvc"
-            else
-                "x86_64-pc-windows-gnu",
-            .aarch64 => if (target.abi == .msvc)
-                "aarch64-pc-windows-msvc"
-            else
-                @panic("native Windows aarch64 requires the MSVC ABI"),
-            else => @panic("unsupported native Windows architecture for html5ever"),
+    const library_name = html5everLibraryName(target.os.tag);
+    const library = distFile(b, dist, "bin", library_name);
+
+    if (target.os.tag == .windows) {
+        if (target.abi != .msvc) {
+            @panic("the standardized Windows HTML5ever dist requires the MSVC ABI");
         }
-    else
-        null;
-
-    const exec_cargo = b.addSystemCommand(&.{
-        cargo_path,                 "build",
-        "--locked",                 "--profile",
-        profile.name,               "--manifest-path",
-        "src/html5ever/Cargo.toml",
-    });
-    if (rust_target) |triple| {
-        exec_cargo.addArgs(&.{ "--target", triple });
+        mod.addObjectFile(distFile(b, dist, "lib", "html5ever.dll.lib"));
+    } else {
+        const library_dir: Build.LazyPath = .{ .cwd_relative = b.pathJoin(&.{ dist, "bin" }) };
+        mod.addLibraryPath(library_dir);
+        mod.linkSystemLibrary("html5ever", .{
+            .preferred_link_mode = .dynamic,
+            .search_strategy = .no_fallback,
+        });
     }
 
-    // Track Rust sources so edits invalidate the cargo step's cache.
-    // Without this, Zig keys the step on argv only and won't re-run cargo
-    // when lib.rs/Cargo.toml change.
-    for ([_][]const u8{
-        "src/html5ever/Cargo.toml",
-        "src/html5ever/Cargo.lock",
-        "src/html5ever/lib.rs",
-        "src/html5ever/sink.rs",
-        "src/html5ever/types.rs",
-        "src/html5ever/url.rs",
-    }) |path| {
-        exec_cargo.addFileInput(b.path(path));
-    }
-
-    // TODO: We can prefer `--artifact-dir` once it become stable.
-    const out_dir = exec_cargo.addPrefixedOutputDirectoryArg("--target-dir=", "html5ever");
-
-    const html5ever_step = b.step("html5ever", "Install html5ever dependency (requires cargo)");
-    html5ever_step.dependOn(&exec_cargo.step);
-
-    var obj_dir = out_dir;
-    if (rust_target) |triple| {
-        obj_dir = obj_dir.path(b, triple);
-    }
-    obj_dir = obj_dir.path(b, profile.output_dir);
-    // Cargo emits both a staticlib and a cdylib. Keep the cdylib boundary on
-    // every desktop platform: Chromium Temporal is compiled by Chromium's
-    // pinned Rust toolchain, while html5ever uses the host Cargo toolchain.
-    // Statically combining them duplicates rust_eh_personality, std, panic and
-    // allocator state.
-    if (target.os.tag == .windows and target.abi == .msvc) {
-        const import_lib = obj_dir.path(b, "darkpanda_html5ever.dll.lib");
-        const dll = obj_dir.path(b, "darkpanda_html5ever.dll");
-        mod.addObjectFile(import_lib);
-        const install = b.addInstallBinFile(dll, "darkpanda_html5ever.dll");
-        return .{ .dll = dll, .install = install };
-    }
-
-    const library_name = switch (target.os.tag) {
-        .linux => "libdarkpanda_html5ever.so",
-        .macos => "libdarkpanda_html5ever.dylib",
-        else => @panic("html5ever shared-library boundary supports Windows, Linux, and macOS"),
+    return .{
+        .source = library,
+        .install = b.addInstallBinFile(library, library_name),
     };
-    const library = obj_dir.path(b, library_name);
-    mod.addLibraryPath(obj_dir);
-    mod.linkSystemLibrary("darkpanda_html5ever", .{
-        .preferred_link_mode = .dynamic,
-        .search_strategy = .no_fallback,
-    });
-    const install = b.addInstallBinFile(library, library_name);
-    return .{ .dll = library, .install = install };
 }
 
 fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is_tsan: bool) void {
@@ -810,61 +657,22 @@ fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is
     mod.linkLibrary(lib);
 }
 
-fn linkWebCrypto(
-    b: *Build,
-    mod: *Build.Module,
-    prebuilt_boringssl_dir: ?[]const u8,
-) !void {
-    if (mod.resolved_target.?.result.os.tag != .windows) {
-        const boringssl = buildBoringSsl(b, mod.resolved_target.?, mod.optimize.?);
-        mod.linkLibrary(boringssl.crypto);
-        return;
-    }
-
+fn linkWebCryptoDist(b: *Build, mod: *Build.Module, dist: []const u8) void {
+    const target = mod.resolved_target.?.result;
     // BoringSSL crypto remains only as the WebCrypto implementation. TLS is
-    // isolated inside wreq_transport and no SSL archive is linked here.
-    const dir = prebuilt_boringssl_dir orelse @panic(
-        "Windows WebCrypto requires -Dprebuilt_boringssl_dir=<MSVC /MT BoringSSL directory containing crypto.lib and fipsmodule.lib>",
-    );
-    const crypto_path = b.pathJoin(&.{ dir, "crypto.lib" });
-    const fipsmodule_path = b.pathJoin(&.{ dir, "fipsmodule.lib" });
-    std.fs.cwd().access(crypto_path, .{}) catch @panic("prebuilt BoringSSL crypto.lib was not found");
-    std.fs.cwd().access(fipsmodule_path, .{}) catch @panic("prebuilt BoringSSL fipsmodule.lib was not found");
-    mod.addObjectFile(.{ .cwd_relative = crypto_path });
-    mod.addObjectFile(.{ .cwd_relative = fipsmodule_path });
+    // isolated inside wreq_transport and no SSL archive is linked here. The
+    // M149 crypto archive already contains the fipsmodule object library.
+    const crypto_name = if (target.os.tag == .windows) "crypto.lib" else "libcrypto.a";
+    mod.addObjectFile(distFile(b, dist, "lib", crypto_name));
 
-    mod.linkSystemLibrary("ws2_32", .{});
-    mod.linkSystemLibrary("iphlpapi", .{});
-    mod.linkSystemLibrary("bcrypt", .{});
-    mod.linkSystemLibrary("crypt32", .{});
-    mod.linkSystemLibrary("dbghelp", .{});
-    mod.linkSystemLibrary("winmm", .{});
-}
-
-const BoringSslLibraries = struct {
-    crypto: *Build.Step.Compile,
-};
-
-fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) BoringSslLibraries {
-    const dep = b.dependency("boringssl-zig", .{
-        .target = target,
-        .optimize = optimize,
-        .force_pic = true,
-    });
-
-    const crypto = dep.artifact("crypto");
-    crypto.bundle_ubsan_rt = false;
-
-    if (target.result.os.tag == .windows) {
-        // Keep <windows.h> from pulling in wincrypt.h. Its X509_NAME macro
-        // collides with BoringSSL's X509_NAME type.
-        crypto.root_module.addCMacro("WIN32_LEAN_AND_MEAN", "1");
-        crypto.root_module.addCMacro("NOMINMAX", "1");
+    if (target.os.tag == .windows) {
+        mod.linkSystemLibrary("ws2_32", .{});
+        mod.linkSystemLibrary("iphlpapi", .{});
+        mod.linkSystemLibrary("bcrypt", .{});
+        mod.linkSystemLibrary("crypt32", .{});
+        mod.linkSystemLibrary("dbghelp", .{});
+        mod.linkSystemLibrary("winmm", .{});
     }
-
-    return .{
-        .crypto = crypto,
-    };
 }
 
 /// Resolves the semantic version of the build.

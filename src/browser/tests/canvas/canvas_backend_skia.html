@@ -60,3 +60,730 @@
   );
 }
 </script>
+
+<script id="Skia nearest-even unpremultiply tie">
+{
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+  const data = ctx.createImageData(1, 1);
+  data.data.set([76, 76, 76, 140]);
+  ctx.putImageData(data, 0, 0);
+  testing.expectEqual(
+    [76, 76, 76, 140],
+    Array.from(ctx.getImageData(0, 0, 1, 1).data),
+  );
+}
+</script>
+
+<script id="Skia full-canvas composite modes">
+{
+  function render(operation) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 2;
+    canvas.height = 1;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'red';
+    ctx.fillRect(0, 0, 2, 1);
+    ctx.globalCompositeOperation = operation;
+    ctx.fillStyle = 'blue';
+    ctx.fillRect(1, 0, 1, 1);
+    return Array.from(ctx.getImageData(0, 0, 2, 1).data);
+  }
+
+  testing.expectEqual(
+    [0, 0, 0, 0, 255, 0, 0, 255],
+    render('destination-in'),
+  );
+  testing.expectEqual(
+    [0, 0, 0, 0, 0, 0, 255, 255],
+    render('copy'),
+  );
+  testing.expectEqual(
+    [0, 0, 0, 0, 0, 0, 255, 255],
+    render('source-in'),
+  );
+  testing.expectEqual(
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    render('source-out'),
+  );
+  testing.expectEqual(
+    [0, 0, 0, 0, 255, 0, 0, 255],
+    render('destination-atop'),
+  );
+}
+</script>
+
+<script id="Skia gradient state save restore">
+{
+  function gradient(ctx) {
+    const value = ctx.createLinearGradient(0, 0, 8, 0);
+    value.addColorStop(0, 'rgba(255, 0, 64, 0.75)');
+    value.addColorStop(0.4, 'rgb(0, 255, 64)');
+    value.addColorStop(1, 'rgb(0, 64, 255)');
+    return value;
+  }
+
+  const expectedCanvas = document.createElement('canvas');
+  expectedCanvas.width = 8;
+  expectedCanvas.height = 2;
+  const expectedContext = expectedCanvas.getContext('2d');
+  expectedContext.fillStyle = gradient(expectedContext);
+  expectedContext.fillRect(0, 0, 8, 2);
+  const expected = Array.from(expectedContext.getImageData(0, 0, 8, 2).data);
+
+  const actualCanvas = document.createElement('canvas');
+  actualCanvas.width = 8;
+  actualCanvas.height = 2;
+  const actualContext = actualCanvas.getContext('2d');
+  actualContext.fillStyle = gradient(actualContext);
+  actualContext.save();
+  actualContext.fillStyle = 'green';
+  actualContext.globalAlpha = 0.25;
+  actualContext.restore();
+  actualContext.fillRect(0, 0, 8, 2);
+  testing.expectEqual(
+    expected,
+    Array.from(actualContext.getImageData(0, 0, 8, 2).data),
+  );
+}
+</script>
+
+<script id="Skia pattern snapshot and drawImage">
+{
+  const source = document.createElement('canvas');
+  source.width = 1;
+  source.height = 1;
+  const sourceContext = source.getContext('2d');
+  sourceContext.fillStyle = 'red';
+  sourceContext.fillRect(0, 0, 1, 1);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+  const pattern = ctx.createPattern(source, 'repeat');
+  sourceContext.clearRect(0, 0, 1, 1);
+  ctx.fillStyle = pattern;
+  ctx.fillRect(0, 0, 1, 1);
+
+  sourceContext.fillStyle = 'blue';
+  sourceContext.fillRect(0, 0, 1, 1);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(source, 1, 0);
+  testing.expectEqual(
+    [255, 0, 0, 255, 0, 0, 255, 255],
+    Array.from(ctx.getImageData(0, 0, 2, 1).data),
+  );
+
+  const png = canvas.toDataURL('image/png');
+  testing.expectTrue(png.startsWith('data:image/png;base64,'));
+}
+</script>
+
+<script id="Skia Chrome149 linear drawImage scaling">
+{
+  const source = document.createElement('canvas');
+  source.width = 16;
+  source.height = 16;
+  const sourceContext = source.getContext('2d');
+  sourceContext.fillStyle = 'rgb(170, 0, 0)';
+  sourceContext.fillRect(0, 0, 16, 16);
+  sourceContext.fillStyle = 'rgb(0, 170, 0)';
+  sourceContext.fillRect(8, 8, 8, 8);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 40;
+  canvas.height = 40;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(source, 0, 0, 16, 16, 0, 0, 32, 32);
+
+  // These pixels sit on the bilinear boundary. Chrome m149's CPU path uses
+  // the legacy fixed-point N32 shader here; the Raster Pipeline alternative
+  // rounds several channels one unit higher.
+  testing.expectEqual(
+    [
+      159, 10, 0, 255, 138, 31, 0, 255, 127, 42, 0, 255,
+      138, 31, 0, 255, 74, 95, 0, 255, 42, 127, 0, 255,
+      127, 42, 0, 255, 42, 127, 0, 255, 0, 170, 0, 255,
+    ],
+    Array.from(ctx.getImageData(15, 15, 3, 3).data),
+  );
+}
+</script>
+
+<script id="Skia Chrome149 scaled and transformed CanvasPattern">
+{
+  function source() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 4;
+    canvas.height = 4;
+    const ctx = canvas.getContext('2d');
+    for (const [color, x, y] of [
+      ['red', 0, 0],
+      ['lime', 2, 0],
+      ['blue', 0, 2],
+      ['yellow', 2, 2],
+    ]) {
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, 2, 2);
+    }
+    return canvas;
+  }
+
+  const scaledCanvas = document.createElement('canvas');
+  scaledCanvas.width = 32;
+  scaledCanvas.height = 32;
+  const scaled = scaledCanvas.getContext('2d');
+  const scaledPattern = scaled.createPattern(source(), 'repeat');
+  scaled.translate(0.25, 0.5);
+  scaled.scale(2.25, 1.75);
+  scaled.fillStyle = scaledPattern;
+  scaled.fillRect(-2, -2, 18, 22);
+  testing.expectEqual(
+    [
+      0, 255, 0, 255, 31, 223, 0, 255, 143, 111, 0, 255, 255, 0, 0, 255,
+      0, 255, 0, 255, 31, 223, 0, 255, 143, 111, 0, 255, 255, 0, 0, 255,
+      47, 255, 0, 255, 67, 223, 5, 255, 137, 111, 26, 255, 207, 0, 47, 255,
+    ],
+    Array.from(scaled.getImageData(7, 8, 4, 3).data),
+  );
+
+  const transformedCanvas = document.createElement('canvas');
+  transformedCanvas.width = 32;
+  transformedCanvas.height = 32;
+  const transformed = transformedCanvas.getContext('2d');
+  const transformedPattern = transformed.createPattern(source(), 'repeat');
+  transformed.fillStyle = transformedPattern;
+  // Mutate after assigning fillStyle: existing drawing state must observe it.
+  transformedPattern.setTransform(
+    new DOMMatrix([1, 0.2, -0.15, 1, 3.25, 2.5]),
+  );
+  transformed.fillRect(0, 0, 32, 32);
+  testing.expectEqual(
+    [
+      255, 255, 0, 255, 194, 194, 61, 255, 0, 0, 255, 255, 46, 46, 209, 255,
+      21, 255, 0, 255, 114, 157, 27, 255, 135, 0, 120, 255, 113, 83, 114, 255,
+      0, 255, 0, 255, 135, 120, 0, 255, 255, 0, 0, 255, 135, 120, 0, 255,
+    ],
+    Array.from(transformed.getImageData(5, 6, 4, 3).data),
+  );
+}
+</script>
+
+<script id="Skia Chrome149 transformed arcTo stroke">
+{
+  const canvas = document.createElement('canvas');
+  canvas.width = 32;
+  canvas.height = 32;
+  const ctx = canvas.getContext('2d');
+  ctx.translate(16, 15);
+  ctx.rotate(Math.PI / 8);
+  ctx.scale(1.25, 0.8);
+  ctx.beginPath();
+  ctx.moveTo(-12, 12);
+  ctx.arcTo(-12, -10, 12, -10, 7);
+  ctx.lineTo(12, 12);
+  ctx.strokeStyle = 'rgb(180, 30, 210)';
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+  testing.expectEqual(
+    [
+      179, 26, 210, 40, 180, 29, 211, 132, 180, 29, 209, 201, 180, 29, 209, 234,
+      179, 30, 210, 249, 180, 30, 210, 255, 180, 30, 210, 255, 180, 30, 210, 255,
+      180, 30, 210, 255, 180, 30, 210, 255, 180, 30, 210, 255, 180, 30, 210, 255,
+      180, 30, 210, 238, 179, 29, 210, 148, 179, 28, 210, 91,
+    ],
+    Array.from(ctx.getImageData(4, 3, 5, 3).data),
+  );
+}
+</script>
+
+<script id="Skia Chrome149 invalid path commands are atomic no-ops">
+{
+  function draw(ctx, invalid) {
+    ctx.beginPath();
+    ctx.moveTo(3, 4);
+    if (invalid) {
+      ctx.lineTo(NaN, 10);
+      ctx.lineTo(1e300, 10);
+      ctx.quadraticCurveTo(12, Infinity, 20, 8);
+      ctx.quadraticCurveTo(12, 10, -1e300, 8);
+      ctx.bezierCurveTo(2, 3, 4, 5, -Infinity, 9);
+      ctx.bezierCurveTo(2, 3, 4, 5, 1e300, 9);
+      ctx.arcTo(4, 4, 28, 4, NaN);
+      ctx.arcTo(1e300, 4, 28, 4, 8);
+      ctx.arc(16, 16, 7, 0, NaN);
+      ctx.arc(1e300, 16, 7, 0, Math.PI);
+      ctx.ellipse(16, 16, 8, 5, Infinity, 0, Math.PI);
+      ctx.ellipse(16, 16, 8, 5, 0, 0, 1e300);
+      ctx.rect(1e300, 2, 8, 6);
+      ctx.roundRect(2, 1e300, 8, 6, 2);
+    }
+    ctx.lineTo(28, 26);
+    ctx.strokeStyle = 'rgb(15, 160, 80)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    return Array.from(ctx.getImageData(0, 0, 32, 32).data);
+  }
+
+  const expectedCanvas = document.createElement('canvas');
+  expectedCanvas.width = 32;
+  expectedCanvas.height = 32;
+  const expected = draw(expectedCanvas.getContext('2d'), false);
+
+  const actualCanvas = document.createElement('canvas');
+  actualCanvas.width = 32;
+  actualCanvas.height = 32;
+  testing.expectEqual(expected, draw(actualCanvas.getContext('2d'), true));
+
+  const offscreen = new OffscreenCanvas(32, 32);
+  testing.expectEqual(expected, draw(offscreen.getContext('2d'), true));
+}
+</script>
+
+<script id="Skia Chrome149 filter parsing state and pixels">
+{
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+
+  const source = '  opacity(.5)   brightness(150%)  ';
+  ctx.filter = source;
+  testing.expectEqual(source, ctx.filter);
+  ctx.save();
+  ctx.filter = 'blur(2px)';
+  ctx.restore();
+  testing.expectEqual(source, ctx.filter);
+
+  ctx.filter = 'definitely-invalid(1)';
+  testing.expectEqual(source, ctx.filter);
+  ctx.fillStyle = 'rgb(128, 64, 32)';
+  ctx.fillRect(0, 0, 1, 1);
+  testing.expectEqual(
+    [193, 96, 48, 127],
+    Array.from(ctx.getImageData(0, 0, 1, 1).data),
+  );
+}
+</script>
+
+<script id="Skia Chrome149 roundRect DOMPoint and hit testing">
+{
+  const canvas = document.createElement('canvas');
+  canvas.width = 20;
+  canvas.height = 20;
+  const ctx = canvas.getContext('2d');
+
+  ctx.beginPath();
+  ctx.roundRect(2, 2, 12, 8, [
+    {x: 2, y: 1},
+    new DOMPoint(1, 2),
+  ]);
+  testing.expectTrue(ctx.isPointInPath(8, 6));
+  testing.expectFalse(ctx.isPointInPath(1, 1));
+
+  ctx.beginPath();
+  ctx.moveTo(2, 14);
+  ctx.lineTo(14, 14);
+  ctx.lineWidth = 4;
+  testing.expectTrue(ctx.isPointInStroke(8, 14));
+  testing.expectFalse(ctx.isPointInStroke(8, 18));
+}
+</script>
+
+<script id="Skia Chrome149 context options P3 F16 and opaque resize">
+{
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  const p3 = canvas.getContext('2d', {
+    colorSpace: 'display-p3',
+    colorType: 'unorm8',
+  });
+  testing.expectEqual('display-p3', p3.getContextAttributes().colorSpace);
+  p3.fillStyle = 'red';
+  p3.fillRect(0, 0, 1, 1);
+  testing.expectEqual(
+    [234, 51, 35, 255],
+    Array.from(p3.getImageData(
+      0, 0, 1, 1, {colorSpace: 'display-p3'},
+    ).data),
+  );
+
+  const floatCanvas = document.createElement('canvas');
+  floatCanvas.width = 1;
+  floatCanvas.height = 1;
+  const f16 = floatCanvas.getContext('2d', {
+    colorSpace: 'display-p3',
+    colorType: 'float16',
+  });
+  f16.fillStyle = 'color(display-p3 1 0 0)';
+  f16.fillRect(0, 0, 1, 1);
+  const floatPixels = f16.getImageData(0, 0, 1, 1, {
+    colorSpace: 'display-p3',
+    pixelFormat: 'rgba-float16',
+  });
+  testing.expectEqual('[object Float16Array]', Object.prototype.toString.call(floatPixels.data));
+  testing.expectEqual(
+    [0x3c00, 0x8185, 0x831b, 0x3c00],
+    Array.from(new Uint16Array(floatPixels.data.buffer)),
+  );
+
+  const offscreen = new OffscreenCanvas(0, 0);
+  const opaque = offscreen.getContext('2d', {alpha: false});
+  offscreen.width = 1;
+  offscreen.height = 1;
+  testing.expectEqual(
+    [0, 0, 0, 255],
+    Array.from(opaque.getImageData(0, 0, 1, 1).data),
+  );
+}
+</script>
+
+<script id="Skia Chrome149 cross canvas sources">
+{
+  const source = new OffscreenCanvas(1, 1);
+  const sourceContext = source.getContext('2d', {colorSpace: 'display-p3'});
+  sourceContext.fillStyle = 'red';
+  sourceContext.fillRect(0, 0, 1, 1);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(source, 0, 0);
+  ctx.fillStyle = ctx.createPattern(source, '');
+  ctx.fillRect(1, 0, 1, 1);
+  testing.expectEqual(
+    [255, 0, 0, 255, 255, 0, 0, 255],
+    Array.from(ctx.getImageData(0, 0, 2, 1).data),
+  );
+}
+</script>
+
+<script id="Skia Chrome149 exact Canvas exceptions">
+{
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+
+  testing.withError(error => {
+    testing.expectEqual('TypeError', error.name);
+    testing.expectEqual(
+      "Failed to set the 'filter' property on 'CanvasRenderingContext2D': Cannot convert a Symbol value to a string",
+      error.message,
+    );
+    testing.expectEqual(
+      'TypeError: Cannot convert a Symbol value to a string',
+      error.stack.split('\n')[0],
+    );
+  }, () => {
+    ctx.filter = Symbol('filter');
+  });
+
+  testing.withError(error => {
+    testing.expectEqual(true, error instanceof DOMException);
+    testing.expectEqual('IndexSizeError', error.name);
+    testing.expectEqual(1, error.code);
+    testing.expectEqual(
+      "Failed to execute 'getImageData' on 'CanvasRenderingContext2D': The source width is 0.",
+      error.message,
+    );
+  }, () => ctx.getImageData(0, 0, 0, 1));
+
+  testing.withError(error => {
+    testing.expectEqual(true, error instanceof RangeError);
+    testing.expectEqual(
+      "Failed to execute 'roundRect' on 'CanvasRenderingContext2D': 0 radii provided. Between one and four radii are necessary.",
+      error.message,
+    );
+    testing.expectEqual(
+      'RangeError: 0 radii provided. Between one and four radii are necessary.',
+      error.stack.split('\n')[0],
+    );
+  }, () => ctx.roundRect(0, 0, 1, 1, []));
+}
+</script>
+
+<script id="Skia content-attribute resize reaches serialization and CanvasImageSource">
+{
+  function pngDimensions(dataURL) {
+    const bytes = atob(dataURL.slice(dataURL.indexOf(',') + 1));
+    const u32be = offset =>
+      bytes.charCodeAt(offset) * 0x1000000 +
+      bytes.charCodeAt(offset + 1) * 0x10000 +
+      bytes.charCodeAt(offset + 2) * 0x100 +
+      bytes.charCodeAt(offset + 3);
+    return [u32be(16), u32be(20)];
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'red';
+  ctx.fillRect(0, 0, 2, 1);
+  canvas.setAttribute('width', '3');
+
+  testing.expectEqual([3, 1], pngDimensions(canvas.toDataURL()));
+  testing.expectEqual('#000000', ctx.fillStyle);
+  testing.expectEqual(
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    Array.from(ctx.getImageData(0, 0, 3, 1).data),
+  );
+
+  const source = document.createElement('canvas');
+  source.width = 1;
+  source.height = 1;
+  const sourceContext = source.getContext('2d');
+  sourceContext.fillStyle = 'red';
+  sourceContext.fillRect(0, 0, 1, 1);
+  source.setAttribute('width', '2');
+
+  const destination = document.createElement('canvas');
+  destination.width = 2;
+  destination.height = 1;
+  const destinationContext = destination.getContext('2d');
+  destinationContext.fillStyle = 'blue';
+  destinationContext.fillRect(0, 0, 2, 1);
+  destinationContext.globalCompositeOperation = 'copy';
+  destinationContext.drawImage(source, 0, 0);
+  testing.expectEqual(
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    Array.from(destinationContext.getImageData(0, 0, 2, 1).data),
+  );
+
+  function verifyDimensionMutation(mutate, expectedWidth) {
+    const target = document.createElement('canvas');
+    target.width = 2;
+    target.height = 1;
+    const targetContext = target.getContext('2d');
+    targetContext.fillStyle = 'red';
+    targetContext.fillRect(0, 0, 2, 1);
+    mutate(target);
+
+    testing.expectEqual(expectedWidth, target.width);
+    testing.expectEqual('#000000', targetContext.fillStyle);
+    testing.expectEqual(
+      [0, 0, 0, 0, 0, 0, 0, 0],
+      Array.from(targetContext.getImageData(0, 0, 2, 1).data),
+    );
+  }
+
+  // Content-attribute mutation resets even when its parsed dimension is
+  // unchanged. A size-only lazy reconciliation cannot implement these cases.
+  verifyDimensionMutation(target => target.setAttribute('width', '2'), 2);
+  verifyDimensionMutation(target => target.setAttribute('width', '02'), 2);
+  verifyDimensionMutation(target => target.removeAttribute('width'), 300);
+}
+</script>
+
+<script id="Skia transparent unmaterialized CanvasImageSource still composites">
+{
+  function verify(destination) {
+    const ctx = destination.getContext('2d');
+    ctx.fillStyle = 'red';
+    ctx.fillRect(0, 0, 2, 1);
+    ctx.globalCompositeOperation = 'copy';
+
+    const htmlSource = document.createElement('canvas');
+    htmlSource.width = 1;
+    htmlSource.height = 1;
+    ctx.drawImage(htmlSource, 0, 0);
+    testing.expectEqual(
+      [0, 0, 0, 0, 0, 0, 0, 0],
+      Array.from(ctx.getImageData(0, 0, 2, 1).data),
+    );
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'blue';
+    ctx.fillRect(0, 0, 2, 1);
+    ctx.globalCompositeOperation = 'copy';
+    ctx.drawImage(new OffscreenCanvas(1, 1), 0, 0);
+    testing.expectEqual(
+      [0, 0, 0, 0, 0, 0, 0, 0],
+      Array.from(ctx.getImageData(0, 0, 2, 1).data),
+    );
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'blue';
+    ctx.fillRect(0, 0, 2, 1);
+    const patternSource = document.createElement('canvas');
+    patternSource.width = 1;
+    patternSource.height = 1;
+    ctx.fillStyle = ctx.createPattern(patternSource, 'no-repeat');
+    ctx.globalCompositeOperation = 'copy';
+    ctx.fillRect(0, 0, 2, 1);
+    testing.expectEqual(
+      [0, 0, 0, 0, 0, 0, 0, 0],
+      Array.from(ctx.getImageData(0, 0, 2, 1).data),
+    );
+  }
+
+  const htmlDestination = document.createElement('canvas');
+  htmlDestination.width = 2;
+  htmlDestination.height = 1;
+  verify(htmlDestination);
+  verify(new OffscreenCanvas(2, 1));
+}
+</script>
+
+<script id="Skia gradients are live transparent precise and stably ordered">
+{
+  function verify(CanvasFactory) {
+    const canvas = CanvasFactory();
+    const ctx = canvas.getContext('2d');
+    const live = ctx.createLinearGradient(0, 0, 4, 0);
+    live.addColorStop(0, 'red');
+    ctx.fillStyle = live;
+    ctx.fillRect(0, 0, 4, 1);
+    live.addColorStop(1, 'blue');
+    ctx.fillRect(0, 1, 4, 1);
+    const pixels = ctx.getImageData(0, 0, 4, 2).data;
+    testing.expectEqual(
+      [255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255],
+      Array.from(pixels.slice(0, 16)),
+    );
+    testing.expectTrue(pixels[28] < pixels[30]);
+
+    const orderedCanvas = CanvasFactory();
+    const orderedContext = orderedCanvas.getContext('2d');
+    const ordered = orderedContext.createLinearGradient(0, 0, 4, 0);
+    ordered.addColorStop(1, 'blue');
+    ordered.addColorStop(0, 'red');
+    orderedContext.fillStyle = ordered;
+    orderedContext.fillRect(0, 0, 4, 1);
+    const orderedPixels = orderedContext.getImageData(0, 0, 4, 1).data;
+    testing.expectTrue(orderedPixels[0] > orderedPixels[2]);
+    testing.expectTrue(orderedPixels[12] < orderedPixels[14]);
+
+    const equalCanvas = CanvasFactory();
+    const equalContext = equalCanvas.getContext('2d');
+    const equal = equalContext.createLinearGradient(0, 0, 4, 0);
+    equal.addColorStop(0, 'red');
+    equal.addColorStop(0.5, 'blue');
+    equal.addColorStop(0.5, 'lime');
+    equal.addColorStop(1, 'white');
+    equalContext.fillStyle = equal;
+    equalContext.fillRect(0, 0, 4, 1);
+    const equalPixels = equalContext.getImageData(0, 0, 4, 1).data;
+    testing.expectTrue(equalPixels[6] > equalPixels[5]);
+    testing.expectTrue(equalPixels[9] > equalPixels[10]);
+
+    const emptyCanvas = CanvasFactory();
+    const emptyContext = emptyCanvas.getContext('2d');
+    emptyContext.fillStyle = 'red';
+    emptyContext.fillRect(0, 0, 4, 2);
+    emptyContext.fillStyle =
+      emptyContext.createLinearGradient(0, 0, 4, 0);
+    emptyContext.globalCompositeOperation = 'copy';
+    emptyContext.fillRect(0, 0, 4, 2);
+    testing.expectEqual(
+      Array(32).fill(0),
+      Array.from(emptyContext.getImageData(0, 0, 4, 2).data),
+    );
+
+    const strokeCanvas = CanvasFactory();
+    const strokeContext = strokeCanvas.getContext('2d');
+    const liveStroke = strokeContext.createLinearGradient(0, 0, 4, 0);
+    liveStroke.addColorStop(0, 'red');
+    strokeContext.strokeStyle = liveStroke;
+    liveStroke.addColorStop(1, 'blue');
+    strokeContext.beginPath();
+    strokeContext.moveTo(0, 0.5);
+    strokeContext.lineTo(4, 0.5);
+    strokeContext.stroke();
+    const strokePixels = strokeContext.getImageData(0, 0, 4, 1).data;
+    testing.expectTrue(strokePixels[12] < strokePixels[14]);
+
+    const emptyStrokeCanvas = CanvasFactory();
+    const emptyStrokeContext = emptyStrokeCanvas.getContext('2d');
+    emptyStrokeContext.strokeStyle = 'blue';
+    emptyStrokeContext.strokeStyle =
+      emptyStrokeContext.createLinearGradient(0, 0, 4, 0);
+    emptyStrokeContext.strokeRect(0, 0, 4, 2);
+    testing.expectEqual(
+      Array(32).fill(0),
+      Array.from(emptyStrokeContext.getImageData(0, 0, 4, 2).data),
+    );
+  }
+
+  verify(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 4;
+    canvas.height = 2;
+    return canvas;
+  });
+  verify(() => new OffscreenCanvas(4, 2));
+
+  // A one-stop gradient must retain the same sub-byte HSL precision as a
+  // solid CSS color on an F16 backing.
+  const precise = document.createElement('canvas');
+  precise.width = 2;
+  precise.height = 1;
+  const preciseContext = precise.getContext('2d', {colorType: 'float16'});
+  const cssColor = 'hsl(45, 80%, 50%)';
+  preciseContext.fillStyle = cssColor;
+  preciseContext.fillRect(0, 0, 1, 1);
+  const oneStop = preciseContext.createLinearGradient(0, 0, 1, 0);
+  oneStop.addColorStop(0, cssColor);
+  preciseContext.fillStyle = oneStop;
+  preciseContext.fillRect(1, 0, 1, 1);
+  const precisePixels = preciseContext.getImageData(0, 0, 2, 1, {
+    pixelFormat: 'rgba-float16',
+  }).data;
+  testing.expectTrue(Math.abs(precisePixels[4] - 0.9) < 0.001);
+  testing.expectTrue(Math.abs(precisePixels[5] - 0.7) < 0.001);
+  testing.expectTrue(Math.abs(precisePixels[6] - 0.1) < 0.001);
+  testing.expectEqual(1, precisePixels[7]);
+
+  const p3Canvas = document.createElement('canvas');
+  p3Canvas.width = 2;
+  p3Canvas.height = 1;
+  const p3Context = p3Canvas.getContext('2d', {
+    colorSpace: 'display-p3',
+    colorType: 'float16',
+  });
+  const p3Color = 'color(display-p3 1 0.2 0.1)';
+  p3Context.fillStyle = p3Color;
+  p3Context.fillRect(0, 0, 1, 1);
+  const p3Gradient = p3Context.createLinearGradient(0, 0, 1, 0);
+  p3Gradient.addColorStop(0, p3Color);
+  p3Context.fillStyle = p3Gradient;
+  p3Context.fillRect(1, 0, 1, 1);
+  const p3Pixels = p3Context.getImageData(0, 0, 2, 1, {
+    colorSpace: 'display-p3',
+    pixelFormat: 'rgba-float16',
+  }).data;
+  for (let channel = 0; channel < 4; ++channel) {
+    testing.expectTrue(
+      Math.abs(p3Pixels[channel] - p3Pixels[channel + 4]) < 0.002,
+    );
+  }
+}
+</script>
+
+<script id="Skia line dash is not truncated at 256 entries">
+{
+  function verify(canvas) {
+    const ctx = canvas.getContext('2d');
+    const dash = Array(1024).fill(1).concat([20, 20]);
+    ctx.setLineDash(dash);
+    testing.expectEqual(1026, ctx.getLineDash().length);
+    ctx.beginPath();
+    ctx.moveTo(0, 0.5);
+    ctx.lineTo(1068, 0.5);
+    ctx.stroke();
+    // The final 20-unit gap covers this pixel. Truncating at 256 would repeat
+    // the 1-on/1-off prefix and paint it.
+    testing.expectEqual(0, ctx.getImageData(1050, 0, 1, 1).data[3]);
+  }
+
+  const html = document.createElement('canvas');
+  html.width = 1068;
+  html.height = 1;
+  verify(html);
+  verify(new OffscreenCanvas(1068, 1));
+}
+</script>

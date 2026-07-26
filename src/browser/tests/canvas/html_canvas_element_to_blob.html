@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="toBlob is a task and serializes a canvas without a context" type="module">
+  const state = await testing.async();
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 1;
+
+  let returned = false;
+  let callbackBeforeReturn = null;
+  let callbackThisIsUndefined = null;
+  const order = [];
+  const blob = await new Promise(resolve => {
+    canvas.toBlob(function(value) {
+      'use strict';
+      callbackBeforeReturn = !returned;
+      callbackThisIsUndefined = this === undefined;
+      order.push('callback');
+      resolve(value);
+    });
+    returned = true;
+    queueMicrotask(() => order.push('microtask'));
+  });
+
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  state.resolve({
+    callbackBeforeReturn,
+    callbackThisIsUndefined,
+    order,
+    blob,
+    bytes,
+  });
+  await state.done(result => {
+    testing.expectEqual(false, result.callbackBeforeReturn);
+    testing.expectEqual(true, result.callbackThisIsUndefined);
+    testing.expectEqual(['microtask', 'callback'], result.order);
+    testing.expectEqual(true, result.blob instanceof Blob);
+    testing.expectEqual('image/png', result.blob.type);
+    testing.expectEqual(true, result.blob.size > 0);
+    testing.expectEqual([137, 80, 78, 71], Array.from(result.bytes.slice(0, 4)));
+  });
+</script>
+
+<script id="zero sized canvas delivers null asynchronously" type="module">
+  const state = await testing.async();
+  const canvas = document.createElement('canvas');
+  canvas.width = 0;
+  canvas.height = 1;
+
+  let returned = false;
+  const result = await new Promise(resolve => {
+    canvas.toBlob(value => resolve({
+      value,
+      callbackBeforeReturn: !returned,
+    }));
+    returned = true;
+  });
+
+  state.resolve(result);
+  await state.done(value => {
+    testing.expectEqual(false, value.callbackBeforeReturn);
+    testing.expectEqual(null, value.value);
+  });
+</script>
+
+<script id="toBlob observes content-attribute bitmap resize" type="module">
+  const state = await testing.async();
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'red';
+  ctx.fillRect(0, 0, 2, 1);
+  canvas.setAttribute('width', '3');
+
+  const blob = await new Promise(resolve => canvas.toBlob(resolve));
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const u32be = offset =>
+    bytes[offset] * 0x1000000 +
+    bytes[offset + 1] * 0x10000 +
+    bytes[offset + 2] * 0x100 +
+    bytes[offset + 3];
+  state.resolve({
+    width: u32be(16),
+    height: u32be(20),
+    pixels: Array.from(ctx.getImageData(0, 0, 3, 1).data),
+  });
+  await state.done(result => {
+    testing.expectEqual(3, result.width);
+    testing.expectEqual(1, result.height);
+    testing.expectEqual(Array(12).fill(0), result.pixels);
+  });
+</script>

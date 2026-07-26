@@ -17,13 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("darkpanda");
-
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const DOMException = @import("DOMException.zig");
+const CanvasException = @import("canvas/CanvasException.zig");
 
-const String = lp.String;
 const Execution = js.Execution;
 
 /// https://developer.mozilla.org/en-US/docs/Web/API/ImageData/ImageData
@@ -34,7 +32,7 @@ _color_space: ColorSpace,
 _pixel_format: PixelFormat,
 _data: Data,
 
-const ColorSpace = enum(u8) {
+pub const ColorSpace = enum(u8) {
     srgb,
     display_p3,
 
@@ -46,7 +44,7 @@ const ColorSpace = enum(u8) {
     }
 };
 
-const PixelFormat = enum(u8) {
+pub const PixelFormat = enum(u8) {
     rgba_unorm8,
     rgba_float16,
     rgba_float32,
@@ -79,44 +77,10 @@ const Data = union(PixelFormat) {
     }
 };
 
-pub const ConstructorSettings = struct {
-    /// Specifies the color space of the image data.
-    /// Can be set to "srgb" for the sRGB color space or "display-p3" for the display-p3 color space.
-    colorSpace: String = .wrap("srgb"),
-    /// Specifies the pixel format.
-    /// https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D/createImageData#pixelformat
-    pixelFormat: String = .wrap("rgba-unorm8"),
-};
-
-const ParsedSettings = struct {
+pub const ParsedSettings = struct {
     color_space: ColorSpace,
     pixel_format: PixelFormat,
 };
-
-fn parseSettingsRaw(maybe_settings: ?ConstructorSettings) !ParsedSettings {
-    const settings = maybe_settings orelse ConstructorSettings{};
-    const color_space: ColorSpace = if (settings.colorSpace.eql(comptime .wrap("srgb")))
-        .srgb
-    else if (settings.colorSpace.eql(comptime .wrap("display-p3")))
-        .display_p3
-    else
-        return error.InvalidColorSpace;
-
-    const pixel_format: PixelFormat = if (settings.pixelFormat.eql(comptime .wrap("rgba-unorm8")))
-        .rgba_unorm8
-    else if (settings.pixelFormat.eql(comptime .wrap("rgba-float16")))
-        .rgba_float16
-    else if (settings.pixelFormat.eql(comptime .wrap("rgba-float32")))
-        .rgba_float32
-    else
-        return error.InvalidPixelFormat;
-
-    return .{ .color_space = color_space, .pixel_format = pixel_format };
-}
-
-fn parseSettings(maybe_settings: ?ConstructorSettings) !ParsedSettings {
-    return parseSettingsRaw(maybe_settings) catch return error.TypeError;
-}
 
 fn constructorMessage(exec: *Execution, reason: []const u8) ![]const u8 {
     return std.fmt.allocPrint(exec.call_arena, "Failed to construct 'ImageData': {s}", .{reason});
@@ -154,34 +118,6 @@ fn throwConstructorDOMException(exec: *Execution, name: []const u8, reason: []co
     _ = js.v8.v8__Exception__CaptureStackTrace(local.handle, @ptrCast(exception.handle));
     _ = local.isolate.throwException(exception.handle);
     return error.TryCatchRethrow;
-}
-
-fn parseConstructorSettings(maybe_settings: ?ConstructorSettings, exec: *Execution) !ParsedSettings {
-    return parseSettingsRaw(maybe_settings) catch |err| switch (err) {
-        error.InvalidColorSpace => {
-            const value = (maybe_settings orelse ConstructorSettings{}).colorSpace.str();
-            const reason = try std.fmt.allocPrint(
-                exec.call_arena,
-                "The provided value '{s}' is not a valid enum value of the type PredefinedColorSpace.",
-                .{value},
-            );
-            return throwConstructorTypeError(exec, reason, reason);
-        },
-        error.InvalidPixelFormat => {
-            const value = (maybe_settings orelse ConstructorSettings{}).pixelFormat.str();
-            const stack_reason = try std.fmt.allocPrint(
-                exec.call_arena,
-                "The provided value '{s}' is not a valid enum value of type ImageDataPixelFormat.",
-                .{value},
-            );
-            const message_reason = try std.fmt.allocPrint(
-                exec.call_arena,
-                "Failed to read the 'pixelFormat' property from 'ImageDataSettings': {s}",
-                .{stack_reason},
-            );
-            return throwConstructorTypeError(exec, stack_reason, message_reason);
-        },
-    };
 }
 
 fn checkedElementCount(width: u32, height: u32) !u32 {
@@ -233,24 +169,13 @@ fn allocateData(local: *const js.Local, pixel_format: PixelFormat, size: u32) !D
     };
 }
 
-/// This has many constructors:
-///
-/// ```js
-/// new ImageData(width, height)
-/// new ImageData(width, height, settings)
-///
-/// new ImageData(dataArray, width)
-/// new ImageData(dataArray, width, height)
-/// new ImageData(dataArray, width, height, settings)
-/// ```
-pub fn init(
+fn initParsed(
     width: u32,
     height: u32,
-    maybe_settings: ?ConstructorSettings,
+    settings: ParsedSettings,
     exec: *Execution,
 ) !*ImageData {
     const size = try checkedElementCount(width, height);
-    const settings = try parseSettings(maybe_settings);
     const local = exec.js.local.?;
 
     return exec._factory.create(ImageData{
@@ -262,13 +187,273 @@ pub fn init(
     });
 }
 
+/// This has many constructors:
+///
+/// ```js
+/// new ImageData(width, height)
+/// new ImageData(width, height, settings)
+///
+/// new ImageData(dataArray, width)
+/// new ImageData(dataArray, width, height)
+/// new ImageData(dataArray, width, height, settings)
+/// ```
+fn canvasSettingsTypeError(
+    exec: *Execution,
+    receiver: CanvasException.Receiver,
+    operation: []const u8,
+    field_name: []const u8,
+    stack_reason: []const u8,
+) anyerror {
+    const exposed_reason = try std.fmt.allocPrint(
+        exec.call_arena,
+        "Failed to read the '{s}' property from 'ImageDataSettings': {s}",
+        .{ field_name, stack_reason },
+    );
+    return CanvasException.typeErrorWithStackReason(
+        exec,
+        receiver.name(),
+        operation,
+        exposed_reason,
+        stack_reason,
+    );
+}
+
+fn canvasEnumMember(
+    object: js.Object,
+    field_name: []const u8,
+    enum_name: []const u8,
+    default_value: []const u8,
+    exec: *Execution,
+    receiver: CanvasException.Receiver,
+    operation: []const u8,
+) ![]const u8 {
+    const value = try object.get(field_name);
+    if (value.isUndefined()) return default_value;
+    const string_value = try js.WebIDL.toDOMStringWithContext(
+        value,
+        exec,
+        .{ .dictionary_member = .{
+            .parent = .{ .operation = .{
+                .interface = receiver.name(),
+                .name = operation,
+            } },
+            .dictionary = "ImageDataSettings",
+            .member = field_name,
+        } },
+    );
+    if ((std.mem.eql(u8, enum_name, "PredefinedColorSpace") and
+        (std.mem.eql(u8, string_value, "srgb") or std.mem.eql(u8, string_value, "display-p3"))) or
+        (std.mem.eql(u8, enum_name, "ImageDataPixelFormat") and
+            (std.mem.eql(u8, string_value, "rgba-unorm8") or
+                std.mem.eql(u8, string_value, "rgba-float16") or
+                std.mem.eql(u8, string_value, "rgba-float32"))))
+    {
+        return string_value;
+    }
+
+    const reason = try std.fmt.allocPrint(
+        exec.call_arena,
+        "The provided value '{s}' is not a valid enum value of type {s}.",
+        .{ string_value, enum_name },
+    );
+    return canvasSettingsTypeError(
+        exec,
+        receiver,
+        operation,
+        field_name,
+        reason,
+    );
+}
+
+pub fn parseCanvasSettingsValue(
+    maybe_settings: ?js.Value,
+    omitted_color_space: ColorSpace,
+    receiver: CanvasException.Receiver,
+    operation: []const u8,
+    exec: *Execution,
+) !ParsedSettings {
+    const supplied = maybe_settings orelse return .{
+        .color_space = omitted_color_space,
+        .pixel_format = .rgba_unorm8,
+    };
+    if (supplied.isNullOrUndefined()) {
+        return .{
+            .color_space = omitted_color_space,
+            .pixel_format = .rgba_unorm8,
+        };
+    }
+    if (!supplied.isObject()) {
+        return CanvasException.typeError(
+            exec,
+            receiver,
+            operation,
+            "The provided value is not of type 'ImageDataSettings'.",
+        );
+    }
+
+    const object = supplied.toObject();
+    const color_space_value = try canvasEnumMember(
+        object,
+        "colorSpace",
+        "PredefinedColorSpace",
+        "srgb",
+        exec,
+        receiver,
+        operation,
+    );
+    const pixel_format_value = try canvasEnumMember(
+        object,
+        "pixelFormat",
+        "ImageDataPixelFormat",
+        "rgba-unorm8",
+        exec,
+        receiver,
+        operation,
+    );
+    return .{
+        .color_space = if (std.mem.eql(u8, color_space_value, "display-p3"))
+            .display_p3
+        else
+            .srgb,
+        .pixel_format = if (std.mem.eql(u8, pixel_format_value, "rgba-float16"))
+            .rgba_float16
+        else if (std.mem.eql(u8, pixel_format_value, "rgba-float32"))
+            .rgba_float32
+        else
+            .rgba_unorm8,
+    };
+}
+
+pub fn initForCanvasSettings(
+    width: u32,
+    height: u32,
+    settings: ParsedSettings,
+    receiver: CanvasException.Receiver,
+    operation: []const u8,
+    exec: *Execution,
+) !*ImageData {
+    _ = checkedElementCount(width, height) catch {
+        const reason = if (std.mem.eql(u8, operation, "createImageData"))
+            "Out of memory at ImageData creation."
+        else
+            "Out of memory at ImageData creation";
+        return CanvasException.rangeError(exec, receiver, operation, reason);
+    };
+    return initParsed(width, height, settings, exec);
+}
+
+/// Blink's Canvas pixel bindings use an enforce-range Web IDL `long` adapter
+/// with three distinct native conversion diagnostics.
+pub fn canvasLong(
+    value: js.Value,
+    receiver: CanvasException.Receiver,
+    operation: []const u8,
+    exec: *Execution,
+) !i32 {
+    const number = try js.WebIDL.toNumber(value, exec, .{
+        .interface = receiver.name(),
+        .name = operation,
+    });
+    const reason: ?[]const u8 = if (std.math.isNan(number))
+        "Value is not of type 'long'."
+    else if (std.math.isInf(number))
+        "Value is infinite and not of type 'long'."
+    else if (@trunc(number) < @as(f64, @floatFromInt(std.math.minInt(i32))) or
+        @trunc(number) > @as(f64, @floatFromInt(std.math.maxInt(i32))))
+        "Value is outside the 'long' value range."
+    else
+        null;
+    if (reason) |message| {
+        return CanvasException.typeError(exec, receiver, operation, message);
+    }
+    return @intFromFloat(@trunc(number));
+}
+
+/// Complete overload dispatcher for CanvasRenderingContext2D.createImageData.
+/// One supplied argument selects the ImageData overload; two or more select
+/// the numeric overload, exactly as Blink's generated binding does.
+pub fn createForCanvas(
+    args: []const js.Value,
+    receiver: CanvasException.Receiver,
+    exec: *Execution,
+) !*ImageData {
+    if (args.len == 1) {
+        const source = args[0].local.jsValueToZig(*ImageData, args[0]) catch {
+            return js.WebIDL.argumentNotOfType(
+                exec,
+                .{ .operation = .{
+                    .interface = receiver.name(),
+                    .name = "createImageData",
+                } },
+                0,
+                "ImageData",
+            );
+        };
+        return source.cloneBlank(exec);
+    }
+
+    const width = try canvasLong(args[0], receiver, "createImageData", exec);
+    const height = try canvasLong(args[1], receiver, "createImageData", exec);
+    // Web IDL converts the complete argument list before native dimension and
+    // allocation validation. A throwing dictionary getter therefore wins over
+    // zero-size and out-of-memory diagnostics.
+    const settings = try parseCanvasSettingsValue(
+        if (args.len >= 3) args[2] else null,
+        .srgb,
+        receiver,
+        "createImageData",
+        exec,
+    );
+    const normalized_width: i64 = if (width < 0) -@as(i64, width) else width;
+    const normalized_height: i64 = if (height < 0) -@as(i64, height) else height;
+    if (normalized_width == 0) {
+        return CanvasException.canvasDOMException(
+            exec,
+            receiver,
+            "createImageData",
+            "IndexSizeError",
+            "The source width is zero or not a number.",
+        );
+    }
+    if (normalized_height == 0) {
+        return CanvasException.canvasDOMException(
+            exec,
+            receiver,
+            "createImageData",
+            "IndexSizeError",
+            "The source height is zero or not a number.",
+        );
+    }
+    return initForCanvasSettings(
+        @intCast(normalized_width),
+        @intCast(normalized_height),
+        settings,
+        receiver,
+        "createImageData",
+        exec,
+    );
+}
+
+/// The ImageData overload of createImageData copies dimensions and storage
+/// metadata, but allocates a fresh zero-filled buffer.
+pub fn cloneBlank(self: *const ImageData, exec: *Execution) !*ImageData {
+    return initParsed(
+        self._width,
+        self._height,
+        .{
+            .color_space = self._color_space,
+            .pixel_format = self._pixel_format,
+        },
+        exec,
+    );
+}
+
 fn initConstructor(
     width: u32,
     height: u32,
-    maybe_settings: ?ConstructorSettings,
+    settings: ParsedSettings,
     exec: *Execution,
 ) !*ImageData {
-    const settings = try parseConstructorSettings(maybe_settings, exec);
     const size = try constructorElementCount(width, height, exec);
     const local = exec.js.local.?;
 
@@ -300,10 +485,101 @@ fn isFloat16Array(value: js.Value) bool {
         !value.isFloat64Array();
 }
 
-fn settingsFromValue(value: ?js.Value) !?ConstructorSettings {
-    const supplied = value orelse return null;
-    if (supplied.isNullOrUndefined()) return null;
-    return try supplied.toZig(ConstructorSettings);
+fn constructorSettingsMemberTypeError(
+    exec: *Execution,
+    member: []const u8,
+    stack_reason: []const u8,
+) anyerror {
+    const exposed_reason = try std.fmt.allocPrint(
+        exec.call_arena,
+        "Failed to read the '{s}' property from 'ImageDataSettings': {s}",
+        .{ member, stack_reason },
+    );
+    return throwConstructorTypeError(exec, stack_reason, exposed_reason);
+}
+
+fn parseConstructorSettingsValue(value: ?js.Value, exec: *Execution) !ParsedSettings {
+    const supplied = value orelse return .{
+        .color_space = .srgb,
+        .pixel_format = .rgba_unorm8,
+    };
+    if (supplied.isNullOrUndefined()) {
+        return .{ .color_space = .srgb, .pixel_format = .rgba_unorm8 };
+    }
+    if (!supplied.isObject()) {
+        const reason = "The provided value is not of type 'ImageDataSettings'.";
+        return throwConstructorTypeError(exec, reason, reason);
+    }
+
+    const object = supplied.toObject();
+    const raw_color_space = object.get("colorSpace") catch return error.TryCatchRethrow;
+    const color_space_text = if (raw_color_space.isUndefined())
+        "srgb"
+    else
+        try js.WebIDL.toDOMStringWithContext(
+            raw_color_space,
+            exec,
+            .{ .dictionary_member = .{
+                .parent = .{ .constructor = "ImageData" },
+                .dictionary = "ImageDataSettings",
+                .member = "colorSpace",
+            } },
+        );
+    const color_space: ColorSpace = if (std.mem.eql(u8, color_space_text, "srgb"))
+        .srgb
+    else if (std.mem.eql(u8, color_space_text, "display-p3"))
+        .display_p3
+    else {
+        const reason = try std.fmt.allocPrint(
+            exec.call_arena,
+            "The provided value '{s}' is not a valid enum value of type PredefinedColorSpace.",
+            .{color_space_text},
+        );
+        return constructorSettingsMemberTypeError(exec, "colorSpace", reason);
+    };
+
+    const raw_pixel_format = object.get("pixelFormat") catch return error.TryCatchRethrow;
+    const pixel_format_text = if (raw_pixel_format.isUndefined())
+        "rgba-unorm8"
+    else
+        try js.WebIDL.toDOMStringWithContext(
+            raw_pixel_format,
+            exec,
+            .{ .dictionary_member = .{
+                .parent = .{ .constructor = "ImageData" },
+                .dictionary = "ImageDataSettings",
+                .member = "pixelFormat",
+            } },
+        );
+    const pixel_format: PixelFormat = if (std.mem.eql(u8, pixel_format_text, "rgba-unorm8"))
+        .rgba_unorm8
+    else if (std.mem.eql(u8, pixel_format_text, "rgba-float16"))
+        .rgba_float16
+    else if (std.mem.eql(u8, pixel_format_text, "rgba-float32"))
+        .rgba_float32
+    else {
+        const stack_reason = try std.fmt.allocPrint(
+            exec.call_arena,
+            "The provided value '{s}' is not a valid enum value of type ImageDataPixelFormat.",
+            .{pixel_format_text},
+        );
+        return constructorSettingsMemberTypeError(exec, "pixelFormat", stack_reason);
+    };
+
+    return .{ .color_space = color_space, .pixel_format = pixel_format };
+}
+
+fn constructorUnsignedLong(value: js.Value, exec: *Execution) !u32 {
+    const number = try js.WebIDL.toNumberWithContext(
+        value,
+        exec,
+        .{ .constructor = "ImageData" },
+    );
+    if (!std.math.isFinite(number) or number == 0) return 0;
+
+    var modulo = @mod(@trunc(number), 4_294_967_296.0);
+    if (modulo < 0) modulo += 4_294_967_296.0;
+    return @intFromFloat(modulo);
 }
 
 fn dataElementLength(value: js.Value) usize {
@@ -350,16 +626,16 @@ pub fn construct(
         null;
 
     if (input_pixel_format) |input_format| {
-        const width = try first.local.jsValueToZig(u32, second);
+        const width = try constructorUnsignedLong(second, exec);
         const fourth_is_undefined = fourth == null or fourth.?.isUndefined();
         const maybe_height: ?u32 = if (third) |height|
             if (height.isUndefined() and fourth_is_undefined)
                 null
             else
-                try height.local.jsValueToZig(u32, height)
+                try constructorUnsignedLong(height, exec)
         else
             null;
-        const settings = try parseConstructorSettings(try settingsFromValue(fourth), exec);
+        const settings = try parseConstructorSettingsValue(fourth, exec);
 
         // Web IDL has already converted the complete argument list at this
         // point. Blink's native validation then checks dimensions before data
@@ -406,9 +682,9 @@ pub fn construct(
         });
     }
 
-    const width = try first.local.jsValueToZig(u32, first);
-    const height = try second.local.jsValueToZig(u32, second);
-    return initConstructor(width, height, try settingsFromValue(third), exec);
+    const width = try constructorUnsignedLong(first, exec);
+    const height = try constructorUnsignedLong(second, exec);
+    return initConstructor(width, height, try parseConstructorSettingsValue(third, exec), exec);
 }
 
 pub fn structuredSerialize(self: *const ImageData, writer: *js.StructuredWriter) !void {
@@ -467,6 +743,20 @@ pub fn getPixelFormat(self: *const ImageData) []const u8 {
     return self._pixel_format.toString();
 }
 
+pub fn colorSpace(self: *const ImageData) ColorSpace {
+    return self._color_space;
+}
+
+pub fn pixelFormat(self: *const ImageData) PixelFormat {
+    return self._pixel_format;
+}
+
+pub fn rawBytesMutable(self: *ImageData, local: *const js.Local) []u8 {
+    return switch (self._data) {
+        inline else => |data| std.mem.sliceAsBytes(data.local(local).slice()),
+    };
+}
+
 pub fn rgbaUnorm8(self: *const ImageData, local: *const js.Local, allocator: std.mem.Allocator) ![]const u8 {
     return switch (self._data) {
         .rgba_unorm8 => |data| data.local(local).slice(),
@@ -487,13 +777,6 @@ fn floatToUnorm8(comptime T: type, source: []const T, allocator: std.mem.Allocat
             @intFromFloat(@round(value * 255));
     }
     return destination;
-}
-
-pub fn rgbaUnorm8Mutable(self: *ImageData, local: *const js.Local) ![]u8 {
-    return switch (self._data) {
-        .rgba_unorm8 => |data| data.local(local).slice(),
-        else => error.InvalidStateError,
-    };
 }
 
 pub const JsApi = struct {

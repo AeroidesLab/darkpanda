@@ -657,9 +657,7 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
 }
 
 /// Convert a JavaScript value while preserving the Web IDL invocation context
-/// for explicitly marked conversion types such as js.DOMString. Ordinary
-/// internal conversions continue to use jsValueToZig and retain their current
-/// Symbol-description behavior.
+/// for numeric and string conversions as well as explicitly marked types.
 pub fn jsValueToZigWithContext(
     self: *const Local,
     comptime T: type,
@@ -707,8 +705,16 @@ pub fn jsValueToZigWithContext(
             return try self.jsValueToZigWithContext(o.child, js_val, context);
         },
         .float => |f| switch (f.bits) {
-            0...32 => return js_val.toF32(),
-            33...64 => return js_val.toF64(),
+            0...32 => return @floatCast(try js.WebIDL.toNumberWithContext(
+                js_val,
+                &self.ctx.execution,
+                context,
+            )),
+            33...64 => return js.WebIDL.toNumberWithContext(
+                js_val,
+                &self.ctx.execution,
+                context,
+            ),
             else => {},
         },
         .int => return jsIntToZig(T, js_val),
@@ -736,7 +742,11 @@ pub fn jsValueToZigWithContext(
                             return try js_val.toStringSliceZ();
                         }
                     } else {
-                        return try js_val.toStringSlice();
+                        return @constCast(try js.WebIDL.toDOMStringWithContext(
+                            js_val,
+                            &self.ctx.execution,
+                            context,
+                        ));
                     }
                 }
 

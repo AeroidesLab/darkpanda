@@ -33,7 +33,7 @@ def main() -> None:
     expected_wreq = library_path.with_name("wreq.dll")
     if not expected_wreq.is_file():
         raise FileNotFoundError(expected_wreq)
-    expected_canvas = library_path.with_name("darkpanda_canvas_backend.dll")
+    expected_canvas = library_path.with_name("canvas.dll")
     if not expected_canvas.is_file():
         raise FileNotFoundError(expected_canvas)
 
@@ -67,7 +67,7 @@ def main() -> None:
     # wreq now resolves correctly, but an explicit nonexistent Canvas module
     # must also fail during App preflight, before V8 owns process-global state.
     bad_canvas_options = initialized_options(library)
-    missing_canvas = expected_canvas.with_name("missing-darkpanda-canvas-backend.dll")
+    missing_canvas = expected_canvas.with_name("missing-canvas.dll")
     bad_canvas_slice, bad_canvas_storage = _native._owned_slice(str(missing_canvas))
     bad_canvas_options.canvas_backend_path = bad_canvas_slice
     bad_canvas_handle = ctypes.c_uint64(0)

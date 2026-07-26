@@ -826,7 +826,11 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
     }
 
     const js_err: *const v8.Value = switch (err) {
-        error.TryCatchRethrow => return,
+        // Both sentinels mean V8 already installed the original JavaScript
+        // exception. Replacing JsException with `Error: JsException` loses
+        // author-thrown values and native conversion TypeErrors (for example
+        // a Symbol-valued DOMMatrix2DInit member).
+        error.TryCatchRethrow, error.JsException => return,
         error.InvalidArgument => isolate.createTypeError("invalid argument"),
         error.TypeError => isolate.createTypeError(""),
         error.RangeError => isolate.createRangeError(""),
@@ -1226,7 +1230,27 @@ pub const Function = struct {
             }
         };
 
+        var promise_try_catch: js.TryCatch = undefined;
+        if (comptime opts.receiver_mode == .reject_promise) {
+            promise_try_catch.init(&caller.local);
+        }
+        defer if (comptime opts.receiver_mode == .reject_promise) {
+            promise_try_catch.deinit();
+        };
+
         const js_value = _call(T, &caller.local, info, func, opts) catch |err| {
+            if (comptime opts.receiver_mode == .reject_promise) {
+                if (promise_try_catch.exceptionValue()) |exception| {
+                    const resolver = caller.local.createPromiseResolver();
+                    resolver.reject("Caller.Function.reject_promise", exception);
+                    const promise_value = caller.local.zigValueToJs(resolver.promise(), .{}) catch |conversion_err| {
+                        handleError(T, @TypeOf(func), &caller.local, conversion_err, info);
+                        return;
+                    };
+                    info.getReturnValue().set(promise_value);
+                    return;
+                }
+            }
             handleError(T, @TypeOf(func), &caller.local, err, info);
             return;
         };

@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script>
+function caught(callback) {
+  try {
+    callback();
+    return null;
+  } catch (error) {
+    return error;
+  }
+}
+
+function expectErrorShape(error, name, message, stack0) {
+  testing.expectEqual(name, error && error.name);
+  testing.expectEqual(message, error && error.message);
+  testing.expectEqual(stack0, String(error && error.stack).split('\n')[0]);
+}
+
+function canvasContext() {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 4;
+  return {canvas, ctx: canvas.getContext('2d')};
+}
+
+function symbolPrimitive() {
+  return {
+    [Symbol.toPrimitive]() {
+      return Symbol('converted');
+    },
+  };
+}
+</script>
+
+<script id="Canvas WebIDL conversion context">
+{
+  const {canvas, ctx} = canvasContext();
+  expectErrorShape(
+    caught(() => document.createElement('canvas').getContext(Symbol('context'))),
+    'TypeError',
+    "Failed to execute 'getContext' on 'HTMLCanvasElement': Cannot convert a Symbol value to a string",
+    'TypeError: Cannot convert a Symbol value to a string',
+  );
+  expectErrorShape(
+    caught(() => ctx.rotate(Symbol('angle'))),
+    'TypeError',
+    "Failed to execute 'rotate' on 'CanvasRenderingContext2D': Cannot convert a Symbol value to a number",
+    'TypeError: Cannot convert a Symbol value to a number',
+  );
+  expectErrorShape(
+    caught(() => ctx.measureText(Symbol('text'))),
+    'TypeError',
+    "Failed to execute 'measureText' on 'CanvasRenderingContext2D': Cannot convert a Symbol value to a string",
+    'TypeError: Cannot convert a Symbol value to a string',
+  );
+  expectErrorShape(
+    caught(() => { ctx.fillStyle = Symbol('style'); }),
+    'TypeError',
+    "Failed to set the 'fillStyle' property on 'CanvasRenderingContext2D': Cannot convert a Symbol value to a string",
+    'TypeError: Cannot convert a Symbol value to a string',
+  );
+  expectErrorShape(
+    caught(() => canvas.toDataURL(Symbol('mime'))),
+    'TypeError',
+    "Failed to execute 'toDataURL' on 'HTMLCanvasElement': Cannot convert a Symbol value to a string",
+    'TypeError: Cannot convert a Symbol value to a string',
+  );
+  testing.expectEqual(
+    true,
+    canvas.toDataURL('image/png', Symbol('quality')).startsWith('data:image/png;base64,'),
+  );
+}
+</script>
+
+<script id="Canvas conversion preserves authored errors and qualifies engine errors">
+{
+  const {ctx} = canvasContext();
+
+  let authoredNumberError;
+  const numberResult = caught(() => ctx.fillRect({
+    valueOf() {
+      authoredNumberError =
+        new TypeError('Cannot convert a Symbol value to a number');
+      throw authoredNumberError;
+    },
+  }, 0, 1, 1));
+  testing.expectTrue(numberResult === authoredNumberError);
+  expectErrorShape(
+    numberResult,
+    'TypeError',
+    'Cannot convert a Symbol value to a number',
+    'TypeError: Cannot convert a Symbol value to a number',
+  );
+
+  let authoredStringError;
+  const stringResult = caught(() => {
+    ctx.font = {
+      toString() {
+        authoredStringError =
+          new TypeError('Cannot convert a Symbol value to a string');
+        throw authoredStringError;
+      },
+    };
+  });
+  testing.expectTrue(stringResult === authoredStringError);
+  expectErrorShape(
+    stringResult,
+    'TypeError',
+    'Cannot convert a Symbol value to a string',
+    'TypeError: Cannot convert a Symbol value to a string',
+  );
+
+  expectErrorShape(
+    caught(() => ctx.fillRect(symbolPrimitive(), 0, 1, 1)),
+    'TypeError',
+    "Failed to execute 'fillRect' on 'CanvasRenderingContext2D': Cannot convert a Symbol value to a number",
+    'TypeError: Cannot convert a Symbol value to a number',
+  );
+}
+</script>
+
+<script id="HTML canvas dimension conversion and defaults">
+{
+  expectErrorShape(
+    caught(() => { document.createElement('canvas').width = Symbol('width'); }),
+    'TypeError',
+    "Failed to set the 'width' property on 'HTMLCanvasElement': Cannot convert a Symbol value to a number",
+    'TypeError: Cannot convert a Symbol value to a number',
+  );
+  expectErrorShape(
+    caught(() => { document.createElement('canvas').height = 1n; }),
+    'TypeError',
+    "Failed to set the 'height' property on 'HTMLCanvasElement': Cannot convert a BigInt value to a number",
+    'TypeError: Cannot convert a BigInt value to a number',
+  );
+
+  const canvas = document.createElement('canvas');
+  canvas.width = -1;
+  canvas.height = -1;
+  testing.expectEqual([300, 150, '300', '150'], [
+    canvas.width,
+    canvas.height,
+    canvas.getAttribute('width'),
+    canvas.getAttribute('height'),
+  ]);
+  canvas.width = 4294967296;
+  canvas.height = Infinity;
+  testing.expectEqual([0, 0, '0', '0'], [
+    canvas.width,
+    canvas.height,
+    canvas.getAttribute('width'),
+    canvas.getAttribute('height'),
+  ]);
+  canvas.width = '12.8';
+  canvas.height = -0.9;
+  testing.expectEqual([12, 0, '12', '0'], [
+    canvas.width,
+    canvas.height,
+    canvas.getAttribute('width'),
+    canvas.getAttribute('height'),
+  ]);
+
+  canvas.setAttribute('width', '2147483648');
+  canvas.setAttribute('height', '4294967295');
+  testing.expectEqual([300, 150], [canvas.width, canvas.height]);
+}
+</script>
+
+<script id="HTML canvas transfer state errors">
+{
+  const withContext = document.createElement('canvas');
+  withContext.getContext('2d');
+  const afterContext = caught(() => withContext.transferControlToOffscreen());
+  testing.expectEqual(true, afterContext instanceof DOMException);
+  testing.expectEqual(11, afterContext.code);
+  testing.expectEqual(
+    "Failed to execute 'transferControlToOffscreen' on 'HTMLCanvasElement': Cannot transfer control from a canvas that has a rendering context.",
+    afterContext.message,
+  );
+
+  const transferred = document.createElement('canvas');
+  transferred.transferControlToOffscreen();
+  const twice = caught(() => transferred.transferControlToOffscreen());
+  testing.expectEqual(true, twice instanceof DOMException);
+  testing.expectEqual(11, twice.code);
+  testing.expectEqual(
+    "Failed to execute 'transferControlToOffscreen' on 'HTMLCanvasElement': Cannot transfer control from a canvas for more than one time.",
+    twice.message,
+  );
+
+  const getAfterTransfer = caught(() => transferred.getContext('2d'));
+  testing.expectEqual(true, getAfterTransfer instanceof DOMException);
+  testing.expectEqual(11, getAfterTransfer.code);
+  testing.expectEqual(
+    "Failed to execute 'getContext' on 'HTMLCanvasElement': Cannot get context from a canvas that has transferred its control to offscreen.",
+    getAfterTransfer.message,
+  );
+
+  const noContextBitmap = caught(
+    () => new OffscreenCanvas(1, 1).transferToImageBitmap(),
+  );
+  testing.expectEqual(true, noContextBitmap instanceof DOMException);
+  testing.expectEqual(11, noContextBitmap.code);
+  testing.expectEqual(
+    "Failed to execute 'transferToImageBitmap' on 'OffscreenCanvas': Cannot transfer an ImageBitmap from an OffscreenCanvas with no context",
+    noContextBitmap.message,
+  );
+}
+</script>
+
+<script id="zero sized CanvasImageSource errors">
+{
+  const {ctx} = canvasContext();
+  const htmlSource = document.createElement('canvas');
+  htmlSource.width = 0;
+  htmlSource.height = 1;
+  for (const [operation, callback] of [
+    ['drawImage', () => ctx.drawImage(htmlSource, 0, 0)],
+    ['drawImage', () => ctx.drawImage(htmlSource, Infinity, 0)],
+    ['createPattern', () => ctx.createPattern(htmlSource, 'repeat')],
+    ['createPattern', () => ctx.createPattern(htmlSource, 'tile')],
+  ]) {
+    const error = caught(callback);
+    testing.expectEqual(true, error instanceof DOMException);
+    testing.expectEqual(11, error.code);
+    testing.expectEqual(
+      `Failed to execute '${operation}' on 'CanvasRenderingContext2D': The image argument is a canvas element with a width or height of 0.`,
+      error.message,
+    );
+  }
+  expectErrorShape(
+    caught(() => ctx.drawImage(htmlSource, Symbol('x'), 0)),
+    'TypeError',
+    "Failed to execute 'drawImage' on 'CanvasRenderingContext2D': Cannot convert a Symbol value to a number",
+    'TypeError: Cannot convert a Symbol value to a number',
+  );
+
+  const offscreenSource = new OffscreenCanvas(1, 0);
+  for (const [operation, callback] of [
+    ['drawImage', () => ctx.drawImage(offscreenSource, 0, 0)],
+    ['createPattern', () => ctx.createPattern(offscreenSource, 'repeat')],
+  ]) {
+    const error = caught(callback);
+    testing.expectEqual(true, error instanceof DOMException);
+    testing.expectEqual(11, error.code);
+    testing.expectEqual(
+      `Failed to execute '${operation}' on 'CanvasRenderingContext2D': The image argument is an OffscreenCanvas element with a width or height of 0.`,
+      error.message,
+    );
+  }
+}
+</script>
+
+<script id="ImageData settings ordering and allocation errors">
+{
+  const {ctx} = canvasContext();
+  expectErrorShape(
+    caught(() => new ImageData(1, 1, 3)),
+    'TypeError',
+    "Failed to construct 'ImageData': The provided value is not of type 'ImageDataSettings'.",
+    "TypeError: The provided value is not of type 'ImageDataSettings'.",
+  );
+  expectErrorShape(
+    caught(() => new ImageData(1, 1, {colorSpace: Symbol('space')})),
+    'TypeError',
+    "Failed to construct 'ImageData': Failed to read the 'colorSpace' property from 'ImageDataSettings': Cannot convert a Symbol value to a string",
+    'TypeError: Cannot convert a Symbol value to a string',
+  );
+  expectErrorShape(
+    caught(() => new ImageData(1n, 1)),
+    'TypeError',
+    "Failed to construct 'ImageData': Cannot convert a BigInt value to a number",
+    'TypeError: Cannot convert a BigInt value to a number',
+  );
+  expectErrorShape(
+    caught(() => new ImageData(symbolPrimitive(), 1)),
+    'TypeError',
+    "Failed to construct 'ImageData': Cannot convert a Symbol value to a number",
+    'TypeError: Cannot convert a Symbol value to a number',
+  );
+  expectErrorShape(
+    caught(() => new ImageData(new Uint8ClampedArray(4), 1n)),
+    'TypeError',
+    "Failed to construct 'ImageData': Cannot convert a BigInt value to a number",
+    'TypeError: Cannot convert a BigInt value to a number',
+  );
+  expectErrorShape(
+    caught(() => new ImageData(1, 1, {colorSpace: 'invalid'})),
+    'TypeError',
+    "Failed to construct 'ImageData': Failed to read the 'colorSpace' property from 'ImageDataSettings': The provided value 'invalid' is not a valid enum value of type PredefinedColorSpace.",
+    "TypeError: The provided value 'invalid' is not a valid enum value of type PredefinedColorSpace.",
+  );
+  expectErrorShape(
+    caught(() => new ImageData(1, 1, {colorSpace: symbolPrimitive()})),
+    'TypeError',
+    "Failed to construct 'ImageData': Failed to read the 'colorSpace' property from 'ImageDataSettings': Cannot convert a Symbol value to a string",
+    'TypeError: Cannot convert a Symbol value to a string',
+  );
+  expectErrorShape(
+    caught(() => ctx.createImageData(1, 1, 3)),
+    'TypeError',
+    "Failed to execute 'createImageData' on 'CanvasRenderingContext2D': The provided value is not of type 'ImageDataSettings'.",
+    "TypeError: The provided value is not of type 'ImageDataSettings'.",
+  );
+  expectErrorShape(
+    caught(() => ctx.getImageData(0, 0, 1, 1, {
+      pixelFormat: Symbol('format'),
+    })),
+    'TypeError',
+    "Failed to execute 'getImageData' on 'CanvasRenderingContext2D': Failed to read the 'pixelFormat' property from 'ImageDataSettings': Cannot convert a Symbol value to a string",
+    'TypeError: Cannot convert a Symbol value to a string',
+  );
+
+  const createSentinel = new Error('create settings sentinel');
+  testing.expectEqual(
+    createSentinel,
+    caught(() => ctx.createImageData(0, 1, {
+      get colorSpace() { throw createSentinel; },
+    })),
+  );
+  const getSentinel = new Error('get settings sentinel');
+  testing.expectEqual(
+    getSentinel,
+    caught(() => ctx.getImageData(0, 0, 0, 1, {
+      get colorSpace() { throw getSentinel; },
+    })),
+  );
+
+  expectErrorShape(
+    caught(() => ctx.createImageData(50000, 50000)),
+    'RangeError',
+    "Failed to execute 'createImageData' on 'CanvasRenderingContext2D': Out of memory at ImageData creation.",
+    'RangeError: Out of memory at ImageData creation.',
+  );
+  expectErrorShape(
+    caught(() => ctx.getImageData(0, 0, 46341, 46341)),
+    'RangeError',
+    "Failed to execute 'getImageData' on 'CanvasRenderingContext2D': Out of memory at ImageData creation",
+    'RangeError: Out of memory at ImageData creation',
+  );
+}
+</script>
+
+<script id="putImageData detached and EnforceRange errors">
+{
+  const {ctx} = canvasContext();
+  function detached() {
+    const image = new ImageData(1, 1);
+    structuredClone(image.data.buffer, {transfer: [image.data.buffer]});
+    return image;
+  }
+
+  const detachedError = caught(() => ctx.putImageData(detached(), 0, 0));
+  testing.expectEqual(true, detachedError instanceof DOMException);
+  testing.expectEqual(11, detachedError.code);
+  testing.expectEqual(
+    "Failed to execute 'putImageData' on 'CanvasRenderingContext2D': The source data has been detached.",
+    detachedError.message,
+  );
+
+  const conversionSentinel = new Error('dirty conversion sentinel');
+  testing.expectEqual(
+    conversionSentinel,
+    caught(() => ctx.putImageData(
+      detached(),
+      0,
+      0,
+      {valueOf() { throw conversionSentinel; }},
+      0,
+      1,
+      1,
+    )),
+  );
+
+  expectErrorShape(
+    caught(() => ctx.putImageData(new ImageData(1, 1), Infinity, 0)),
+    'TypeError',
+    "Failed to execute 'putImageData' on 'CanvasRenderingContext2D': Value is infinite and not of type 'long'.",
+    "TypeError: Value is infinite and not of type 'long'.",
+  );
+  expectErrorShape(
+    caught(() => ctx.putImageData(new ImageData(1, 1), 0, 0, 0, 0, 2147483648, 1)),
+    'TypeError',
+    "Failed to execute 'putImageData' on 'CanvasRenderingContext2D': Value is outside the 'long' value range.",
+    "TypeError: Value is outside the 'long' value range.",
+  );
+  expectErrorShape(
+    caught(() => ctx.putImageData(null, 0, 0, 0)),
+    'TypeError',
+    "Failed to execute 'putImageData' on 'CanvasRenderingContext2D': Overload resolution failed.",
+    'TypeError: Overload resolution failed.',
+  );
+  const dxSentinel = new Error('dx must stay unread');
+  expectErrorShape(
+    caught(() => ctx.putImageData(
+      new ImageData(1, 1),
+      {valueOf() { throw dxSentinel; }},
+      0,
+      0,
+    )),
+    'TypeError',
+    "Failed to execute 'putImageData' on 'CanvasRenderingContext2D': Overload resolution failed.",
+    'TypeError: Overload resolution failed.',
+  );
+  expectErrorShape(
+    caught(() => new OffscreenCanvas(1, 1).getContext('2d').putImageData(null, 0, 0, 0)),
+    'TypeError',
+    "Failed to execute 'putImageData' on 'OffscreenCanvasRenderingContext2D': Overload resolution failed.",
+    'TypeError: Overload resolution failed.',
+  );
+}
+</script>
+
+<script id="CanvasGradient and CanvasPattern conversion order">
+{
+  const {ctx} = canvasContext();
+  const gradient = ctx.createLinearGradient(0, 0, 1, 0);
+  expectErrorShape(
+    caught(() => gradient.addColorStop(Symbol('offset'), {
+      toString() {
+        throw new Error('color conversion must stay unread');
+      },
+    })),
+    'TypeError',
+    "Failed to execute 'addColorStop' on 'CanvasGradient': Cannot convert a Symbol value to a number",
+    'TypeError: Cannot convert a Symbol value to a number',
+  );
+  expectErrorShape(
+    caught(() => gradient.addColorStop(2, Symbol('color'))),
+    'TypeError',
+    "Failed to execute 'addColorStop' on 'CanvasGradient': Cannot convert a Symbol value to a string",
+    'TypeError: Cannot convert a Symbol value to a string',
+  );
+  const colorSentinel = new Error('color sentinel');
+  testing.expectEqual(
+    colorSentinel,
+    caught(() => gradient.addColorStop(2, {
+      toString() { throw colorSentinel; },
+    })),
+  );
+
+  for (const [operation, callback] of [
+    ['createLinearGradient', () => ctx.createLinearGradient(
+      NaN,
+      {valueOf() { throw new Error('must stay unread'); }},
+      1,
+      1,
+    )],
+    ['createRadialGradient', () => ctx.createRadialGradient(
+      0,
+      0,
+      Infinity,
+      {valueOf() { throw new Error('must stay unread'); }},
+      1,
+      1,
+    )],
+    ['createConicGradient', () => ctx.createConicGradient(
+      NaN,
+      {valueOf() { throw new Error('must stay unread'); }},
+      1,
+    )],
+  ]) {
+    expectErrorShape(
+      caught(callback),
+      'TypeError',
+      `Failed to execute '${operation}' on 'CanvasRenderingContext2D': The provided double value is non-finite.`,
+      'TypeError: The provided double value is non-finite.',
+    );
+  }
+
+  const source = document.createElement('canvas');
+  source.width = source.height = 1;
+  source.getContext('2d');
+  const pattern = ctx.createPattern(source, 'repeat');
+  expectErrorShape(
+    caught(() => pattern.setTransform({
+      get a() { return Symbol('a'); },
+      get b() { throw new Error('b getter must stay unread'); },
+    })),
+    'TypeError',
+    "Failed to execute 'setTransform' on 'CanvasPattern': Failed to read the 'a' property from 'DOMMatrix2DInit': Cannot convert a Symbol value to a number",
+    'TypeError: Cannot convert a Symbol value to a number',
+  );
+}
+</script>
+
+<script id="roundRect and matrix conversion precedence">
+{
+  const {ctx} = canvasContext();
+  expectErrorShape(
+    caught(() => ctx.roundRect(0, 0, Infinity, 1, Symbol('radius'))),
+    'TypeError',
+    "Failed to execute 'roundRect' on 'CanvasRenderingContext2D': Cannot convert a Symbol value to a number",
+    'TypeError: Cannot convert a Symbol value to a number',
+  );
+  expectErrorShape(
+    caught(() => ctx.roundRect(0, 0, 1, 1, [1, 2, 3, 4, Symbol('radius')])),
+    'TypeError',
+    "Failed to execute 'roundRect' on 'CanvasRenderingContext2D': Cannot convert a Symbol value to a number",
+    'TypeError: Cannot convert a Symbol value to a number',
+  );
+  expectErrorShape(
+    caught(() => ctx.roundRect(0, 0, 1, 1, [1, 2, 3, 4, 5])),
+    'RangeError',
+    "Failed to execute 'roundRect' on 'CanvasRenderingContext2D': 5 radii provided. Between one and four radii are necessary.",
+    'RangeError: 5 radii provided. Between one and four radii are necessary.',
+  );
+  expectErrorShape(
+    caught(() => ctx.roundRect(0, 0, 1, 1, [{x: -1, y: Symbol('y')}])),
+    'TypeError',
+    "Failed to execute 'roundRect' on 'CanvasRenderingContext2D': Failed to read the 'y' property from 'DOMPointInit': Cannot convert a Symbol value to a number",
+    'TypeError: Cannot convert a Symbol value to a number',
+  );
+  expectErrorShape(
+    caught(() => ctx.setTransform({a: symbolPrimitive()})),
+    'TypeError',
+    "Failed to execute 'setTransform' on 'CanvasRenderingContext2D': Failed to read the 'a' property from 'DOMMatrix2DInit': Cannot convert a Symbol value to a number",
+    'TypeError: Cannot convert a Symbol value to a number',
+  );
+  ctx.setTransform({a: NaN, m11: NaN});
+  const matrix = ctx.getTransform();
+  testing.expectEqual([1, 0, 0, 1, 0, 0], [
+    matrix.a,
+    matrix.b,
+    matrix.c,
+    matrix.d,
+    matrix.e,
+    matrix.f,
+  ]);
+}
+</script>
+
+<script id="OffscreenCanvas convertToBlob rejection semantics" type="module">
+  const state = await testing.async();
+
+  async function rejection(callback) {
+    let promise;
+    try {
+      promise = callback();
+    } catch (error) {
+      return {syncThrew: true, error};
+    }
+    try {
+      await promise;
+      return {syncThrew: false, isPromise: promise instanceof Promise, error: null};
+    } catch (error) {
+      return {syncThrew: false, isPromise: promise instanceof Promise, error};
+    }
+  }
+
+  const zero = new OffscreenCanvas(0, 1);
+  zero.getContext('2d');
+  const typed = new OffscreenCanvas(1, 1);
+  typed.getContext('2d');
+  const results = await Promise.all([
+    rejection(() => zero.convertToBlob()),
+    rejection(() => new OffscreenCanvas(1, 1).convertToBlob()),
+    rejection(() => typed.convertToBlob({type: Symbol('type')})),
+    rejection(() => typed.convertToBlob({quality: Symbol('quality')})),
+    rejection(() => typed.convertToBlob(3)),
+    rejection(() => OffscreenCanvas.prototype.convertToBlob.call({})),
+  ]);
+
+  state.resolve(results);
+  await state.done(values => {
+    for (const value of values) {
+      testing.expectEqual(false, value.syncThrew);
+      testing.expectEqual(true, value.isPromise);
+    }
+
+    testing.expectEqual(true, values[0].error instanceof DOMException);
+    testing.expectEqual(1, values[0].error.code);
+    testing.expectEqual(
+      "Failed to execute 'convertToBlob' on 'OffscreenCanvas': The size of \"OffscreenCanvas\" is zero.",
+      values[0].error.message,
+    );
+    testing.expectEqual(true, values[1].error instanceof DOMException);
+    testing.expectEqual(11, values[1].error.code);
+    testing.expectEqual(
+      "Failed to execute 'convertToBlob' on 'OffscreenCanvas': \"OffscreenCanvas\" has no rendering context.",
+      values[1].error.message,
+    );
+    expectErrorShape(
+      values[2].error,
+      'TypeError',
+      "Failed to execute 'convertToBlob' on 'OffscreenCanvas': Failed to read the 'type' property from 'ImageEncodeOptions': Cannot convert a Symbol value to a string",
+      'TypeError: Cannot convert a Symbol value to a string',
+    );
+    expectErrorShape(
+      values[3].error,
+      'TypeError',
+      "Failed to execute 'convertToBlob' on 'OffscreenCanvas': Failed to read the 'quality' property from 'ImageEncodeOptions': Cannot convert a Symbol value to a number",
+      'TypeError: Cannot convert a Symbol value to a number',
+    );
+    expectErrorShape(
+      values[4].error,
+      'TypeError',
+      "Failed to execute 'convertToBlob' on 'OffscreenCanvas': The provided value is not of type 'ImageEncodeOptions'.",
+      "TypeError: The provided value is not of type 'ImageEncodeOptions'.",
+    );
+    expectErrorShape(
+      values[5].error,
+      'TypeError',
+      "Failed to execute 'convertToBlob' on 'OffscreenCanvas': Illegal invocation",
+      'TypeError: Illegal invocation',
+    );
+  });
+</script>

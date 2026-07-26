@@ -90,8 +90,8 @@ typedef struct dp_runtime_options {
     /* Optional LF-separated IP-literal DNS endpoints for Windows wreq.
      * Empty preserves the operating-system resolver. */
     dp_slice wreq_dns_nameservers;
-    /* Optional absolute rust-skia backend. Empty with DYNAMIC loads the
-     * platform library adjacent to darkpanda.dll/libdarkpanda. */
+    /* Optional absolute Canvas ABI v5 backend. Empty with DYNAMIC loads the
+     * packaged Chromium M149 Skia CPU backend adjacent to DarkPanda. */
     dp_slice canvas_backend_path;
     uint32_t canvas_driver;
     uint32_t canvas_fallback;

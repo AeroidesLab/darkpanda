@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="canvas dimension content attributes use HTML integer prefix parsing">
+{
+  const cases = [
+    ['', 300, 150],
+    [' ', 300, 150],
+    ['\t\n12', 12, 12],
+    ['+12', 12, 12],
+    ['  +12px', 12, 12],
+    ['12px', 12, 12],
+    ['1.9', 1, 1],
+    ['0x10', 0, 0],
+    ['-1', 300, 150],
+    ['-0', 0, 0],
+    ['00017', 17, 17],
+    ['12 34', 12, 12],
+    ['1e2', 1, 1],
+    ['2147483647', 2147483647, 2147483647],
+    ['2147483648', 300, 150],
+    ['4294967296', 300, 150],
+    ['999999999999999999999999', 300, 150],
+    ['\u00a012', 300, 150],
+    ['\v12', 300, 150],
+  ];
+
+  for (const [raw, expectedWidth, expectedHeight] of cases) {
+    const canvas = document.createElement('canvas');
+    canvas.setAttribute('width', raw);
+    canvas.setAttribute('height', raw);
+    testing.expectEqual(raw, canvas.getAttribute('width'));
+    testing.expectEqual(raw, canvas.getAttribute('height'));
+    testing.expectEqual(expectedWidth, canvas.width);
+    testing.expectEqual(expectedHeight, canvas.height);
+  }
+}
+</script>
+
+<script id="canvas dimension JavaScript setters retain unsigned long conversion">
+{
+  const cases = [
+    [undefined, 0],
+    [null, 0],
+    [-1, 300],
+    [-1.9, 300],
+    [1.9, 1],
+    [NaN, 0],
+    [Infinity, 0],
+    [-Infinity, 0],
+    [2147483647, 2147483647],
+    [2147483648, 300],
+    [4294967295, 300],
+    [4294967296, 0],
+    [4294967297, 1],
+    ['12px', 0],
+    [' 12 ', 12],
+  ];
+
+  for (const [input, expected] of cases) {
+    const canvas = document.createElement('canvas');
+    canvas.width = input;
+    testing.expectEqual(expected, canvas.width);
+    testing.expectEqual(String(expected), canvas.getAttribute('width'));
+  }
+
+  const height = document.createElement('canvas');
+  height.height = -1;
+  testing.expectEqual(150, height.height);
+  testing.expectEqual('150', height.getAttribute('height'));
+}
+</script>
+
+<script id="canvas toBlob callback WebIDL errors match Chrome">
+{
+  function capture(invoke) {
+    try {
+      invoke();
+    } catch (error) {
+      return error;
+    }
+    testing.fail('expected toBlob to throw');
+  }
+
+  const canvas = document.createElement('canvas');
+  const missing = capture(() => canvas.toBlob());
+  testing.expectEqual('TypeError', missing.name);
+  testing.expectEqual(
+    "Failed to execute 'toBlob' on 'HTMLCanvasElement': 1 argument required, but only 0 present.",
+    missing.message,
+  );
+  testing.expectEqual(
+    "TypeError: Failed to execute 'toBlob' on 'HTMLCanvasElement': 1 argument required, but only 0 present.",
+    String(missing),
+  );
+  testing.expectEqual(
+    'TypeError: 1 argument required, but only 0 present.',
+    missing.stack.split('\n')[0],
+  );
+
+  const invalidCallbacks = [
+    undefined,
+    null,
+    0,
+    'callback',
+    {},
+    [],
+    Symbol('callback'),
+  ];
+  for (const callback of invalidCallbacks) {
+    const error = capture(() => canvas.toBlob(callback));
+    testing.expectEqual('TypeError', error.name);
+    testing.expectEqual(
+      "Failed to execute 'toBlob' on 'HTMLCanvasElement': parameter 1 is not of type 'Function'.",
+      error.message,
+    );
+    testing.expectEqual(
+      "TypeError: Failed to execute 'toBlob' on 'HTMLCanvasElement': parameter 1 is not of type 'Function'.",
+      String(error),
+    );
+    testing.expectEqual(
+      "TypeError: parameter 1 is not of type 'Function'.",
+      error.stack.split('\n')[0],
+    );
+  }
+
+  // Callback validation precedes conversion of all later arguments.
+  const invalidWithSymbolMime = capture(
+    () => canvas.toBlob(null, Symbol('mime')),
+  );
+  testing.expectEqual('TypeError', invalidWithSymbolMime.name);
+  testing.expectEqual(
+    "Failed to execute 'toBlob' on 'HTMLCanvasElement': parameter 1 is not of type 'Function'.",
+    invalidWithSymbolMime.message,
+  );
+  testing.expectEqual(
+    "TypeError: parameter 1 is not of type 'Function'.",
+    invalidWithSymbolMime.stack.split('\n')[0],
+  );
+  let mimeConversionRan = false;
+  const invalidWithThrowingMime = capture(() => canvas.toBlob(123, {
+    toString() {
+      mimeConversionRan = true;
+      throw new Error('must stay unread');
+    },
+  }));
+  testing.expectEqual(false, mimeConversionRan);
+  testing.expectEqual(
+    "Failed to execute 'toBlob' on 'HTMLCanvasElement': parameter 1 is not of type 'Function'.",
+    invalidWithThrowingMime.message,
+  );
+
+  const validWithSymbolMime = capture(
+    () => canvas.toBlob(() => {}, Symbol('mime')),
+  );
+  testing.expectEqual('TypeError', validWithSymbolMime.name);
+  testing.expectEqual(
+    "Failed to execute 'toBlob' on 'HTMLCanvasElement': Cannot convert a Symbol value to a string",
+    validWithSymbolMime.message,
+  );
+  testing.expectEqual(
+    "TypeError: Failed to execute 'toBlob' on 'HTMLCanvasElement': Cannot convert a Symbol value to a string",
+    String(validWithSymbolMime),
+  );
+  testing.expectEqual(
+    'TypeError: Cannot convert a Symbol value to a string',
+    validWithSymbolMime.stack.split('\n')[0],
+  );
+}
+</script>

@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Bindings for Servo's rust-url (https://github.com/servo/rust-url).
-//! Check @src/html5ever/url.rs for Rust-side of the bindings.
+//! The Rust side of these bindings lives in the external HTML5ever component.
 
 pub const Url = anyopaque;
 

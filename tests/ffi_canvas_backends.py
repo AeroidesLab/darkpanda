@@ -86,7 +86,9 @@ def run_backend(args: argparse.Namespace) -> None:
             assert canvas_manifest["actualDriverQueried"] is False, canvas_manifest
             assert canvas_manifest["runtimeBackendAttested"] is False, canvas_manifest
             assert canvas_manifest["gpuAttested"] is False, canvas_manifest
-            assert "CPU rust-skia" in canvas_manifest["implementationBoundary"], canvas_manifest
+            assert "Chromium M149 Skia CPU backend through ABI v5" in canvas_manifest[
+                "implementationBoundary"
+            ], canvas_manifest
 
             captures: list[list[list[int]]] = []
             for _ in range(2):

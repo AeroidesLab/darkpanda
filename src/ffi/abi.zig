@@ -93,10 +93,11 @@ pub const RuntimeOptions = extern struct {
     /// Optional LF-separated IP-literal DNS endpoints for the Windows wreq
     /// backend. Empty preserves the operating-system resolver.
     wreq_dns_nameservers: Slice = .{},
-    /// Optional absolute rust-skia backend path. Empty with dynamic selection
-    /// loads the platform library adjacent to darkpanda.dll/libdarkpanda.
+    /// Optional absolute Canvas ABI v5 backend path. Empty with dynamic
+    /// selection loads the packaged Chromium M149 Skia CPU backend adjacent
+    /// to darkpanda.dll/libdarkpanda.
     canvas_backend_path: Slice = .{},
-    /// New sized callers default to the packaged dynamic rust-skia backend.
+    /// New sized callers default to the packaged dynamic Canvas ABI v5 backend.
     canvas_driver: u32 = @intFromEnum(CanvasDriver.dynamic),
     canvas_fallback: u32 = @intFromEnum(CanvasFallback.disabled),
 };

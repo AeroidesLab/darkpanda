@@ -1080,33 +1080,11 @@ fn illegalConstructorCallback(raw_info: ?*const v8.FunctionCallbackInfo) callcon
     }
     log.info(.js, "Illegal constructor call", .{ .name = name });
 
-    // Blink keeps the compact reason in Error.stack, while Error.message is
-    // decorated with the Web IDL constructor context.  V8's Error stack keeps
-    // the message supplied at construction time, so create the exception with
-    // the compact reason first and then replace its writable `message` own
-    // property with the contextual form.
+    // V8's exception propagation callback decorates this compact reason using
+    // the constructor template metadata while retaining the short stack line.
     const reason = "Illegal constructor";
     const message = v8.v8__String__NewFromUtf8(isolate, reason.ptr, v8.kNormal, @intCast(reason.len)).?;
     const js_exception = v8.v8__Exception__TypeError(message).?;
-
-    if (!std.mem.eql(u8, name, "<unknown>")) {
-        var full_buf: [256]u8 = undefined;
-        if (std.fmt.bufPrint(&full_buf, "Failed to construct '{s}': {s}", .{ name, reason })) |full| {
-            if (v8.v8__Isolate__GetCurrentContext(isolate)) |context| {
-                const key = v8.v8__String__NewFromUtf8(isolate, "message", v8.kNormal, 7).?;
-                const value = v8.v8__String__NewFromUtf8(isolate, full.ptr, v8.kNormal, @intCast(full.len)).?;
-                var maybe_result: v8.MaybeBool = undefined;
-                v8.v8__Object__DefineOwnProperty(
-                    @ptrCast(js_exception),
-                    context,
-                    @ptrCast(key),
-                    @ptrCast(value),
-                    v8.None,
-                    &maybe_result,
-                );
-            }
-        } else |_| {}
-    }
 
     _ = v8.v8__Isolate__ThrowException(isolate, js_exception);
     var return_value: v8.ReturnValue = undefined;
@@ -1178,6 +1156,26 @@ fn protoIndexLookup(comptime JsApi: type) ?u16 {
     }
 }
 
+fn setWebIDLExceptionContext(
+    comptime JsApi: type,
+    isolate: *v8.Isolate,
+    function_template: *const v8.FunctionTemplate,
+    context: v8.ExceptionContext,
+) void {
+    const interface_name = comptime if (@hasDecl(JsApi.Meta, "name"))
+        JsApi.Meta.name
+    else
+        @typeName(JsApi);
+    const interface_name_v8 = v8.v8__String__NewFromUtf8(
+        isolate,
+        interface_name.ptr,
+        v8.kNormal,
+        @intCast(interface_name.len),
+    );
+    v8.v8__FunctionTemplate__SetInterfaceName(function_template, interface_name_v8);
+    v8.v8__FunctionTemplate__SetExceptionContext(function_template, context);
+}
+
 // Generate a constructor template for a JsApi type (public for reuse)
 pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8.FunctionTemplate {
     const callback = blk: {
@@ -1203,6 +1201,8 @@ pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8
     const name_str = if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi);
     const class_name = v8.v8__String__NewFromUtf8(isolate, name_str.ptr, v8.kNormal, @intCast(name_str.len));
     v8.v8__FunctionTemplate__SetClassName(template, class_name);
+    v8.v8__FunctionTemplate__SetInterfaceName(template, class_name);
+    v8.v8__FunctionTemplate__SetExceptionContext(template, v8.kExceptionContext_Constructor);
     // Web IDL: interface object's `prototype` property is non-writable/non-configurable.
     v8.v8__FunctionTemplate__ReadOnlyPrototype(template);
     return template;
@@ -1255,6 +1255,7 @@ fn attachLegacyUnforgeableMembers(
                     const getter_name = "get " ++ name;
                     const getter_name_v8 = v8.v8__String__NewFromUtf8(isolate, getter_name.ptr, v8.kNormal, @intCast(getter_name.len));
                     v8.v8__FunctionTemplate__SetClassName(callback, getter_name_v8);
+                    setWebIDLExceptionContext(JsApi, isolate, callback, v8.kExceptionContext_AttributeGet);
                     break :blk callback;
                 } else null;
                 const setter_callback = if (value.setter) |setter| blk: {
@@ -1267,6 +1268,7 @@ fn attachLegacyUnforgeableMembers(
                     const setter_name = "set " ++ name;
                     const setter_name_v8 = v8.v8__String__NewFromUtf8(isolate, setter_name.ptr, v8.kNormal, @intCast(setter_name.len));
                     v8.v8__FunctionTemplate__SetClassName(callback, setter_name_v8);
+                    setWebIDLExceptionContext(JsApi, isolate, callback, v8.kExceptionContext_AttributeSet);
                     break :blk callback;
                 } else null;
 
@@ -1388,6 +1390,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     const getter_name_str = "get " ++ name;
                     const getter_name_v8 = v8.v8__String__NewFromUtf8(isolate, getter_name_str.ptr, v8.kNormal, @intCast(getter_name_str.len));
                     v8.v8__FunctionTemplate__SetClassName(cb, getter_name_v8);
+                    setWebIDLExceptionContext(JsApi, isolate, cb, v8.kExceptionContext_AttributeGet);
                     break :blk cb;
                 } else null;
 
@@ -1401,6 +1404,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     const setter_name_str = "set " ++ name;
                     const setter_name_v8 = v8.v8__String__NewFromUtf8(isolate, setter_name_str.ptr, v8.kNormal, @intCast(setter_name_str.len));
                     v8.v8__FunctionTemplate__SetClassName(cb, setter_name_v8);
+                    setWebIDLExceptionContext(JsApi, isolate, cb, v8.kExceptionContext_AttributeSet);
                     break :blk cb;
                 } else null;
 
@@ -1491,6 +1495,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     .signature = func_signature,
                 }).?;
                 v8.v8__FunctionTemplate__SetClassName(function_template, js_name);
+                setWebIDLExceptionContext(JsApi, isolate, function_template, v8.kExceptionContext_Operation);
                 var attributes: v8.PropertyAttribute = 0;
                 if (methods_readonly or !value.writable) attributes |= v8.ReadOnly;
                 if (!value.deletable) attributes |= v8.DontDelete;
@@ -1543,6 +1548,10 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     @compileError(@typeName(JsApi) ++ " is transparent but declares an iterator; put prototype members on its public parent");
                 }
                 const function_template = v8.v8__FunctionTemplate__New__Config(isolate, &.{ .callback = value.func }).?;
+                const iterator_name = if (value.async) "[Symbol.asyncIterator]" else "[Symbol.iterator]";
+                const iterator_name_v8 = v8.v8__String__NewFromUtf8(isolate, iterator_name.ptr, v8.kNormal, @intCast(iterator_name.len));
+                v8.v8__FunctionTemplate__SetClassName(function_template, iterator_name_v8);
+                setWebIDLExceptionContext(JsApi, isolate, function_template, v8.kExceptionContext_Operation);
                 const js_name = if (value.async)
                     v8.v8__Symbol__GetAsyncIterator(isolate)
                 else

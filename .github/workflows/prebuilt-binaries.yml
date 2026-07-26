@@ -1,63 +1,62 @@
-name: Prebuilt binaries
+name: DarkPanda build
 
 on:
   workflow_dispatch:
     inputs:
       dependency_cache_generation:
-        description: Change this value to invalidate immutable V8 caches
+        description: Change only to invalidate verified immutable caches
         required: true
         default: v1
         type: string
       publish_release:
-        description: Publish the archives to a GitHub Release
+        description: Publish the verified Windows/Linux archives as a prerelease
         required: true
         default: false
         type: boolean
-      release_tag:
-        description: Release tag for a manual publish (for example v1.0.0-ci.1)
-        required: false
-        type: string
-      native_components_only:
-        description: Build and test external native components without packaging DarkPanda
-        required: true
-        default: false
-        type: boolean
-  push:
-    tags:
-      - "v*"
 
 permissions:
   contents: read
 
 concurrency:
-  group: prebuilt-${{ github.ref }}
+  group: darkpanda-build-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  BROWSER_CHROME_VERSION: 149.0.7827.203
-  BROWSER_CHROMIUM_REVISION: 48860e577c01de4a313192cc79596c46b52efb3a
-  BROWSER_SKIA_REVISION: 75c589e1f436688fca8f5b7f7a8affeafaa4f923
-  BROWSER_LLVM_REVISION: 20b6ec66967ac2a8f932863c1abf251e5b17a843
-  BROWSER_RUST_REVISION: 4c4205163abcbd08948b3efab796c543ba1ea687
-  CACHE_GENERATION: ${{ inputs.dependency_cache_generation || 'v1' }}
-  CARGO_INCREMENTAL: "0"
-  CARGO_TERM_COLOR: always
-  CARGO_NET_RETRY: "5"
   GIT_TERMINAL_PROMPT: "0"
-  MACOSX_DEPLOYMENT_TARGET: "12.0"
+  DEPOT_TOOLS_UPDATE: "0"
+  CACHE_GENERATION: ${{ inputs.dependency_cache_generation || 'v1' }}
 
 jobs:
   prepare:
-    name: Resolve component commits and fixed browser profile
+    name: Resolve fixed browser profile and latest component commits
     runs-on: ubuntu-24.04
     outputs:
       canvas_revision: ${{ steps.resolve.outputs.canvas_revision }}
-      skia_revision: ${{ steps.resolve.outputs.skia_revision }}
-      chromium_revision: ${{ steps.resolve.outputs.chromium_revision }}
+      html5ever_revision: ${{ steps.resolve.outputs.html5ever_revision }}
+      wreq_revision: ${{ steps.resolve.outputs.wreq_revision }}
+      boringssl_revision: ${{ steps.resolve.outputs.boringssl_revision }}
       chrome_version: ${{ steps.resolve.outputs.chrome_version }}
+      chromium_revision: ${{ steps.resolve.outputs.chromium_revision }}
+      skia_revision: ${{ steps.resolve.outputs.skia_revision }}
+      profile_sha256: ${{ steps.resolve.outputs.profile_sha256 }}
+      zig_version: ${{ steps.resolve.outputs.zig_version }}
+      zig_windows_sha256: ${{ steps.resolve.outputs.zig_windows_sha256 }}
+      zig_linux_sha256: ${{ steps.resolve.outputs.zig_linux_sha256 }}
+      v8_version: ${{ steps.resolve.outputs.v8_version }}
+      v8_revision: ${{ steps.resolve.outputs.v8_revision }}
+      zig_v8_revision: ${{ steps.resolve.outputs.zig_v8_revision }}
     steps:
-      - name: Check out latest external component sources
-        uses: actions/checkout@main
+      - name: Check out the browser build authority
+        id: checkout_browser_authority
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          path: browser
+          persist-credentials: false
+
+      - name: Check out latest Canvas source
+        id: checkout_canvas
+        uses: actions/checkout@v4
         with:
           repository: AeroidesLab/canvas
           ref: main
@@ -66,61 +65,288 @@ jobs:
           path: components/canvas
           persist-credentials: false
 
-      - name: Resolve latest component commit for this run
+      - name: Check out latest HTML5ever source
+        id: checkout_html5ever
+        uses: actions/checkout@v4
+        with:
+          repository: AeroidesLab/html5ever
+          ref: main
+          token: ${{ secrets.SOURCE_READ_TOKEN || secrets.CANVAS_READ_TOKEN }}
+          fetch-depth: 1
+          path: components/html5ever
+          persist-credentials: false
+
+      - name: Check out latest wreq source
+        id: checkout_wreq
+        uses: actions/checkout@v4
+        with:
+          repository: AeroidesLab/wreq
+          ref: main
+          token: ${{ secrets.SOURCE_READ_TOKEN || secrets.CANVAS_READ_TOKEN }}
+          fetch-depth: 1
+          path: components/wreq
+          persist-credentials: false
+
+      - name: Check out latest BoringSSL source
+        id: checkout_boringssl
+        uses: actions/checkout@v4
+        with:
+          repository: AeroidesLab/boringssl
+          ref: main
+          token: ${{ secrets.SOURCE_READ_TOKEN || secrets.CANVAS_READ_TOKEN }}
+          fetch-depth: 1
+          path: components/boringssl
+          persist-credentials: false
+
+      - name: Resolve the immutable inputs for this run
         id: resolve
         shell: bash
         run: |
           set -euo pipefail
+          profile=browser/tools/ci/chromium-profile.json
+          jq -e '
+            .schema == "darkpanda-chromium-profile/v1" and
+            .policy.browser == "fixed" and
+            .policy.components == "latest-main-at-build-start" and
+            .darkpanda_build.v8.zig_v8_repository == "AeroidesLab/zig-v8-fork"
+          ' "$profile" >/dev/null
+
           canvas_revision=$(git -C components/canvas rev-parse HEAD)
-          skia_revision=$BROWSER_SKIA_REVISION
-          chromium_revision=$BROWSER_CHROMIUM_REVISION
+          html5ever_revision=$(git -C components/html5ever rev-parse HEAD)
+          wreq_revision=$(git -C components/wreq rev-parse HEAD)
+          boringssl_revision=$(git -C components/boringssl rev-parse HEAD)
+          chrome_version=$(jq -r .chrome_for_testing_version "$profile")
+          chromium_revision=$(jq -r .chromium_revision "$profile")
+          skia_revision=$(jq -r .skia_revision "$profile")
+          zig_version=$(jq -r .darkpanda_build.zig.version "$profile")
+          zig_windows_sha256=$(jq -r '.darkpanda_build.zig.sha256["windows-x86_64"]' "$profile")
+          zig_linux_sha256=$(jq -r '.darkpanda_build.zig.sha256["linux-x86_64"]' "$profile")
+          v8_version=$(jq -r .darkpanda_build.v8.version "$profile")
+          v8_revision=$(jq -r .darkpanda_build.v8.revision "$profile")
+          zig_v8_revision=$(jq -r .darkpanda_build.v8.zig_v8_revision "$profile")
+          profile_sha256=$(sha256sum "$profile" | cut -d' ' -f1)
+
           for revision in \
-            "$canvas_revision" "$skia_revision" "$chromium_revision"; do
-            [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || {
-              echo "::error::Could not resolve an exact source revision"
+            "$canvas_revision" \
+            "$html5ever_revision" \
+            "$wreq_revision" \
+            "$boringssl_revision" \
+            "$chromium_revision" \
+            "$skia_revision" \
+            "$v8_revision" \
+            "$zig_v8_revision"; do
+            [[ $revision =~ ^[0-9a-f]{40}$ ]] || {
+              echo "::error::Invalid resolved Git revision: $revision"
               exit 1
             }
           done
+          [[ $zig_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ $v8_version =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          zon_zig_version=$(
+            sed -n 's/^[[:space:]]*\.minimum_zig_version = "\([^"]*\)".*/\1/p' \
+              browser/build.zig.zon
+          )
+          test "$zon_zig_version" = "$zig_version"
+          for digest in "$zig_windows_sha256" "$zig_linux_sha256"; do
+            [[ $digest =~ ^[0-9a-f]{64}$ ]] || {
+              echo "::error::Invalid Zig archive SHA-256: $digest"
+              exit 1
+            }
+          done
+
           {
             echo "canvas_revision=$canvas_revision"
-            echo "skia_revision=$skia_revision"
+            echo "html5ever_revision=$html5ever_revision"
+            echo "wreq_revision=$wreq_revision"
+            echo "boringssl_revision=$boringssl_revision"
+            echo "chrome_version=$chrome_version"
             echo "chromium_revision=$chromium_revision"
-            echo "chrome_version=$BROWSER_CHROME_VERSION"
+            echo "skia_revision=$skia_revision"
+            echo "profile_sha256=$profile_sha256"
+            echo "zig_version=$zig_version"
+            echo "zig_windows_sha256=$zig_windows_sha256"
+            echo "zig_linux_sha256=$zig_linux_sha256"
+            echo "v8_version=$v8_version"
+            echo "v8_revision=$v8_revision"
+            echo "zig_v8_revision=$zig_v8_revision"
           } >> "$GITHUB_OUTPUT"
+
           jq -n \
-            --arg buildId "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --arg build_id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             --arg darkpanda "$GITHUB_SHA" \
             --arg canvas "$canvas_revision" \
-            --arg skia "$skia_revision" \
+            --arg html5ever "$html5ever_revision" \
+            --arg wreq "$wreq_revision" \
+            --arg boringssl "$boringssl_revision" \
+            --arg chrome "$chrome_version" \
             --arg chromium "$chromium_revision" \
-            --arg chrome "$BROWSER_CHROME_VERSION" \
-            --arg llvm "$BROWSER_LLVM_REVISION" \
-            --arg rust "$BROWSER_RUST_REVISION" \
+            --arg skia "$skia_revision" \
+            --arg profile_sha256 "$profile_sha256" \
+            --arg zig_version "$zig_version" \
+            --arg zig_windows_sha256 "$zig_windows_sha256" \
+            --arg zig_linux_sha256 "$zig_linux_sha256" \
+            --arg v8_version "$v8_version" \
+            --arg v8_revision "$v8_revision" \
+            --arg zig_v8_revision "$zig_v8_revision" \
             '{
-              schema: "darkpanda-resolved-inputs/v2",
-              componentSelectionPolicy: "latest-at-build-start",
-              browserProfilePolicy: "fixed",
-              buildId: $buildId,
-              darkpanda: {repository: "AeroidesLab/darkpanda", revision: $darkpanda},
-              components: {
-                canvas: {repository: "AeroidesLab/canvas", revision: $canvas}
+              schema: "darkpanda-resolved-inputs/v4",
+              buildId: $build_id,
+              policies: {
+                browserProfile: "fixed-in-darkpanda",
+                components: "latest-main-at-build-start"
+              },
+              darkpanda: {
+                repository: "AeroidesLab/darkpanda",
+                revision: $darkpanda
               },
               browserProfile: {
                 chromeForTestingVersion: $chrome,
-                skiaRevision: $skia,
                 chromiumRevision: $chromium,
-                llvmRevision: $llvm,
-                rustRevision: $rust
+                skiaRevision: $skia,
+                profileSha256: $profile_sha256
+              },
+              buildDependencies: {
+                zig: {
+                  version: $zig_version,
+                  sha256: {
+                    "windows-x86_64": $zig_windows_sha256,
+                    "linux-x86_64": $zig_linux_sha256
+                  }
+                },
+                v8: {
+                  version: $v8_version,
+                  revision: $v8_revision,
+                  zigV8: {
+                    repository: "AeroidesLab/zig-v8-fork",
+                    revision: $zig_v8_revision
+                  }
+                }
+              },
+              components: {
+                canvas: {
+                  repository: "AeroidesLab/canvas",
+                  revision: $canvas
+                },
+                html5ever: {
+                  repository: "AeroidesLab/html5ever",
+                  revision: $html5ever
+                },
+                wreq: {
+                  repository: "AeroidesLab/wreq",
+                  revision: $wreq
+                },
+                boringssl: {
+                  repository: "AeroidesLab/boringssl",
+                  revision: $boringssl
+                }
               }
             }' > resolved-inputs.json
 
-      - name: Upload resolved source graph
-        uses: actions/upload-artifact@main
+      - name: Validate every CI report and package contract
+        id: contract_tests
+        shell: bash
+        working-directory: browser
+        run: |
+          set -euo pipefail
+          python3 -m unittest \
+            tools.ci.test_aggregate_component_reports \
+            tools.ci.test_aggregate_darkpanda_reports \
+            tools.ci.test_package_prebuilt \
+            tools.ci.test_verify_chromium_toolchain
+
+      - name: Ensure the prepare result is machine-readable
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          browser='${{ steps.checkout_browser_authority.outcome }}'
+          canvas='${{ steps.checkout_canvas.outcome }}'
+          html5ever='${{ steps.checkout_html5ever.outcome }}'
+          wreq='${{ steps.checkout_wreq.outcome }}'
+          boringssl='${{ steps.checkout_boringssl.outcome }}'
+          resolve='${{ steps.resolve.outcome }}'
+          contracts='${{ steps.contract_tests.outcome }}'
+          valid=false
+          if [[ -f resolved-inputs.json ]] &&
+             jq -e '.schema == "darkpanda-resolved-inputs/v4"' \
+               resolved-inputs.json >/dev/null &&
+             [[ $browser == success &&
+                $canvas == success &&
+                $html5ever == success &&
+                $wreq == success &&
+                $boringssl == success &&
+                $resolve == success &&
+                $contracts == success ]]; then
+            valid=true
+          fi
+          if [[ $valid != true ]]; then
+            jq -n \
+              --arg build_id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+              --arg darkpanda "$GITHUB_SHA" \
+              --arg browser "$browser" \
+              --arg canvas "$canvas" \
+              --arg html5ever "$html5ever" \
+              --arg wreq "$wreq" \
+              --arg boringssl "$boringssl" \
+              --arg resolve "$resolve" \
+              --arg contracts "$contracts" \
+              '{
+                schema: "darkpanda-resolved-inputs-failure/v1",
+                buildId: $build_id,
+                status: "failed",
+                darkpandaRevision: $darkpanda,
+                steps: {
+                  browserCheckout: $browser,
+                  canvasCheckout: $canvas,
+                  html5everCheckout: $html5ever,
+                  wreqCheckout: $wreq,
+                  boringsslCheckout: $boringssl,
+                  resolve: $resolve,
+                  contractTests: $contracts
+                },
+                errors: (
+                  {
+                    browserCheckout: $browser,
+                    canvasCheckout: $canvas,
+                    html5everCheckout: $html5ever,
+                    wreqCheckout: $wreq,
+                    boringsslCheckout: $boringssl,
+                    resolve: $resolve,
+                    contractTests: $contracts
+                  }
+                  | to_entries
+                  | map(select(.value != "success") |
+                    (.key + ": " + .value))
+                )
+              }' > resolved-inputs.json
+          fi
+
+      - name: Publish resolved source graph
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: resolved-inputs
           path: resolved-inputs.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Write source summary
+        shell: bash
+        run: |
+          {
+            echo "## Resolved build inputs"
+            echo
+            echo "- Browser: Chrome \`${{ steps.resolve.outputs.chrome_version }}\` (fixed)"
+            echo "- Chromium: \`${{ steps.resolve.outputs.chromium_revision }}\`"
+            echo "- Skia: \`${{ steps.resolve.outputs.skia_revision }}\`"
+            echo "- Zig: \`${{ steps.resolve.outputs.zig_version }}\`"
+            echo "- V8: \`${{ steps.resolve.outputs.v8_version }}\` (\`${{ steps.resolve.outputs.v8_revision }}\`)"
+            echo "- zig-v8: \`${{ steps.resolve.outputs.zig_v8_revision }}\`"
+            echo "- Canvas: \`${{ steps.resolve.outputs.canvas_revision }}\`"
+            echo "- HTML5ever: \`${{ steps.resolve.outputs.html5ever_revision }}\`"
+            echo "- wreq: \`${{ steps.resolve.outputs.wreq_revision }}\`"
+            echo "- BoringSSL: \`${{ steps.resolve.outputs.boringssl_revision }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   toolchain:
     name: Chromium toolchain / ${{ matrix.id }}
@@ -133,338 +359,676 @@ jobs:
           - id: windows-x86_64
             runner: windows-2022
             python: python
-            jobs: 4
           - id: linux-x86_64
             runner: ubuntu-24.04
             python: python3
-            jobs: 4
     runs-on: ${{ matrix.runner }}
-
     steps:
-      - name: Check out fixed Chrome 149 tool declarations
-        shell: bash
-        run: |
-          set -euo pipefail
-          git -c core.autocrlf=false init chromium
-          git -C chromium remote add origin \
-            https://chromium.googlesource.com/chromium/src.git
-          git -C chromium sparse-checkout init --cone
-          git -C chromium sparse-checkout set tools/clang/scripts tools/rust
-          git -C chromium fetch --depth 1 --filter=blob:none \
-            origin '${{ needs.prepare.outputs.chromium_revision }}'
-          git -C chromium checkout --detach FETCH_HEAD
+      - name: Check out the exact browser commit as the gclient solution
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: gclient/browser
+          persist-credentials: false
 
-          git -c core.autocrlf=false init skia-tools
-          git -C skia-tools remote add origin https://skia.googlesource.com/skia.git
-          git -C skia-tools sparse-checkout init --cone
-          git -C skia-tools sparse-checkout set bin
-          git -C skia-tools fetch --depth 1 --filter=blob:none \
-            origin '${{ needs.prepare.outputs.skia_revision }}'
-          git -C skia-tools checkout --detach FETCH_HEAD
-
-          test "$(git -C chromium rev-parse HEAD)" = '${{ needs.prepare.outputs.chromium_revision }}'
-          test "$(git -C skia-tools rev-parse HEAD)" = '${{ needs.prepare.outputs.skia_revision }}'
-
-      - name: Install Linux prerequisites
+      - name: Install Linux sync prerequisites
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            ca-certificates git nasm python3 xz-utils
+            ca-certificates git python3 xz-utils
 
-      - name: Materialize Chromium compiler bundle on Windows
+      - name: Synchronize the profile with gclient on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          python chromium/tools/clang/scripts/update.py `
-            --output-dir="$env:GITHUB_WORKSPACE/toolchain/llvm"
-          python chromium/tools/rust/update_rust.py `
-            --output-dir="$env:GITHUB_WORKSPACE/toolchain/rust"
-          Push-Location skia-tools
+          git clone --depth 1 `
+            https://chromium.googlesource.com/chromium/tools/depot_tools.git `
+            gclient/depot_tools
+          Push-Location gclient
           try {
-            python bin/fetch-gn
-            python bin/fetch-ninja
+            & .\depot_tools\gclient.bat config `
+              --name browser `
+              --unmanaged `
+              https://github.com/AeroidesLab/darkpanda.git
+            & .\depot_tools\gclient.bat sync `
+              --no-history `
+              --revision "browser@$env:GITHUB_SHA" `
+              --jobs 4
           } finally {
             Pop-Location
           }
-          New-Item -ItemType Directory -Force toolchain/buildtools | Out-Null
-          Copy-Item skia-tools/bin/gn.exe toolchain/buildtools/gn.exe
-          Copy-Item skia-tools/third_party/ninja/ninja.exe toolchain/buildtools/ninja.exe
-          $required = @(
-            'toolchain/llvm/bin/clang-cl.exe',
-            'toolchain/llvm/bin/lld-link.exe',
-            'toolchain/rust/bin/cargo.exe',
-            'toolchain/rust/bin/rustc.exe',
-            'toolchain/buildtools/gn.exe',
-            'toolchain/buildtools/ninja.exe'
-          )
-          foreach ($path in $required) {
-            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-              throw "Missing Chromium toolchain file: $path"
-            }
-          }
-          $clangVersion = (& "$env:GITHUB_WORKSPACE/toolchain/llvm/bin/clang-cl.exe" --version) -join "`n"
-          $rustVersion = (& "$env:GITHUB_WORKSPACE/toolchain/rust/bin/rustc.exe" --version)
-          if ($clangVersion -notmatch $env:BROWSER_LLVM_REVISION.Substring(0, 8)) {
-            throw "Chromium LLVM does not match fixed Chrome 149 profile: $clangVersion"
-          }
-          if ($rustVersion -notmatch $env:BROWSER_RUST_REVISION.Substring(0, 8)) {
-            throw "Chromium Rust does not match fixed Chrome 149 profile: $rustVersion"
-          }
-          $metadata = [ordered]@{
-            schema = 'chromium-toolchain/v1'
-            target = '${{ matrix.id }}'
-            chromeForTestingVersion = '${{ needs.prepare.outputs.chrome_version }}'
-            chromiumRevision = '${{ needs.prepare.outputs.chromium_revision }}'
-            skiaRevision = '${{ needs.prepare.outputs.skia_revision }}'
-            clang = $clangVersion.Split("`n")[0]
-            rustc = $rustVersion
-            cargo = (& "$env:GITHUB_WORKSPACE/toolchain/rust/bin/cargo.exe" --version)
-            gn = (& "$env:GITHUB_WORKSPACE/toolchain/buildtools/gn.exe" --version)
-            ninja = (& "$env:GITHUB_WORKSPACE/toolchain/buildtools/ninja.exe" --version)
-          }
-          New-Item -ItemType Directory -Force toolchain/metadata | Out-Null
-          $metadata | ConvertTo-Json -Depth 5 |
-            Set-Content -LiteralPath toolchain/metadata/toolchain.json -Encoding utf8
 
-      - name: Materialize Chromium compiler bundle on Linux
+      - name: Synchronize the profile with gclient on Linux
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
-          python3 chromium/tools/clang/scripts/update.py \
-            --output-dir="$GITHUB_WORKSPACE/toolchain/llvm"
-          python3 chromium/tools/rust/update_rust.py \
-            --output-dir="$GITHUB_WORKSPACE/toolchain/rust"
+          git clone --depth 1 \
+            https://chromium.googlesource.com/chromium/tools/depot_tools.git \
+            gclient/depot_tools
+          export PATH="$GITHUB_WORKSPACE/gclient/depot_tools:$PATH"
+          cd gclient
+          gclient config \
+            --name browser \
+            --unmanaged \
+            https://github.com/AeroidesLab/darkpanda.git
+          gclient sync \
+            --no-history \
+            --revision "browser@$GITHUB_SHA" \
+            --jobs 4
+
+      - name: Materialize Chromium-patched Skia CPU source subtrees
+        shell: bash
+        run: |
+          set -euo pipefail
+          '${{ matrix.python }}' \
+            gclient/browser/tools/ci/materialize_skia_cpu_deps.py \
+            --repo gclient/browser \
+            --toolchain-dir gclient/browser/chromium-toolchain \
+            --output gclient/browser/chromium-toolchain/metadata/skia-chromium-subtrees.json
+
+      - name: Prove the minimal graph against official Chromium DEPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          '${{ matrix.python }}' \
+            gclient/browser/tools/ci/verify_official_chromium_deps.py \
+            --repo gclient/browser \
+            --depot-tools-dir gclient/depot_tools \
+            --output gclient/browser/chromium-toolchain/metadata/official-chromium-deps.json \
+            --deps-output gclient/browser/chromium-toolchain/metadata/Chromium-DEPS
+
+      - name: Verify and attest the materialized bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          '${{ matrix.python }}' \
+            gclient/browser/tools/ci/verify_chromium_toolchain.py \
+            --repo gclient/browser \
+            --toolchain-dir gclient/browser/chromium-toolchain \
+            --target '${{ matrix.id }}' \
+            --depot-tools-dir gclient/depot_tools \
+            --output gclient/browser/chromium-toolchain/metadata/toolchain.json
+
+      - name: Enter the Visual Studio SDK environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Compile and link C and Rust probes on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $bundle = Resolve-Path gclient/browser/chromium-toolchain
+          $probe = Join-Path $env:RUNNER_TEMP "darkpanda-toolchain-probe-${{ matrix.id }}"
+          New-Item -ItemType Directory -Force $probe | Out-Null
+          @'
+          int main(void) { return 0; }
+          '@ | Set-Content -LiteralPath (Join-Path $probe 'main.c') -Encoding ascii
+          @'
+          fn main() {}
+          '@ | Set-Content -LiteralPath (Join-Path $probe 'main.rs') -Encoding ascii
+          $clang = Join-Path $bundle 'llvm/bin/clang-cl.exe'
+          $rustc = Join-Path $bundle 'rust/bin/rustc.exe'
+          & $clang `
+            /nologo `
+            /O2 `
+            (Join-Path $probe 'main.c') `
+            "-fuse-ld=lld" `
+            "/Fe:$(Join-Path $probe 'c-smoke.exe')"
+          & (Join-Path $probe 'c-smoke.exe')
+          & $rustc `
+            --target x86_64-pc-windows-msvc `
+            "-Clinker=$clang" `
+            "-Clink-arg=-fuse-ld=lld" `
+            (Join-Path $probe 'main.rs') `
+            -o (Join-Path $probe 'rust-smoke.exe')
+          & (Join-Path $probe 'rust-smoke.exe')
+
+      - name: Compile and link C and Rust probes with the Chromium sysroot
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$GITHUB_WORKSPACE/gclient/browser/chromium-toolchain"
+          probe="$RUNNER_TEMP/darkpanda-toolchain-probe-${{ matrix.id }}"
+          mkdir -p "$probe"
+          printf '%s\n' 'int main(void) { return 0; }' > "$probe/main.c"
+          printf '%s\n' 'fn main() {}' > "$probe/main.rs"
+          clang="$bundle/llvm/bin/clang"
+          rustc="$bundle/rust/bin/rustc"
+          sysroot="$bundle/sysroot"
+          "$clang" \
+            --target=x86_64-linux-gnu \
+            --sysroot="$sysroot" \
+            -fuse-ld=lld \
+            "$probe/main.c" \
+            -o "$probe/c-smoke"
+          "$probe/c-smoke"
+          "$rustc" \
+            --target x86_64-unknown-linux-gnu \
+            -C "linker=$clang" \
+            -C "link-arg=--sysroot=$sysroot" \
+            -C link-arg=-fuse-ld=lld \
+            "$probe/main.rs" \
+            -o "$probe/rust-smoke"
+          "$probe/rust-smoke"
+
+      - name: Remove verified gclient transport caches
+        shell: bash
+        run: |
+          set -euo pipefail
+          '${{ matrix.python }}' \
+            gclient/browser/tools/ci/prune_gclient_payloads.py \
+            --repo gclient/browser \
+            --toolchain-dir gclient/browser/chromium-toolchain \
+            --target '${{ matrix.id }}' \
+            --output gclient/browser/chromium-toolchain/metadata/gclient-payload-prune.json
+
+      - name: Pack the verified Chromium bundle without losing file semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p toolchain-archives
+          archive="chromium-toolchain-${{ matrix.id }}.tar.gz"
+          tar -C gclient/browser -czf "toolchain-archives/$archive" chromium-toolchain
           (
-            cd skia-tools
-            python3 bin/fetch-gn
-            python3 bin/fetch-ninja
+            cd toolchain-archives
+            sha256sum "$archive" > "$archive.sha256"
           )
-          mkdir -p toolchain/buildtools toolchain/metadata
-          install -m 755 skia-tools/bin/gn toolchain/buildtools/gn
-          install -m 755 skia-tools/third_party/ninja/ninja toolchain/buildtools/ninja
-          for path in \
-            toolchain/llvm/bin/clang \
-            toolchain/llvm/bin/clang++ \
-            toolchain/llvm/bin/ld.lld \
-            toolchain/rust/bin/cargo \
-            toolchain/rust/bin/rustc \
-            toolchain/buildtools/gn \
-            toolchain/buildtools/ninja; do
-            test -x "$path" || {
-              echo "::error::Missing Chromium toolchain file: $path"
-              exit 1
-            }
-          done
-          clang_version=$(toolchain/llvm/bin/clang --version)
-          rust_version=$(toolchain/rust/bin/rustc --version)
-          grep -Fq "${BROWSER_LLVM_REVISION:0:8}" <<<"$clang_version" || {
-            echo "::error::Chromium LLVM does not match fixed Chrome 149 profile"
-            exit 1
-          }
-          grep -Fq "${BROWSER_RUST_REVISION:0:8}" <<<"$rust_version" || {
-            echo "::error::Chromium Rust does not match fixed Chrome 149 profile"
-            exit 1
-          }
+
+      - name: Record gclient result
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          mkdir -p toolchain-reports
+          depot_revision=unavailable
+          if [[ -d gclient/depot_tools/.git ]]; then
+            depot_revision=$(git -C gclient/depot_tools rev-parse HEAD)
+          fi
           jq -n \
             --arg target '${{ matrix.id }}' \
-            --arg chrome '${{ needs.prepare.outputs.chrome_version }}' \
-            --arg chromium '${{ needs.prepare.outputs.chromium_revision }}' \
-            --arg skia '${{ needs.prepare.outputs.skia_revision }}' \
-            --arg clang "$(head -n1 <<<"$clang_version")" \
-            --arg rustc "$rust_version" \
-            --arg cargo "$(toolchain/rust/bin/cargo --version)" \
-            --arg gn "$(toolchain/buildtools/gn --version)" \
-            --arg ninja "$(toolchain/buildtools/ninja --version)" \
+            --arg status '${{ job.status }}' \
+            --arg darkpanda "$GITHUB_SHA" \
+            --arg depot_tools "$depot_revision" \
+            --arg profile '${{ needs.prepare.outputs.profile_sha256 }}' \
             '{
-              schema: "chromium-toolchain/v1",
+              schema: "darkpanda-gclient-sync/v1",
               target: $target,
-              chromeForTestingVersion: $chrome,
-              chromiumRevision: $chromium,
-              skiaRevision: $skia,
-              clang: $clang,
-              rustc: $rustc,
-              cargo: $cargo,
-              gn: $gn,
-              ninja: $ninja
-            }' > toolchain/metadata/toolchain.json
+              status: $status,
+              darkpandaRevision: $darkpanda,
+              depotToolsRevision: $depot_tools,
+              chromiumProfileSha256: $profile
+            }' > "toolchain-reports/gclient-${{ matrix.id }}.json"
 
-      - name: Upload shared Chromium toolchain
-        uses: actions/upload-artifact@main
+      - name: Upload verified Chromium bundle
+        if: success()
+        uses: actions/upload-artifact@v4
         with:
           name: chromium-toolchain-${{ matrix.id }}
-          path: toolchain
+          path: toolchain-archives
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
 
+      - name: Upload toolchain report on success or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromium-toolchain-report-${{ matrix.id }}
+          path: |
+            toolchain-reports
+            gclient/browser/chromium-toolchain/metadata
+          if-no-files-found: warn
+          retention-days: 30
+
   components:
-    name: Native component / ${{ matrix.component }} / ${{ matrix.id }}
+    name: ${{ matrix.component }} / ${{ matrix.id }}
     needs:
       - prepare
       - toolchain
-    timeout-minutes: 180
+    if: always() && needs.prepare.result == 'success'
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
         include:
           - component: canvas
+            repository: AeroidesLab/canvas
+            revision: ${{ needs.prepare.outputs.canvas_revision }}
             id: windows-x86_64
             runner: windows-2022
             python: python
             jobs: 4
           - component: canvas
+            repository: AeroidesLab/canvas
+            revision: ${{ needs.prepare.outputs.canvas_revision }}
+            id: linux-x86_64
+            runner: ubuntu-24.04
+            python: python3
+            jobs: 4
+          - component: html5ever
+            repository: AeroidesLab/html5ever
+            revision: ${{ needs.prepare.outputs.html5ever_revision }}
+            id: windows-x86_64
+            runner: windows-2022
+            python: python
+            jobs: 4
+          - component: html5ever
+            repository: AeroidesLab/html5ever
+            revision: ${{ needs.prepare.outputs.html5ever_revision }}
+            id: linux-x86_64
+            runner: ubuntu-24.04
+            python: python3
+            jobs: 4
+          - component: wreq
+            repository: AeroidesLab/wreq
+            revision: ${{ needs.prepare.outputs.wreq_revision }}
+            id: windows-x86_64
+            runner: windows-2022
+            python: python
+            jobs: 4
+          - component: wreq
+            repository: AeroidesLab/wreq
+            revision: ${{ needs.prepare.outputs.wreq_revision }}
+            id: linux-x86_64
+            runner: ubuntu-24.04
+            python: python3
+            jobs: 4
+          - component: boringssl
+            repository: AeroidesLab/boringssl
+            revision: ${{ needs.prepare.outputs.boringssl_revision }}
+            id: windows-x86_64
+            runner: windows-2022
+            python: python
+            jobs: 4
+          - component: boringssl
+            repository: AeroidesLab/boringssl
+            revision: ${{ needs.prepare.outputs.boringssl_revision }}
             id: linux-x86_64
             runner: ubuntu-24.04
             python: python3
             jobs: 4
     runs-on: ${{ matrix.runner }}
-
     steps:
-      - name: Check out resolved latest component source
-        uses: actions/checkout@main
+      - name: Check out the resolved component source
+        uses: actions/checkout@v4
         with:
-          repository: AeroidesLab/canvas
-          ref: ${{ needs.prepare.outputs.canvas_revision }}
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.revision }}
           token: ${{ secrets.SOURCE_READ_TOKEN || secrets.CANVAS_READ_TOKEN }}
           fetch-depth: 1
-          path: components/canvas
+          path: component
           persist-credentials: false
 
-      - name: Verify source-only component contract
+      - name: Verify the source-only component contract
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C components/canvas rev-parse HEAD)" = '${{ needs.prepare.outputs.canvas_revision }}'
-          jq -e '.selection_policy == "latest-at-build-start"' \
-            components/canvas/source-policy.json >/dev/null
-          test ! -d components/canvas/.github/workflows
-          forbidden=$(
-            git -C components/canvas ls-files |
-              grep -E '(^|/)(target|out|skia|chromium|tools-bin)/|Cargo\.lock$|\.(dll|dylib|so|lib|a|exe|pdb|obj|o|log)$' ||
-              true
-          )
-          if [[ -n "$forbidden" ]]; then
-            echo "::error::Generated or binary files are tracked by AeroidesLab/canvas"
+          test "$(git -C component rev-parse HEAD)" = '${{ matrix.revision }}'
+          jq -e '
+            .selection_policy == "latest-at-build-start" and
+            .build_owner == "AeroidesLab/darkpanda"
+          ' component/source-policy.json >/dev/null
+          test ! -d component/.github/workflows
+          if [[ '${{ matrix.component }}' == boringssl ]]; then
+            # Upstream BoringSSL intentionally versions archive/object fixtures
+            # under util/ar/testdata and Rust lockfiles outside this CMake build.
+            # They are source test inputs, not generated component outputs.
+            forbidden=$(
+              git -C component ls-files |
+                grep -E '(^|/)(target|out|dist|tools-bin)/|\.(dll|dylib|so|lib|a|exe|pdb|obj|o|log)$' |
+                grep -vE '^util/ar/testdata/' ||
+                true
+            )
+          else
+            forbidden=$(
+              git -C component ls-files |
+                grep -E '(^|/)(target|out|dist|tools-bin)/|\.(dll|dylib|so|lib|a|exe|pdb|obj|o|log)$' ||
+                true
+            )
+          fi
+          if [[ -n $forbidden ]]; then
+            echo "::error::Generated or binary files are tracked by ${{ matrix.repository }}"
             printf '%s\n' "$forbidden"
             exit 1
           fi
+          if [[ '${{ matrix.component }}' != boringssl ]]; then
+            lockfile=$(jq -er '.dependency_lockfile' component/source-policy.json)
+            [[ $lockfile != /* && $lockfile != *..* ]] || {
+              echo "::error::Unsafe dependency_lockfile: $lockfile"
+              exit 1
+            }
+            test -f "component/$lockfile"
+            git -C component ls-files --error-unmatch "$lockfile" >/dev/null
+            grep -F -- '"--locked"' component/tools/build.py >/dev/null || {
+              echo "::error::Component build does not enforce Cargo --locked"
+              exit 1
+            }
+          fi
 
-      - name: Download shared Chromium toolchain
-        uses: actions/download-artifact@main
+      - name: Download the shared Chromium bundle
+        uses: actions/download-artifact@v4
         with:
           name: chromium-toolchain-${{ matrix.id }}
-          path: toolchain
+          path: toolchain-archive
 
-      - name: Check out fixed Chrome 149 Skia source
+      - name: Verify and unpack the shared Chromium bundle
         shell: bash
         run: |
           set -euo pipefail
-          git -c core.autocrlf=false init skia
-          git -C skia remote add origin https://skia.googlesource.com/skia.git
-          git -C skia fetch --depth 1 origin '${{ needs.prepare.outputs.skia_revision }}'
-          git -C skia checkout --detach FETCH_HEAD
-          test "$(git -C skia rev-parse HEAD)" = '${{ needs.prepare.outputs.skia_revision }}'
+          archive="chromium-toolchain-${{ matrix.id }}.tar.gz"
+          (
+            cd toolchain-archive
+            sha256sum --check "$archive.sha256"
+          )
+          mkdir -p toolchain
+          tar -xzf "toolchain-archive/$archive" \
+            -C toolchain \
+            --strip-components=1
+          manifest=toolchain/metadata/toolchain.json
+          '${{ matrix.python }}' - \
+            "$manifest" \
+            "$GITHUB_WORKSPACE/toolchain" \
+            '${{ matrix.id }}' \
+            '${{ needs.prepare.outputs.profile_sha256 }}' <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import re
+          import sys
 
-      - name: Install Linux prerequisites
+          manifest_path = pathlib.Path(sys.argv[1])
+          root = pathlib.Path(sys.argv[2]).resolve()
+          expected_target = sys.argv[3]
+          expected_profile = sys.argv[4]
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          if manifest.get("schema") != "darkpanda-chromium-toolchain/v2":
+              raise SystemExit("invalid Chromium toolchain schema")
+          if manifest.get("target") != expected_target:
+              raise SystemExit("Chromium toolchain target mismatch")
+          if manifest.get("profile_sha256") != expected_profile:
+              raise SystemExit("Chromium profile digest mismatch")
+          tools = manifest.get("tools")
+          if not isinstance(tools, dict) or not tools:
+              raise SystemExit("Chromium toolchain manifest has no tools")
+
+          def bundle_path(relative: object, kind: str) -> pathlib.Path:
+              if (
+                  not isinstance(relative, str)
+                  or not relative
+                  or "\\" in relative
+                  or re.match(r"^[A-Za-z]:", relative)
+              ):
+                  raise SystemExit(f"invalid bundle-relative {kind} path: {relative!r}")
+              pure = pathlib.PurePosixPath(relative)
+              if pure.is_absolute() or ".." in pure.parts:
+                  raise SystemExit(f"unsafe bundle-relative {kind} path: {relative}")
+              candidate = root.joinpath(*pure.parts).resolve()
+              try:
+                  candidate.relative_to(root)
+              except ValueError as error:
+                  raise SystemExit(f"{kind} escapes the toolchain bundle") from error
+              return candidate
+
+          for name, record in sorted(tools.items()):
+              if not isinstance(record, dict):
+                  raise SystemExit(f"invalid tool record: {name}")
+              path = bundle_path(record.get("path"), f"tool {name}")
+              if not path.is_file():
+                  raise SystemExit(f"missing Chromium tool: {name}: {path}")
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              if digest != record.get("sha256"):
+                  raise SystemExit(f"Chromium tool digest mismatch: {name}")
+
+          sysroot = manifest.get("sysroot")
+          if sysroot is not None:
+              path = bundle_path(sysroot, "sysroot")
+              if not path.is_dir() or not any(path.iterdir()):
+                  raise SystemExit("Chromium sysroot is missing or empty")
+          PY
+
+      - name: Enter the Visual Studio SDK environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Windows build utilities
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install nasm --yes --no-progress
+
+      - name: Install Linux build utilities
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            ca-certificates git nasm python3 xz-utils
+            ca-certificates cmake git nasm perl pkg-config python3 xz-utils
           chmod +x \
             toolchain/llvm/bin/* \
             toolchain/rust/bin/* \
             toolchain/buildtools/*
+          test -x toolchain/llvm/bin/clang
+          test -x toolchain/llvm/bin/ld.lld
+          test -x toolchain/rust/bin/cargo
+          test -x toolchain/buildtools/ninja
+          broken=$(
+            find toolchain -type l ! -exec test -e {} \; -print
+          )
+          test -z "$broken" || {
+            echo "::error::Broken symlinks in Chromium toolchain"
+            printf '%s\n' "$broken"
+            exit 1
+          }
 
-      - name: Synchronize Skia source dependencies
+      - name: Build, test, and stage the component
+        id: build
         shell: bash
         run: |
           set -euo pipefail
-          cd skia
-          '${{ matrix.python }}' tools/git-sync-deps
+          mkdir -p logs
+          '${{ matrix.python }}' component/tools/build.py \
+            --target '${{ matrix.id }}' \
+            --profile release \
+            --out "$GITHUB_WORKSPACE/component-dist/${{ matrix.component }}/${{ matrix.id }}" \
+            --jobs '${{ matrix.jobs }}' \
+            --toolchain chromium \
+            --toolchain-dir "$GITHUB_WORKSPACE/toolchain" \
+            2>&1 | tee "logs/${{ matrix.component }}-${{ matrix.id }}.log"
 
-      - name: Build and test component on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          python components/canvas/tools/build.py `
-            --target windows-x86_64 `
-            --skia-dir "$env:GITHUB_WORKSPACE/skia" `
-            --clang-dir "$env:GITHUB_WORKSPACE/toolchain/llvm" `
-            --rust-dir "$env:GITHUB_WORKSPACE/toolchain/rust" `
-            --buildtools-dir "$env:GITHUB_WORKSPACE/toolchain/buildtools" `
-            --dist-dir "$env:GITHUB_WORKSPACE/component-dist/canvas/windows-x86_64" `
-            --jobs ${{ matrix.jobs }}
-
-      - name: Build and test component on Linux
-        if: runner.os == 'Linux'
+      - name: Ensure a machine-readable failure report exists
+        if: always()
         shell: bash
         run: |
-          set -euo pipefail
-          python3 components/canvas/tools/build.py \
-            --target linux-x86_64 \
-            --skia-dir "$GITHUB_WORKSPACE/skia" \
-            --clang-dir "$GITHUB_WORKSPACE/toolchain/llvm" \
-            --rust-dir "$GITHUB_WORKSPACE/toolchain/rust" \
-            --buildtools-dir "$GITHUB_WORKSPACE/toolchain/buildtools" \
-            --dist-dir "$GITHUB_WORKSPACE/component-dist/canvas/linux-x86_64" \
-            --jobs '${{ matrix.jobs }}'
+          set -u
+          metadata="component-dist/${{ matrix.component }}/${{ matrix.id }}/metadata"
+          mkdir -p "$metadata"
+          if [[ ! -f "$metadata/test-results.json" ]]; then
+            jq -n \
+              --arg component '${{ matrix.component }}' \
+              --arg target '${{ matrix.id }}' \
+              --arg status '${{ steps.build.outcome }}' \
+              '{
+                schema: "darkpanda-component-test-results/v1",
+                component: $component,
+                target: $target,
+                status: $status,
+                suites: []
+              }' > "$metadata/test-results.json"
+          fi
 
-      - name: Write component build summary
+      - name: Write component summary
         if: always()
         shell: bash
         run: |
           {
-            echo "## Native component: ${{ matrix.component }} / ${{ matrix.id }}"
+            echo "## ${{ matrix.component }} / ${{ matrix.id }}"
             echo
-            echo "- Canvas: \`${{ needs.prepare.outputs.canvas_revision }}\`"
-            echo "- Skia: \`${{ needs.prepare.outputs.skia_revision }}\`"
-            echo "- Chromium: \`${{ needs.prepare.outputs.chromium_revision }}\`"
-            if [[ -f "component-dist/canvas/${{ matrix.id }}/metadata/build-info.json" ]]; then
-              echo
-              echo '```json'
-              cat "component-dist/canvas/${{ matrix.id }}/metadata/build-info.json"
-              echo '```'
+            echo "- Source: \`${{ matrix.revision }}\`"
+            echo "- Result: \`${{ steps.build.outcome }}\`"
+            if [[ -f "component-dist/${{ matrix.component }}/${{ matrix.id }}/metadata/build-info.json" ]]; then
+              echo "- Toolchain: Chromium fixed profile"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload component library and reports
+      - name: Upload component dist, test reports, and logs
         if: always()
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         with:
-          name: canvas-${{ matrix.id }}
-          path: component-dist/canvas/${{ matrix.id }}
-          if-no-files-found: warn
+          name: component-${{ matrix.component }}-${{ matrix.id }}
+          path: |
+            component-dist/${{ matrix.component }}/${{ matrix.id }}
+            logs
+          if-no-files-found: error
           compression-level: 0
           retention-days: 30
 
-  build:
+  native-summary:
+    name: Native component gate
+    needs:
+      - prepare
+      - components
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download every component result
+        id: download-components
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: component-*
+          path: component-results
+
+      - name: Download the resolved source graph
+        id: download-inputs
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: resolved-inputs
+          path: resolved-inputs
+
+      - name: Check out the report validator
+        id: checkout_validator
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: browser
+          persist-credentials: false
+
+      - name: Validate and aggregate every component contract
+        id: aggregate
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 browser/tools/ci/aggregate_component_reports.py \
+            --results component-results \
+            --resolved-inputs resolved-inputs/resolved-inputs.json \
+            --output reports/summary.json \
+            --markdown reports/summary.md
+
+      - name: Ensure the native gate failure is machine-readable
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          if ! jq -e '
+            .schema == "darkpanda-native-summary/v2" and
+            (.status == "passed" or .status == "failed") and
+            (.passed | type == "number") and
+            .total == 8 and
+            (.errors | type == "array") and
+            (.results | type == "array")
+          ' reports/summary.json >/dev/null 2>&1; then
+            jq -n \
+              --arg components '${{ steps.download-components.outcome }}' \
+              --arg inputs '${{ steps.download-inputs.outcome }}' \
+              --arg checkout '${{ steps.checkout_validator.outcome }}' \
+              --arg aggregate '${{ steps.aggregate.outcome }}' \
+              '{
+                schema: "darkpanda-native-summary/v2",
+                status: "failed",
+                passed: 0,
+                total: 8,
+                errors: [
+                  "native component validator could not produce a valid report",
+                  ("component download: " + $components),
+                  ("resolved input download: " + $inputs),
+                  ("validator checkout: " + $checkout),
+                  ("aggregate: " + $aggregate)
+                ],
+                results: []
+              }' > reports/summary.json
+          fi
+          if [[ ! -f reports/summary.md ]]; then
+            printf '%s\n' \
+              '## Native component gate' \
+              '' \
+              '- Status: `failed`' \
+              '- The native component validator could not produce a valid report.' \
+              > reports/summary.md
+          fi
+
+      - name: Publish the complete native summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f reports/summary.md ]]; then
+            cat reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '%s\n' \
+              '## Native component gate' \
+              '' \
+              'The aggregate report could not be generated.' \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload aggregate native report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-component-report
+          path: reports
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce the native component gate
+        if: always()
+        shell: bash
+        run: |
+          test '${{ steps.download-components.outcome }}' = success
+          test '${{ steps.download-inputs.outcome }}' = success
+          test '${{ steps.aggregate.outcome }}' = success
+
+  darkpanda:
     name: DarkPanda / ${{ matrix.id }}
-    needs: components
-    if: inputs.native_components_only != true
-    env:
-      # Temporary legacy inputs. Remove this block as the remaining three
-      # external component repositories enter the components matrix.
-      ZIG_VERSION: 0.15.2
-      RUST_VERSION: 1.88.0
-      V8_VERSION: 14.9.207.35
-      V8_REVISION: 933ce636c562cd54d68e7f7c93ab5cdffd685fca
-      ZIG_V8_SOURCE_REVISION: 88b51c8f58652501b7076b36ef4d9e16a44aca38
-      BORINGSSL_SOURCE_REVISION: 391764c3c0224eaa64d3bfbfe05cb8121bd41151
-      DEPENDENCY_SOURCE_RELEASE: build-dependencies-v1
-      ZIG_V8_SOURCE_ARCHIVE_SHA256: a62265bad6e94bf391edc8a99e35bbba78644be7202f87d9ac1eb6f767c1556b
-      BORINGSSL_SOURCE_ARCHIVE_SHA256: e9e1d9a342699b0eb0c28556377b4258b722ce8f61ecc98f5029646256cd5a1a
+    needs:
+      - prepare
+      - native-summary
+    if: always() && needs.prepare.result == 'success' && needs.native-summary.result == 'success'
     timeout-minutes: 360
+    env:
+      ZIG_VERSION: ${{ needs.prepare.outputs.zig_version }}
+      V8_VERSION: ${{ needs.prepare.outputs.v8_version }}
+      V8_REVISION: ${{ needs.prepare.outputs.v8_revision }}
+      ZIG_V8_SOURCE_REVISION: ${{ needs.prepare.outputs.zig_v8_revision }}
     strategy:
       fail-fast: false
       matrix:
@@ -474,8 +1038,7 @@ jobs:
             platform: windows
             zig_arch: x86_64
             zig_target: x86_64-windows-msvc
-            rust_target: x86_64-pc-windows-msvc
-            zig_sha256: 3a0ed1e8799a2f8ce2a6e6290a9ff22e6906f8227865911fb7ddedc3cc14cb0c
+            zig_sha256: ${{ needs.prepare.outputs.zig_windows_sha256 }}
             v8_archive: c_v8_standalone.lib
             python_cmd: python
             jobs: 4
@@ -484,133 +1047,194 @@ jobs:
             platform: linux
             zig_arch: x86_64
             zig_target: x86_64-linux-gnu
-            rust_target: x86_64-unknown-linux-gnu
-            zig_sha256: 02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239
+            zig_sha256: ${{ needs.prepare.outputs.zig_linux_sha256 }}
             v8_archive: libc_v8_standalone.a
             python_cmd: python3
             jobs: 2
-          - id: macos-x86_64
-            runner: macos-15-intel
-            platform: macos
-            zig_arch: x86_64
-            zig_target: x86_64-macos
-            rust_target: x86_64-apple-darwin
-            zig_sha256: 375b6909fc1495d16fc2c7db9538f707456bfc3373b14ee83fdd3e22b3d43f7f
-            v8_archive: libc_v8_standalone.a
-            python_cmd: python3
-            jobs: 3
-          - id: macos-aarch64
-            runner: macos-15
-            platform: macos
-            zig_arch: aarch64
-            zig_target: aarch64-macos
-            rust_target: aarch64-apple-darwin
-            zig_sha256: 3cc2bab367e185cdfb27501c4b30b1b0653c28d9f73df8dc91488e66ece5fa6b
-            v8_archive: libc_v8_standalone.a
-            python_cmd: python3
-            jobs: 3
     runs-on: ${{ matrix.runner }}
-
     steps:
-      - name: Check out DarkPanda
-        uses: actions/checkout@main
+      - name: Check out the exact DarkPanda source
+        id: checkout_browser
+        uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           path: browser
           persist-credentials: false
 
-      - name: Download and verify pinned dependency sources
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          asset_dir="$RUNNER_TEMP/darkpanda-dependency-sources"
-          rm -rf -- "$asset_dir"
-          mkdir -p -- "$asset_dir"
-          zig_v8_archive="zig-v8-fork-${ZIG_V8_SOURCE_REVISION}.tar.gz"
-          boringssl_archive="boringssl-zig-fork-${BORINGSSL_SOURCE_REVISION}.tar.gz"
-          gh release download "$DEPENDENCY_SOURCE_RELEASE" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "$zig_v8_archive" \
-            --pattern "$boringssl_archive" \
-            --dir "$asset_dir"
-          '${{ matrix.python_cmd }}' browser/tools/ci/extract_dependency_sources.py \
-            --asset-dir "$asset_dir" \
-            --workspace . \
-            --zig-v8-archive "$zig_v8_archive" \
-            --zig-v8-sha256 "$ZIG_V8_SOURCE_ARCHIVE_SHA256" \
-            --boringssl-archive "$boringssl_archive" \
-            --boringssl-sha256 "$BORINGSSL_SOURCE_ARCHIVE_SHA256"
+      - name: Check out the fixed zig-v8 source
+        id: checkout_zig_v8
+        uses: actions/checkout@v4
+        with:
+          repository: AeroidesLab/zig-v8-fork
+          ref: ${{ needs.prepare.outputs.zig_v8_revision }}
+          token: ${{ secrets.SOURCE_READ_TOKEN || secrets.CANVAS_READ_TOKEN }}
+          fetch-depth: 1
+          path: zig-v8-fork
+          persist-credentials: false
 
-      - name: Verify source identities and derive version
+      - name: Download and merge all four native component dists
+        id: download_components
+        uses: actions/download-artifact@v4
+        with:
+          pattern: component-*-${{ matrix.id }}
+          path: component-downloads
+          merge-multiple: true
+
+      - name: Download the immutable source graph
+        id: download_inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: resolved-inputs
+          path: resolved-inputs
+
+      - name: Verify source identities and component provenance
+        id: source_contract
         shell: bash
-        env:
-          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+          test "$(git -C browser rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C zig-v8-fork rev-parse HEAD)" = "$ZIG_V8_SOURCE_REVISION"
+          grep -Eq \
+            "const V8_VERSION[^=]*=[[:space:]]*\"$V8_VERSION\"" \
+            zig-v8-fork/build.zig
+          grep -Eq \
+            "const V8_REVISION[^=]*=[[:space:]]*\"$V8_REVISION\"" \
+            zig-v8-fork/build.zig
+          test ! -d zig-v8-fork/.github/workflows
+          jq -e '
+            .build_owner == "AeroidesLab/darkpanda" and
+            .selection_policy == "fixed-by-darkpanda-profile" and
+            .artifacts == "source-only"
+          ' zig-v8-fork/source-policy.json >/dev/null
+          resolved=resolved-inputs/resolved-inputs.json
+          jq -e \
+            --arg darkpanda "$GITHUB_SHA" \
+            --arg profile '${{ needs.prepare.outputs.profile_sha256 }}' \
+            --arg zig "$ZIG_VERSION" \
+            --arg v8 "$V8_VERSION" \
+            --arg v8_revision "$V8_REVISION" \
+            --arg zig_v8 "$ZIG_V8_SOURCE_REVISION" \
+            '.schema == "darkpanda-resolved-inputs/v4" and
+             .darkpanda.revision == $darkpanda and
+             .browserProfile.profileSha256 == $profile and
+             .buildDependencies.zig.version == $zig and
+             .buildDependencies.v8.version == $v8 and
+             .buildDependencies.v8.revision == $v8_revision and
+             .buildDependencies.v8.zigV8.repository == "AeroidesLab/zig-v8-fork" and
+             .buildDependencies.v8.zigV8.revision == $zig_v8' \
+            "$resolved" >/dev/null
+
+          declare -A revisions=(
+            [canvas]='${{ needs.prepare.outputs.canvas_revision }}'
+            [html5ever]='${{ needs.prepare.outputs.html5ever_revision }}'
+            [wreq]='${{ needs.prepare.outputs.wreq_revision }}'
+            [boringssl]='${{ needs.prepare.outputs.boringssl_revision }}'
+          )
+          toolchain_manifest_sha=
+          for component in canvas html5ever wreq boringssl; do
+            dist="component-downloads/component-dist/$component/${{ matrix.id }}"
+            info="$dist/metadata/build-info.json"
+            tests="$dist/metadata/test-results.json"
+            test -d "$dist"
+            test -f "$info"
+            test -f "$tests"
+            expected=${revisions[$component]}
+            test "$(jq -r --arg name "$component" '.components[$name].revision' "$resolved")" = "$expected"
+            actual=$(jq -r '.source.revision // .canvasRevision // empty' "$info")
+            requested_target=$(jq -r '.requestedTarget // .target // empty' "$info")
+            test "$actual" = "$expected"
+            test "$requested_target" = '${{ matrix.id }}'
+            test "$(jq -r .component "$info")" = "$component"
+            test "$(jq -r .chromiumProfileSha256 "$info")" = \
+              '${{ needs.prepare.outputs.profile_sha256 }}'
+            test "$(jq -r .source.dirty "$info")" = false
+            manifest_sha=$(jq -er '.toolchainManifestSha256 |
+              select(test("^[0-9a-f]{64}$"))' "$info")
+            if [[ -z $toolchain_manifest_sha ]]; then
+              toolchain_manifest_sha=$manifest_sha
+            else
+              test "$manifest_sha" = "$toolchain_manifest_sha"
+            fi
+            test "$(jq -r '.requestedTarget // .target // empty' "$tests")" = \
+              '${{ matrix.id }}'
+            test "$(jq -r .status "$tests")" = passed
+          done
+
+          mapfile -t component_dirs < <(
+            for path in component-downloads/component-dist/*; do
+              [[ -d $path ]] && printf '%s\n' "${path##*/}"
+            done | sort
+          )
+          test "${component_dirs[*]}" = 'boringssl canvas html5ever wreq'
+
           source_revision=$(git -C browser rev-parse HEAD)
           source_epoch=$(git -C browser show -s --format=%ct HEAD)
-          [[ -f zig-v8-fork/build.zig && -f boringssl-zig-fork/build.zig ]]
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            version=${GITHUB_REF_NAME#v}
-          elif [[ -n "$RELEASE_TAG_INPUT" ]]; then
-            version=${RELEASE_TAG_INPUT#v}
-          else
-            version="1.0.0-ci.${GITHUB_RUN_NUMBER}+${source_revision:0:12}"
-          fi
-          [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)*$ ]] || {
-            echo "Release tag does not map to a semantic version: $version" >&2
-            exit 1
-          }
+          version="1.0.0-ci.${GITHUB_RUN_NUMBER}+${source_revision:0:12}"
+          rust_version=$(jq -er '.toolchain.tools.rustc.version' \
+            "component-downloads/component-dist/html5ever/${{ matrix.id }}/metadata/build-info.json")
           {
             echo "SOURCE_REVISION=$source_revision"
             echo "SOURCE_DATE_EPOCH=$source_epoch"
             echo "DARKPANDA_BUILD_VERSION=$version"
+            echo "CHROMIUM_RUST_VERSION=$rust_version"
           } >> "$GITHUB_ENV"
 
-      - name: Install Linux build prerequisites
+      - name: Configure Windows build paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $paths = [ordered]@{
+            CANVAS_DIST = (Resolve-Path 'component-downloads/component-dist/canvas/${{ matrix.id }}').Path
+            HTML5EVER_DIST = (Resolve-Path 'component-downloads/component-dist/html5ever/${{ matrix.id }}').Path
+            WREQ_DIST = (Resolve-Path 'component-downloads/component-dist/wreq/${{ matrix.id }}').Path
+            BORINGSSL_DIST = (Resolve-Path 'component-downloads/component-dist/boringssl/${{ matrix.id }}').Path
+            DARKPANDA_INSTALL_ROOT = (Join-Path $env:RUNNER_TEMP 'darkpanda-install-${{ matrix.id }}')
+            DARKPANDA_CACHE_DIR = (Join-Path $env:RUNNER_TEMP 'darkpanda-zig-cache-${{ matrix.id }}')
+            DARKPANDA_GLOBAL_CACHE_DIR = (Join-Path $env:RUNNER_TEMP 'darkpanda-zig-global-${{ matrix.id }}')
+          }
+          foreach ($entry in $paths.GetEnumerator()) {
+            "$($entry.Key)=$($entry.Value)" |
+              Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+          New-Item -ItemType Directory -Force logs,reports,"reports/tests/${{ matrix.id }}" |
+            Out-Null
+
+      - name: Configure Linux build paths
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "CANVAS_DIST=$GITHUB_WORKSPACE/component-downloads/component-dist/canvas/${{ matrix.id }}"
+            echo "HTML5EVER_DIST=$GITHUB_WORKSPACE/component-downloads/component-dist/html5ever/${{ matrix.id }}"
+            echo "WREQ_DIST=$GITHUB_WORKSPACE/component-downloads/component-dist/wreq/${{ matrix.id }}"
+            echo "BORINGSSL_DIST=$GITHUB_WORKSPACE/component-downloads/component-dist/boringssl/${{ matrix.id }}"
+            echo "DARKPANDA_INSTALL_ROOT=$RUNNER_TEMP/darkpanda-install-${{ matrix.id }}"
+            echo "DARKPANDA_CACHE_DIR=$RUNNER_TEMP/darkpanda-zig-cache-${{ matrix.id }}"
+            echo "DARKPANDA_GLOBAL_CACHE_DIR=$RUNNER_TEMP/darkpanda-zig-global-${{ matrix.id }}"
+          } >> "$GITHUB_ENV"
+          mkdir -p logs reports "reports/tests/${{ matrix.id }}"
+
+      - name: Install Linux V8 build prerequisites
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            cmake libexpat1-dev libfontconfig1-dev libfreetype-dev \
-            libharfbuzz-dev libicu-dev libjpeg-dev libpng-dev \
-            nasm ninja-build pkg-config rsync xz-utils zlib1g-dev
+            ca-certificates git python3 xz-utils
 
-      - name: Select full Xcode installation
-        if: runner.os == 'macOS'
-        shell: bash
-        run: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
-
-      - name: Install NASM assembler
-        if: runner.os != 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            choco install nasm -y --no-progress
-            echo "C:\Program Files\NASM" >> "$GITHUB_PATH"
-          elif [[ "${{ runner.os }}" == "macOS" ]]; then
-            brew install nasm libpng libjpeg-turbo
-            # Skia's GN sets skia_use_system_libpng/libjpeg_turbo=true, but
-            # rust-skia's macOS platform code never queries pkg-config, so
-            # the keg-only Homebrew headers under the brew prefix are not on
-            # clang's default search path. Inject them via SKIA_GN_ARGS,
-            # which rust-skia appends verbatim to the GN --args string; the
-            # GN `+=` operator extends the default extra_cflags rather than
-            # replacing them.
-            brew_prefix="$(brew --prefix)"
-            {
-              echo "SKIA_GN_ARGS=extra_cflags+=[\"-I${brew_prefix}/include\"] extra_ldflags+=[\"-L${brew_prefix}/lib\"]"
-            } >> "$GITHUB_ENV"
-          fi
-
-      - name: Install Zig on Windows
+      - name: Enter the Visual Studio SDK environment
         if: runner.os == 'Windows'
-        id: zig-windows
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install the fixed Zig compiler on Windows
+        if: runner.os == 'Windows'
+        id: install_zig_windows
         shell: pwsh
         run: |
           ./browser/tools/ci/Install-Zig.ps1 `
@@ -619,9 +1243,9 @@ jobs:
             -Sha256 '${{ matrix.zig_sha256 }}' `
             -InstallRoot "$env:RUNNER_TOOL_CACHE/darkpanda-zig/$env:ZIG_VERSION/${{ matrix.zig_arch }}"
 
-      - name: Install Zig on Unix
-        if: runner.os != 'Windows'
-        id: zig-unix
+      - name: Install the fixed Zig compiler on Linux
+        if: runner.os == 'Linux'
+        id: install_zig_linux
         shell: bash
         run: |
           bash browser/tools/ci/install-zig.sh \
@@ -630,37 +1254,41 @@ jobs:
             '${{ matrix.zig_sha256 }}' \
             "$RUNNER_TOOL_CACHE/darkpanda-zig/$ZIG_VERSION/${{ matrix.zig_arch }}"
 
-      - name: Select pinned Rust toolchain
+      - name: Verify Zig and source formatting
+        id: format
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          rustup set profile minimal
-          rustup toolchain install "$RUST_VERSION" --no-self-update
-          rustup default "$RUST_VERSION"
-          rustup target add '${{ matrix.rust_target }}' --toolchain "$RUST_VERSION"
-          zig version
-          rustc --version --verbose
-          cargo --version --verbose
+          set -o pipefail
+          test "$(zig version)" = "$ZIG_VERSION"
+          (
+            cd browser
+            zig build fmt --summary all
+          ) 2>&1 | tee "logs/fmt-${{ matrix.id }}.log"
 
-      - name: Restore immutable V8 dependency bundle
-        id: v8-cache
-        uses: actions/cache/restore@main
+      - name: Exercise the test-runner JSON/JUnit failure contract
+        id: test_runner_contract
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          '${{ matrix.python_cmd }}' browser/tools/ci/test_test_runner_reports.py \
+            --repo browser \
+            --zig "$(command -v zig)" \
+            2>&1 | tee "logs/test-runner-contract-${{ matrix.id }}.log"
+
+      - name: Restore the immutable V8 dependency bundle
+        id: v8_cache
+        uses: actions/cache/restore@v4
         with:
           path: dependency-cache/${{ matrix.id }}/v8
-          key: darkpanda-v8-${{ matrix.id }}-zig-${{ env.ZIG_VERSION }}-v8-${{ env.V8_VERSION }}-${{ env.ZIG_V8_SOURCE_REVISION }}-target-${{ matrix.zig_target }}-deployment-${{ matrix.platform == 'macos' && env.MACOSX_DEPLOYMENT_TARGET || 'na' }}-${{ env.CACHE_GENERATION }}
+          key: darkpanda-v8-${{ matrix.id }}-zig-${{ env.ZIG_VERSION }}-v8-${{ env.V8_VERSION }}-${{ env.ZIG_V8_SOURCE_REVISION }}-target-${{ matrix.zig_target }}-deployment-na-${{ env.CACHE_GENERATION }}
           enableCrossOsArchive: false
 
-      - name: Restore Cargo source downloads
-        uses: actions/cache@main
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: darkpanda-cargo-${{ matrix.id }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('browser/src/**/Cargo.lock') }}
-          enableCrossOsArchive: false
-
-      - name: Build V8 dependency bundle on Windows
-        if: runner.os == 'Windows' && steps.v8-cache.outputs.cache-hit != 'true'
+      - name: Build the fixed V8 dependency bundle on Windows
+        if: runner.os == 'Windows' && steps.v8_cache.outputs.cache-hit != 'true'
+        id: v8_build_windows
+        continue-on-error: true
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -669,8 +1297,10 @@ jobs:
           $localCache = Join-Path $env:RUNNER_TEMP 'darkpanda-v8-zig-cache'
           $globalCache = Join-Path $env:RUNNER_TEMP 'darkpanda-v8-zig-global-cache'
           $bundleRoot = Join-Path $env:GITHUB_WORKSPACE 'dependency-cache/${{ matrix.id }}/v8'
-          Remove-Item -LiteralPath $sourceRoot,$localCache,$globalCache,$bundleRoot -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path $sourceRoot,$localCache,$globalCache,$bundleRoot -Force | Out-Null
+          Remove-Item -LiteralPath $sourceRoot,$localCache,$globalCache,$bundleRoot `
+            -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $sourceRoot,$localCache,$globalCache,$bundleRoot `
+            -Force | Out-Null
           Push-Location zig-v8-fork
           try {
             zig build build-v8 `
@@ -681,11 +1311,15 @@ jobs:
               "-Dcache_root=$sourceRoot" `
               --cache-dir $localCache `
               --global-cache-dir $globalCache `
-              --summary all
+              --summary all `
+              2>&1 | Tee-Object -FilePath ../logs/v8-build-${{ matrix.id }}.log
           } finally {
             Pop-Location
           }
-          $candidates = @(Get-ChildItem -LiteralPath $localCache -Recurse -File -Filter 'c_v8_standalone.lib')
+          $candidates = @(
+            Get-ChildItem -LiteralPath $localCache -Recurse -File `
+              -Filter 'c_v8_standalone.lib'
+          )
           if ($candidates.Count -ne 1) {
             throw "Expected exactly one standalone V8 archive, found $($candidates.Count)"
           }
@@ -701,11 +1335,13 @@ jobs:
             --zig-v8-source-revision $env:ZIG_V8_SOURCE_REVISION `
             --zig-version $env:ZIG_VERSION
 
-      - name: Build V8 dependency bundle on Unix
-        if: runner.os != 'Windows' && steps.v8-cache.outputs.cache-hit != 'true'
+      - name: Build the fixed V8 dependency bundle on Linux
+        if: runner.os == 'Linux' && steps.v8_cache.outputs.cache-hit != 'true'
+        id: v8_build_linux
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
           source_root="$RUNNER_TEMP/darkpanda-v8-source"
           local_cache="$RUNNER_TEMP/darkpanda-v8-zig-cache"
           global_cache="$RUNNER_TEMP/darkpanda-v8-zig-global-cache"
@@ -723,16 +1359,13 @@ jobs:
               --cache-dir "$local_cache" \
               --global-cache-dir "$global_cache" \
               --summary all
+          ) 2>&1 | tee "logs/v8-build-${{ matrix.id }}.log"
+          mapfile -t candidates < <(
+            find "$source_root" -type f -name '${{ matrix.v8_archive }}'
           )
-          candidates=$(find "$source_root" -type f -name '${{ matrix.v8_archive }}')
-          candidate_count=$(printf '%s\n' "$candidates" | sed '/^$/d' | wc -l | tr -d ' ')
-          [[ $candidate_count -eq 1 ]] || {
-            echo "Expected exactly one V8 archive, found $candidate_count" >&2
-            printf '%s\n' "$candidates" >&2
-            exit 1
-          }
+          test "${#candidates[@]}" -eq 1
           archive="$bundle_root/${{ matrix.v8_archive }}"
-          cp -- "$candidates" "$archive"
+          cp -- "${candidates[0]}" "$archive"
           python3 browser/tools/ci/v8_bundle.py create \
             --archive "$archive" \
             --manifest "$bundle_root/manifest.json" \
@@ -743,7 +1376,9 @@ jobs:
             --zig-v8-source-revision "$ZIG_V8_SOURCE_REVISION" \
             --zig-version "$ZIG_VERSION"
 
-      - name: Verify V8 cache contract
+      - name: Verify the V8 cache contract
+        id: v8_verify
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -756,92 +1391,276 @@ jobs:
             --zig-v8-source-revision "$ZIG_V8_SOURCE_REVISION" \
             --zig-version "$ZIG_VERSION")
           [[ $archive == *'${{ matrix.v8_archive }}' ]]
-          v8_sha=$('${{ matrix.python_cmd }}' -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["archive"]["sha256"])' \
+          v8_sha=$('${{ matrix.python_cmd }}' -c \
+            'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["archive"]["sha256"])' \
             "dependency-cache/${{ matrix.id }}/v8/manifest.json")
           {
             echo "V8_ARCHIVE=$archive"
             echo "V8_ARCHIVE_SHA256=$v8_sha"
           } >> "$GITHUB_ENV"
 
-      - name: Save verified V8 dependency bundle
-        if: steps.v8-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@main
+      - name: Save the verified Windows V8 dependency bundle
+        if: runner.os == 'Windows' && steps.v8_cache.outputs.cache-hit != 'true' && steps.v8_build_windows.outcome == 'success' && steps.v8_verify.outcome == 'success'
+        uses: actions/cache/save@v4
         with:
           path: dependency-cache/${{ matrix.id }}/v8
-          key: ${{ steps.v8-cache.outputs.cache-primary-key }}
+          key: ${{ steps.v8_cache.outputs.cache-primary-key }}
 
-      - name: Build fresh BoringSSL archives on Windows
+      - name: Save the verified Linux V8 dependency bundle
+        if: runner.os == 'Linux' && steps.v8_cache.outputs.cache-hit != 'true' && steps.v8_build_linux.outcome == 'success' && steps.v8_verify.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: dependency-cache/${{ matrix.id }}/v8
+          key: ${{ steps.v8_cache.outputs.cache-primary-key }}
+
+      - name: Compile-check DarkPanda on Windows
         if: runner.os == 'Windows'
+        id: check_windows
+        continue-on-error: true
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          $install = Join-Path $env:RUNNER_TEMP "darkpanda-boringssl-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          $localCache = Join-Path $env:RUNNER_TEMP "darkpanda-boringssl-zig-cache-$env:GITHUB_RUN_ATTEMPT"
-          $globalCache = Join-Path $env:RUNNER_TEMP "darkpanda-boringssl-zig-global-$env:GITHUB_RUN_ATTEMPT"
-          Remove-Item -LiteralPath $install,$localCache,$globalCache -Recurse -Force -ErrorAction SilentlyContinue
-          Push-Location boringssl-zig-fork
+          Push-Location browser
+          try {
+            zig build check `
+              -j${{ matrix.jobs }} `
+              -Dtarget=${{ matrix.zig_target }} `
+              -Doptimize=ReleaseFast `
+              "-Dprebuilt_v8_path=$env:V8_ARCHIVE" `
+              "-Dcanvas_dist=$env:CANVAS_DIST" `
+              "-Dhtml5ever_dist=$env:HTML5EVER_DIST" `
+              "-Dwreq_dist=$env:WREQ_DIST" `
+              "-Dboringssl_dist=$env:BORINGSSL_DIST" `
+              "-Dversion=$env:DARKPANDA_BUILD_VERSION" `
+              --cache-dir $env:DARKPANDA_CACHE_DIR `
+              --global-cache-dir $env:DARKPANDA_GLOBAL_CACHE_DIR `
+              --summary all `
+              2>&1 | Tee-Object -FilePath ../logs/check-${{ matrix.id }}.log
+          } finally {
+            Pop-Location
+          }
+
+      - name: Compile-check DarkPanda on Linux
+        if: runner.os == 'Linux'
+        id: check_linux
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          (
+            cd browser
+            zig build check \
+              '-j${{ matrix.jobs }}' \
+              -Dtarget='${{ matrix.zig_target }}' \
+              -Doptimize=ReleaseFast \
+              -Dprebuilt_v8_path="$V8_ARCHIVE" \
+              -Dcanvas_dist="$CANVAS_DIST" \
+              -Dhtml5ever_dist="$HTML5EVER_DIST" \
+              -Dwreq_dist="$WREQ_DIST" \
+              -Dboringssl_dist="$BORINGSSL_DIST" \
+              -Dversion="$DARKPANDA_BUILD_VERSION" \
+              --cache-dir "$DARKPANDA_CACHE_DIR" \
+              --global-cache-dir "$DARKPANDA_GLOBAL_CACHE_DIR" \
+              --summary all
+          ) 2>&1 | tee "logs/check-${{ matrix.id }}.log"
+
+      - name: Run the complete Debug browser suite on Windows
+        if: runner.os == 'Windows'
+        id: test_debug_windows
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $env:TEST_VERBOSE = 'false'
+          $env:TEST_FAIL_FIRST = 'false'
+          $env:TEST_JSON_OUTPUT = Join-Path $env:GITHUB_WORKSPACE 'reports/tests/${{ matrix.id }}/debug.json'
+          $env:TEST_JUNIT_OUTPUT = Join-Path $env:GITHUB_WORKSPACE 'reports/tests/${{ matrix.id }}/debug.xml'
+          Remove-Item Env:TEST_FILTER -ErrorAction SilentlyContinue
+          Remove-Item Env:METRICS -ErrorAction SilentlyContinue
+          Push-Location browser
+          try {
+            zig build test `
+              -j${{ matrix.jobs }} `
+              -Dtarget=${{ matrix.zig_target }} `
+              -Doptimize=Debug `
+              "-Dprebuilt_v8_path=$env:V8_ARCHIVE" `
+              "-Dcanvas_dist=$env:CANVAS_DIST" `
+              "-Dhtml5ever_dist=$env:HTML5EVER_DIST" `
+              "-Dwreq_dist=$env:WREQ_DIST" `
+              "-Dboringssl_dist=$env:BORINGSSL_DIST" `
+              "-Dversion=$env:DARKPANDA_BUILD_VERSION" `
+              --cache-dir $env:DARKPANDA_CACHE_DIR `
+              --global-cache-dir $env:DARKPANDA_GLOBAL_CACHE_DIR `
+              --summary all `
+              2>&1 | Tee-Object -FilePath ../logs/test-debug-${{ matrix.id }}.log
+          } finally {
+            Pop-Location
+          }
+
+      - name: Run the complete Debug browser suite on Linux
+        if: runner.os == 'Linux'
+        id: test_debug_linux
+        continue-on-error: true
+        shell: bash
+        env:
+          TEST_VERBOSE: "false"
+          TEST_FAIL_FIRST: "false"
+          TEST_JSON_OUTPUT: ${{ github.workspace }}/reports/tests/${{ matrix.id }}/debug.json
+          TEST_JUNIT_OUTPUT: ${{ github.workspace }}/reports/tests/${{ matrix.id }}/debug.xml
+        run: |
+          set -o pipefail
+          unset TEST_FILTER METRICS
+          (
+            cd browser
+            zig build test \
+              '-j${{ matrix.jobs }}' \
+              -Dtarget='${{ matrix.zig_target }}' \
+              -Doptimize=Debug \
+              -Dprebuilt_v8_path="$V8_ARCHIVE" \
+              -Dcanvas_dist="$CANVAS_DIST" \
+              -Dhtml5ever_dist="$HTML5EVER_DIST" \
+              -Dwreq_dist="$WREQ_DIST" \
+              -Dboringssl_dist="$BORINGSSL_DIST" \
+              -Dversion="$DARKPANDA_BUILD_VERSION" \
+              --cache-dir "$DARKPANDA_CACHE_DIR" \
+              --global-cache-dir "$DARKPANDA_GLOBAL_CACHE_DIR" \
+              --summary all
+          ) 2>&1 | tee "logs/test-debug-${{ matrix.id }}.log"
+
+      - name: Run the complete ReleaseFast browser suite on Windows
+        if: runner.os == 'Windows'
+        id: test_release_windows
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $env:TEST_VERBOSE = 'false'
+          $env:TEST_FAIL_FIRST = 'false'
+          $env:TEST_JSON_OUTPUT = Join-Path $env:GITHUB_WORKSPACE 'reports/tests/${{ matrix.id }}/release-fast.json'
+          $env:TEST_JUNIT_OUTPUT = Join-Path $env:GITHUB_WORKSPACE 'reports/tests/${{ matrix.id }}/release-fast.xml'
+          Remove-Item Env:TEST_FILTER -ErrorAction SilentlyContinue
+          Remove-Item Env:METRICS -ErrorAction SilentlyContinue
+          Push-Location browser
+          try {
+            zig build test `
+              -j${{ matrix.jobs }} `
+              -Dtarget=${{ matrix.zig_target }} `
+              -Doptimize=ReleaseFast `
+              "-Dprebuilt_v8_path=$env:V8_ARCHIVE" `
+              "-Dcanvas_dist=$env:CANVAS_DIST" `
+              "-Dhtml5ever_dist=$env:HTML5EVER_DIST" `
+              "-Dwreq_dist=$env:WREQ_DIST" `
+              "-Dboringssl_dist=$env:BORINGSSL_DIST" `
+              "-Dversion=$env:DARKPANDA_BUILD_VERSION" `
+              --cache-dir $env:DARKPANDA_CACHE_DIR `
+              --global-cache-dir $env:DARKPANDA_GLOBAL_CACHE_DIR `
+              --summary all `
+              2>&1 | Tee-Object -FilePath ../logs/test-release-fast-${{ matrix.id }}.log
+          } finally {
+            Pop-Location
+          }
+
+      - name: Run the complete ReleaseFast browser suite on Linux
+        if: runner.os == 'Linux'
+        id: test_release_linux
+        continue-on-error: true
+        shell: bash
+        env:
+          TEST_VERBOSE: "false"
+          TEST_FAIL_FIRST: "false"
+          TEST_JSON_OUTPUT: ${{ github.workspace }}/reports/tests/${{ matrix.id }}/release-fast.json
+          TEST_JUNIT_OUTPUT: ${{ github.workspace }}/reports/tests/${{ matrix.id }}/release-fast.xml
+        run: |
+          set -o pipefail
+          unset TEST_FILTER METRICS
+          (
+            cd browser
+            zig build test \
+              '-j${{ matrix.jobs }}' \
+              -Dtarget='${{ matrix.zig_target }}' \
+              -Doptimize=ReleaseFast \
+              -Dprebuilt_v8_path="$V8_ARCHIVE" \
+              -Dcanvas_dist="$CANVAS_DIST" \
+              -Dhtml5ever_dist="$HTML5EVER_DIST" \
+              -Dwreq_dist="$WREQ_DIST" \
+              -Dboringssl_dist="$BORINGSSL_DIST" \
+              -Dversion="$DARKPANDA_BUILD_VERSION" \
+              --cache-dir "$DARKPANDA_CACHE_DIR" \
+              --global-cache-dir "$DARKPANDA_GLOBAL_CACHE_DIR" \
+              --summary all
+          ) 2>&1 | tee "logs/test-release-fast-${{ matrix.id }}.log"
+
+      - name: Install the ReleaseFast runtime on Windows
+        if: runner.os == 'Windows'
+        id: install_windows
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Remove-Item -LiteralPath $env:DARKPANDA_INSTALL_ROOT -Recurse -Force `
+            -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $env:DARKPANDA_INSTALL_ROOT | Out-Null
+          Push-Location browser
           try {
             zig build install `
               -j${{ matrix.jobs }} `
               -Dtarget=${{ matrix.zig_target }} `
               -Doptimize=ReleaseFast `
-              -Dforce_pic=true `
-              -p $install `
-              --cache-dir $localCache `
-              --global-cache-dir $globalCache `
-              --summary all
-          } finally {
-            Pop-Location
-          }
-          foreach ($name in @('crypto.lib','fipsmodule.lib')) {
-            if (-not (Test-Path -LiteralPath (Join-Path $install "lib/$name") -PathType Leaf)) {
-              throw "Missing BoringSSL archive: $name"
-            }
-          }
-          "BORINGSSL_LIBRARY_DIR=$(Join-Path $install 'lib')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Build fresh DarkPanda runtime on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $install = Join-Path $env:RUNNER_TEMP "darkpanda-install-${{ matrix.id }}-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          $localCache = Join-Path $env:RUNNER_TEMP "darkpanda-zig-cache-${{ matrix.id }}-$env:GITHUB_RUN_ATTEMPT"
-          $globalCache = Join-Path $env:RUNNER_TEMP "darkpanda-zig-global-${{ matrix.id }}-$env:GITHUB_RUN_ATTEMPT"
-          $wreqTarget = Join-Path $env:RUNNER_TEMP "darkpanda-wreq-${{ matrix.id }}-$env:GITHUB_RUN_ATTEMPT"
-          $canvasTarget = Join-Path $env:RUNNER_TEMP "darkpanda-canvas-${{ matrix.id }}-$env:GITHUB_RUN_ATTEMPT"
-          Remove-Item -LiteralPath $install,$localCache,$globalCache,$wreqTarget,$canvasTarget -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path $install -Force | Out-Null
-          $cargo = (Get-Command cargo -CommandType Application).Source
-          Push-Location browser
-          try {
-            zig build install canvas-backend `
-              -j${{ matrix.jobs }} `
-              -Dtarget=${{ matrix.zig_target }} `
-              -Doptimize=ReleaseFast `
               "-Dprebuilt_v8_path=$env:V8_ARCHIVE" `
-              "-Dprebuilt_boringssl_dir=$env:BORINGSSL_LIBRARY_DIR" `
-              "-Dwreq_transport_target_dir=$wreqTarget" `
-              "-Dcanvas_backend_target_dir=$canvasTarget" `
-              "-Dcargo_path=$cargo" `
+              "-Dcanvas_dist=$env:CANVAS_DIST" `
+              "-Dhtml5ever_dist=$env:HTML5EVER_DIST" `
+              "-Dwreq_dist=$env:WREQ_DIST" `
+              "-Dboringssl_dist=$env:BORINGSSL_DIST" `
               "-Dversion=$env:DARKPANDA_BUILD_VERSION" `
-              -p $install `
-              --cache-dir $localCache `
-              --global-cache-dir $globalCache `
-              --summary all
+              -p $env:DARKPANDA_INSTALL_ROOT `
+              --cache-dir $env:DARKPANDA_CACHE_DIR `
+              --global-cache-dir $env:DARKPANDA_GLOBAL_CACHE_DIR `
+              --summary all `
+              2>&1 | Tee-Object -FilePath ../logs/install-${{ matrix.id }}.log
           } finally {
             Pop-Location
           }
-          "DARKPANDA_INSTALL_ROOT=$install" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install the ReleaseFast runtime on Linux
+        if: runner.os == 'Linux'
+        id: install_linux
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          rm -rf -- "$DARKPANDA_INSTALL_ROOT"
+          mkdir -p "$DARKPANDA_INSTALL_ROOT"
+          (
+            cd browser
+            zig build install \
+              '-j${{ matrix.jobs }}' \
+              -Dtarget='${{ matrix.zig_target }}' \
+              -Doptimize=ReleaseFast \
+              -Dprebuilt_v8_path="$V8_ARCHIVE" \
+              -Dcanvas_dist="$CANVAS_DIST" \
+              -Dhtml5ever_dist="$HTML5EVER_DIST" \
+              -Dwreq_dist="$WREQ_DIST" \
+              -Dboringssl_dist="$BORINGSSL_DIST" \
+              -Dversion="$DARKPANDA_BUILD_VERSION" \
+              -p "$DARKPANDA_INSTALL_ROOT" \
+              --cache-dir "$DARKPANDA_CACHE_DIR" \
+              --global-cache-dir "$DARKPANDA_GLOBAL_CACHE_DIR" \
+              --summary all
+          ) 2>&1 | tee "logs/install-${{ matrix.id }}.log"
 
       - name: Bundle the Windows Visual C++ runtime closure
         if: runner.os == 'Windows'
+        id: vc_runtime
+        continue-on-error: true
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} `
+            'Microsoft Visual Studio/Installer/vswhere.exe'
           $visualStudio = (& $vswhere `
             -latest `
             -products '*' `
@@ -850,21 +1669,29 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($visualStudio)) {
             throw 'Visual Studio VC Redistributable installation was not found'
           }
-          $redistVersions = @(Get-ChildItem -LiteralPath (Join-Path $visualStudio 'VC/Redist/MSVC') -Directory |
-            Where-Object { $_.Name -match '^\d+\.' } |
-            Sort-Object Name -Descending)
+          $redistVersions = @(
+            Get-ChildItem -LiteralPath (Join-Path $visualStudio 'VC/Redist/MSVC') `
+              -Directory |
+              Where-Object { $_.Name -match '^\d+\.' } |
+              Sort-Object Name -Descending
+          )
           if ($redistVersions.Count -eq 0) {
             throw 'Visual Studio VC Redistributable version directory was not found'
           }
           $x64Redist = Join-Path $redistVersions[0].FullName 'x64'
-          $crtDirectories = @(Get-ChildItem -LiteralPath $x64Redist -Directory | Where-Object {
-            $_.Name -match '^Microsoft\.VC[0-9]+\.CRT$'
-          })
+          $crtDirectories = @(
+            Get-ChildItem -LiteralPath $x64Redist -Directory |
+              Where-Object { $_.Name -match '^Microsoft\.VC[0-9]+\.CRT$' }
+          )
           if ($crtDirectories.Count -ne 1) {
             throw "Expected one x64 VC runtime directory, found $($crtDirectories.Count)"
           }
           $bin = Join-Path $env:DARKPANDA_INSTALL_ROOT 'bin'
-          foreach ($name in @('msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll')) {
+          foreach ($name in @(
+            'msvcp140.dll',
+            'vcruntime140.dll',
+            'vcruntime140_1.dll'
+          )) {
             $source = Join-Path $crtDirectories[0].FullName $name
             if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
               throw "Missing VC runtime library: $source"
@@ -872,112 +1699,108 @@ jobs:
             Copy-Item -LiteralPath $source -Destination (Join-Path $bin $name)
           }
 
-      - name: Build fresh DarkPanda runtime on Unix
-        if: runner.os != 'Windows'
-        shell: bash
-        env:
-          SKIA_USE_SYSTEM_LIBRARIES: "0"
-        run: |
-          set -euo pipefail
-          install="$RUNNER_TEMP/darkpanda-install-${{ matrix.id }}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          local_cache="$RUNNER_TEMP/darkpanda-zig-cache-${{ matrix.id }}-$GITHUB_RUN_ATTEMPT"
-          global_cache="$RUNNER_TEMP/darkpanda-zig-global-${{ matrix.id }}-$GITHUB_RUN_ATTEMPT"
-          wreq_target="$RUNNER_TEMP/darkpanda-wreq-${{ matrix.id }}-$GITHUB_RUN_ATTEMPT"
-          canvas_target="$RUNNER_TEMP/darkpanda-canvas-${{ matrix.id }}-$GITHUB_RUN_ATTEMPT"
-          rm -rf -- "$install" "$local_cache" "$global_cache" "$wreq_target" "$canvas_target"
-          mkdir -p -- "$install"
-          cargo=$(command -v cargo)
-          (
-            cd browser
-            zig build install canvas-backend \
-              '-j${{ matrix.jobs }}' \
-              -Dtarget='${{ matrix.zig_target }}' \
-              -Doptimize=ReleaseFast \
-              -Dprebuilt_v8_path="$V8_ARCHIVE" \
-              -Dwreq_transport_target_dir="$wreq_target" \
-              -Dcanvas_backend_target_dir="$canvas_target" \
-              -Dcargo_path="$cargo" \
-              -Dversion="$DARKPANDA_BUILD_VERSION" \
-              -p "$install" \
-              --cache-dir "$local_cache" \
-              --global-cache-dir "$global_cache" \
-              --summary all
-          )
-          echo "DARKPANDA_INSTALL_ROOT=$install" >> "$GITHUB_ENV"
-
-      - name: Normalize macOS install names and ad-hoc signatures
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          bin="$DARKPANDA_INSTALL_ROOT/bin"
-          for library in \
-            libdarkpanda.dylib \
-            libwreq.dylib \
-            libdarkpanda_canvas_backend.dylib \
-            libdarkpanda_html5ever.dylib; do
-            install_name_tool -id "@rpath/$library" "$bin/$library"
-          done
-          for consumer in darkpanda libdarkpanda.dylib; do
-            old=$(otool -L "$bin/$consumer" | awk '/libdarkpanda_html5ever\.dylib/{print $1; exit}')
-            if [[ -n $old && $old != '@rpath/libdarkpanda_html5ever.dylib' ]]; then
-              install_name_tool -change "$old" '@rpath/libdarkpanda_html5ever.dylib' "$bin/$consumer"
-            fi
-          done
-          for binary in "$bin"/darkpanda "$bin"/*.dylib; do
-            codesign --force --sign - --timestamp=none "$binary"
-          done
-
-      - name: Verify CLI, FFI and real Skia backend on Windows
+      - name: Attest CLI startup and all four runtime libraries on Windows
         if: runner.os == 'Windows'
+        id: attest_windows
+        continue-on-error: true
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           $bin = Join-Path $env:DARKPANDA_INSTALL_ROOT 'bin'
           $env:PATH = "$bin;$env:PATH"
-          & (Join-Path $bin 'darkpanda.exe') version
+          $env:PYTHONPATH = (Resolve-Path browser/python).Path
+          & (Join-Path $bin 'darkpanda.exe') version `
+            2>&1 | Tee-Object -FilePath logs/runtime-version-${{ matrix.id }}.log
           python browser/tools/runtime_artifact_attestation.py `
             --python-root browser/python `
             --library (Join-Path $bin 'darkpanda.dll') `
             --wreq (Join-Path $bin 'wreq.dll') `
-            --canvas (Join-Path $bin 'darkpanda_canvas_backend.dll')
+            --canvas (Join-Path $bin 'canvas.dll') `
+            --html5ever (Join-Path $bin 'html5ever.dll') `
+            1> reports/runtime-${{ matrix.id }}.json `
+            2> logs/runtime-attestation-${{ matrix.id }}.stderr.log
+          Get-Content -LiteralPath reports/runtime-${{ matrix.id }}.json
 
-      - name: Verify CLI, FFI and real Skia backend on Unix
-        if: runner.os != 'Windows'
+      - name: Attest CLI startup and all four runtime libraries on Linux
+        if: runner.os == 'Linux'
+        id: attest_linux
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
           bin="$DARKPANDA_INSTALL_ROOT/bin"
-          if [[ '${{ matrix.platform }}' == linux ]]; then
-            export LD_LIBRARY_PATH="$bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-            ffi=libdarkpanda.so
-            wreq=libwreq.so
-            canvas=libdarkpanda_canvas_backend.so
-          else
-            export DYLD_LIBRARY_PATH="$bin${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-            ffi=libdarkpanda.dylib
-            wreq=libwreq.dylib
-            canvas=libdarkpanda_canvas_backend.dylib
-          fi
-          "$bin/darkpanda" version
+          export LD_LIBRARY_PATH="$bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export PYTHONPATH="$GITHUB_WORKSPACE/browser/python"
+          "$bin/darkpanda" version \
+            2>&1 | tee "logs/runtime-version-${{ matrix.id }}.log"
           python3 browser/tools/runtime_artifact_attestation.py \
             --python-root browser/python \
-            --library "$bin/$ffi" \
-            --wreq "$bin/$wreq" \
-            --canvas "$bin/$canvas"
+            --library "$bin/libdarkpanda.so" \
+            --wreq "$bin/libwreq.so" \
+            --canvas "$bin/libcanvas.so" \
+            --html5ever "$bin/libhtml5ever.so" \
+            2> >(tee "logs/runtime-attestation-${{ matrix.id }}.stderr.log" >&2) |
+            tee "reports/runtime-${{ matrix.id }}.json"
 
-      - name: Package deterministic runtime archive
+      - name: Package the deterministic Windows runtime
+        if: runner.os == 'Windows'
+        id: package_windows
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $output = Join-Path $env:GITHUB_WORKSPACE 'prebuilt/${{ matrix.id }}'
+          Remove-Item -LiteralPath $output -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $output | Out-Null
+          python browser/tools/ci/package_prebuilt.py `
+            --repo (Resolve-Path browser).Path `
+            --install-root $env:DARKPANDA_INSTALL_ROOT `
+            --output-dir $output `
+            --package-runtime-attestation (Join-Path $env:GITHUB_WORKSPACE 'reports/packaged-runtime-${{ matrix.id }}.json') `
+            --canvas-dist $env:CANVAS_DIST `
+            --html5ever-dist $env:HTML5EVER_DIST `
+            --wreq-dist $env:WREQ_DIST `
+            --boringssl-dist $env:BORINGSSL_DIST `
+            --platform '${{ matrix.platform }}' `
+            --target '${{ matrix.zig_target }}' `
+            --version $env:DARKPANDA_BUILD_VERSION `
+            --repository $env:GITHUB_REPOSITORY `
+            --source-revision $env:SOURCE_REVISION `
+            --source-date-epoch $env:SOURCE_DATE_EPOCH `
+            --v8-version $env:V8_VERSION `
+            --v8-revision $env:V8_REVISION `
+            --v8-archive-sha256 $env:V8_ARCHIVE_SHA256 `
+            --zig-v8-source-revision $env:ZIG_V8_SOURCE_REVISION `
+            --boringssl-source-revision '${{ needs.prepare.outputs.boringssl_revision }}' `
+            --zig-version $env:ZIG_VERSION `
+            --rust-version $env:CHROMIUM_RUST_VERSION `
+            --runner-image "$env:ImageOS/$env:ImageVersion" `
+            2>&1 | Tee-Object -FilePath logs/package-${{ matrix.id }}.log
+          Get-ChildItem -LiteralPath $output -Directory -Filter 'darkpanda-*' |
+            Remove-Item -Recurse -Force
+
+      - name: Package the deterministic Linux runtime
+        if: runner.os == 'Linux'
+        id: package_linux
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
           output="$GITHUB_WORKSPACE/prebuilt/${{ matrix.id }}"
           rm -rf -- "$output"
-          mkdir -p -- "$output"
-          '${{ matrix.python_cmd }}' browser/tools/ci/package_prebuilt.py \
+          mkdir -p "$output"
+          python3 browser/tools/ci/package_prebuilt.py \
             --repo browser \
             --install-root "$DARKPANDA_INSTALL_ROOT" \
             --output-dir "$output" \
+            --package-runtime-attestation \
+              "$GITHUB_WORKSPACE/reports/packaged-runtime-${{ matrix.id }}.json" \
+            --canvas-dist "$CANVAS_DIST" \
+            --html5ever-dist "$HTML5EVER_DIST" \
+            --wreq-dist "$WREQ_DIST" \
+            --boringssl-dist "$BORINGSSL_DIST" \
             --platform '${{ matrix.platform }}' \
             --target '${{ matrix.zig_target }}' \
             --version "$DARKPANDA_BUILD_VERSION" \
@@ -988,91 +1811,438 @@ jobs:
             --v8-revision "$V8_REVISION" \
             --v8-archive-sha256 "$V8_ARCHIVE_SHA256" \
             --zig-v8-source-revision "$ZIG_V8_SOURCE_REVISION" \
-            --boringssl-source-revision "$BORINGSSL_SOURCE_REVISION" \
+            --boringssl-source-revision '${{ needs.prepare.outputs.boringssl_revision }}' \
             --zig-version "$ZIG_VERSION" \
-            --rust-version "$(rustc --version)" \
-            --runner-image "${ImageOS:-unknown}/${ImageVersion:-unknown}"
+            --rust-version "$CHROMIUM_RUST_VERSION" \
+            --runner-image "${ImageOS:-unknown}/${ImageVersion:-unknown}" \
+            2>&1 | tee "logs/package-${{ matrix.id }}.log"
           rm -rf -- "$output"/darkpanda-*/
 
-      - name: Upload platform archive
-        uses: actions/upload-artifact@main
+      - name: Ensure failed builds still have JSON and JUnit reports
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          mkdir -p logs reports "reports/tests/${{ matrix.id }}"
+          for profile in debug release-fast; do
+            json="reports/tests/${{ matrix.id }}/$profile.json"
+            xml="reports/tests/${{ matrix.id }}/$profile.xml"
+            if [[ ! -f $json ]]; then
+              jq -n \
+                '{
+                  schema: "darkpanda-test-results/v1",
+                  summary: {
+                    selected: 0,
+                    passed: 0,
+                    failed: 1,
+                    skipped: 0,
+                    leaked: 0,
+                    duration_nanoseconds: 0,
+                    fail_first: false,
+                    zero_matches: true,
+                    success: false
+                  },
+                  tests: []
+                }' > "$json"
+            fi
+            if [[ ! -f $xml ]]; then
+              cat > "$xml" <<'XML'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <testsuites tests="1" failures="1" errors="0" skipped="0" time="0">
+            <testsuite name="darkpanda" tests="1" failures="1" errors="0" skipped="0" time="0">
+              <testcase name="build prevented test execution">
+                <failure message="Build failed before the test runner produced JUnit"/>
+              </testcase>
+            </testsuite>
+          </testsuites>
+          XML
+            fi
+          done
+          runtime="reports/runtime-${{ matrix.id }}.json"
+          if [[ ! -f $runtime ]] || ! jq -e . "$runtime" >/dev/null 2>&1; then
+            jq -n \
+              --arg target '${{ matrix.id }}' \
+              '{
+                schema: "darkpanda-runtime-load-attestation/v1",
+                status: "FAIL",
+                target: $target,
+                error: "runtime attestation did not produce valid JSON"
+              }' > "$runtime"
+          fi
+          packaged_runtime="reports/packaged-runtime-${{ matrix.id }}.json"
+          if [[ ! -f $packaged_runtime ]] || ! jq -e . "$packaged_runtime" >/dev/null 2>&1; then
+            jq -n \
+              --arg target '${{ matrix.id }}' \
+              '{
+                schema: "darkpanda-packaged-runtime-attestation/v1",
+                status: "FAIL",
+                target: $target,
+                error: "package runtime attestation did not produce valid JSON"
+              }' > "$packaged_runtime"
+          fi
+
+      - name: Write the complete platform result
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          set -u
+          if [[ '${{ matrix.platform }}' == windows ]]; then
+            install_zig='${{ steps.install_zig_windows.outcome }}'
+            check='${{ steps.check_windows.outcome }}'
+            debug_tests='${{ steps.test_debug_windows.outcome }}'
+            release_tests='${{ steps.test_release_windows.outcome }}'
+            install='${{ steps.install_windows.outcome }}'
+            attestation='${{ steps.attest_windows.outcome }}'
+            package='${{ steps.package_windows.outcome }}'
+            package_attestation='${{ steps.package_windows.outcome }}'
+            vc_runtime='${{ steps.vc_runtime.outcome }}'
+            v8_build='${{ steps.v8_build_windows.outcome }}'
+          else
+            install_zig='${{ steps.install_zig_linux.outcome }}'
+            check='${{ steps.check_linux.outcome }}'
+            debug_tests='${{ steps.test_debug_linux.outcome }}'
+            release_tests='${{ steps.test_release_linux.outcome }}'
+            install='${{ steps.install_linux.outcome }}'
+            attestation='${{ steps.attest_linux.outcome }}'
+            package='${{ steps.package_linux.outcome }}'
+            package_attestation='${{ steps.package_linux.outcome }}'
+            vc_runtime=success
+            v8_build='${{ steps.v8_build_linux.outcome }}'
+          fi
+          if [[ '${{ steps.v8_cache.outputs.cache-hit }}' == true ]]; then
+            v8_build=success
+          fi
+          status=passed
+          for outcome in \
+            '${{ steps.source_contract.outcome }}' \
+            "$install_zig" \
+            "$v8_build" \
+            '${{ steps.v8_verify.outcome }}' \
+            "$check" \
+            "$install" \
+            "$vc_runtime" \
+            "$attestation" \
+            "$package" \
+            "$package_attestation"; do
+            [[ $outcome == success ]] || status=failed
+          done
+
+          debug_json="reports/tests/${{ matrix.id }}/debug.json"
+          debug_xml="reports/tests/${{ matrix.id }}/debug.xml"
+          release_json="reports/tests/${{ matrix.id }}/release-fast.json"
+          release_xml="reports/tests/${{ matrix.id }}/release-fast.xml"
+          runtime="reports/runtime-${{ matrix.id }}.json"
+          packaged_runtime="reports/packaged-runtime-${{ matrix.id }}.json"
+          debug_json_sha=$(sha256sum "$debug_json" | cut -d' ' -f1)
+          debug_xml_sha=$(sha256sum "$debug_xml" | cut -d' ' -f1)
+          release_json_sha=$(sha256sum "$release_json" | cut -d' ' -f1)
+          release_xml_sha=$(sha256sum "$release_xml" | cut -d' ' -f1)
+          runtime_sha=$(sha256sum "$runtime" | cut -d' ' -f1)
+          packaged_runtime_sha=$(sha256sum "$packaged_runtime" | cut -d' ' -f1)
+          resolved_sha=unavailable
+          if [[ -f resolved-inputs/resolved-inputs.json ]]; then
+            resolved_sha=$(sha256sum resolved-inputs/resolved-inputs.json | cut -d' ' -f1)
+          else
+            status=failed
+          fi
+
+          package_dir="prebuilt/${{ matrix.id }}"
+          archive_name=
+          archive_sha=
+          if [[ -d $package_dir ]]; then
+            mapfile -t archives < <(
+              find "$package_dir" -maxdepth 1 -type f \
+                \( -name '*.zip' -o -name '*.tar.gz' \) -printf '%f\n' |
+                sort
+            )
+            if [[ ${#archives[@]} -eq 1 ]]; then
+              archive_name=${archives[0]}
+              archive_sha=$(sha256sum "$package_dir/$archive_name" | cut -d' ' -f1)
+            else
+              status=failed
+            fi
+          else
+            status=failed
+          fi
+
+          jq -n \
+            --arg target '${{ matrix.id }}' \
+            --arg platform '${{ matrix.platform }}' \
+            --arg status "$status" \
+            --arg source "$GITHUB_SHA" \
+            --arg profile '${{ needs.prepare.outputs.profile_sha256 }}' \
+            --arg resolved_sha "$resolved_sha" \
+            --arg canvas '${{ needs.prepare.outputs.canvas_revision }}' \
+            --arg html5ever '${{ needs.prepare.outputs.html5ever_revision }}' \
+            --arg wreq '${{ needs.prepare.outputs.wreq_revision }}' \
+            --arg boringssl '${{ needs.prepare.outputs.boringssl_revision }}' \
+            --arg v8_version "$V8_VERSION" \
+            --arg v8_revision "$V8_REVISION" \
+            --arg zig_v8 "$ZIG_V8_SOURCE_REVISION" \
+            --arg source_contract '${{ steps.source_contract.outcome }}' \
+            --arg install_zig "$install_zig" \
+            --arg format '${{ steps.format.outcome }}' \
+            --arg test_runner '${{ steps.test_runner_contract.outcome }}' \
+            --arg v8_build "$v8_build" \
+            --arg v8_verify '${{ steps.v8_verify.outcome }}' \
+            --arg check "$check" \
+            --arg debug_tests "$debug_tests" \
+            --arg release_tests "$release_tests" \
+            --arg install "$install" \
+            --arg vc_runtime "$vc_runtime" \
+            --arg attestation "$attestation" \
+            --arg package "$package" \
+            --arg package_attestation "$package_attestation" \
+            --arg debug_json_sha "$debug_json_sha" \
+            --arg debug_xml_sha "$debug_xml_sha" \
+            --arg release_json_sha "$release_json_sha" \
+            --arg release_xml_sha "$release_xml_sha" \
+            --arg runtime_sha "$runtime_sha" \
+            --arg packaged_runtime_sha "$packaged_runtime_sha" \
+            --arg archive_name "$archive_name" \
+            --arg archive_sha "$archive_sha" \
+            '{
+              schema: "darkpanda-platform-result/v1",
+              target: $target,
+              platform: $platform,
+              status: $status,
+              sourceRevision: $source,
+              chromiumProfileSha256: $profile,
+              resolvedInputsSha256: $resolved_sha,
+              components: {
+                canvas: $canvas,
+                html5ever: $html5ever,
+                wreq: $wreq,
+                boringssl: $boringssl
+              },
+              v8Version: $v8_version,
+              v8Revision: $v8_revision,
+              zigV8SourceRevision: $zig_v8,
+              steps: {
+                sourceContract: $source_contract,
+                installZig: $install_zig,
+                format: $format,
+                testRunnerContract: $test_runner,
+                v8Build: $v8_build,
+                v8Verify: $v8_verify,
+                check: $check,
+                debugTests: $debug_tests,
+                releaseFastTests: $release_tests,
+                install: $install,
+                vcRuntime: $vc_runtime,
+                runtimeAttestation: $attestation,
+                package: $package,
+                packageRuntimeAttestation: $package_attestation
+              },
+              reports: {
+                debugJsonSha256: $debug_json_sha,
+                debugJunitSha256: $debug_xml_sha,
+                releaseFastJsonSha256: $release_json_sha,
+                releaseFastJunitSha256: $release_xml_sha,
+                runtimeAttestationSha256: $runtime_sha,
+                packageRuntimeAttestationSha256: $packaged_runtime_sha
+              },
+              package: {
+                name: $archive_name,
+                sha256: $archive_sha
+              }
+            }' > "reports/darkpanda-${{ matrix.id }}.json"
+
+      - name: Publish the platform summary
+        if: always()
+        shell: bash
+        run: |
+          report="reports/darkpanda-${{ matrix.id }}.json"
+          {
+            echo "## DarkPanda / ${{ matrix.id }}"
+            echo
+            echo "- Result: \`$(jq -r .status "$report")\`"
+            echo "- Debug tests: \`$(jq -r .summary.selected "reports/tests/${{ matrix.id }}/debug.json")\`"
+            echo "- ReleaseFast tests: \`$(jq -r .summary.selected "reports/tests/${{ matrix.id }}/release-fast.json")\`"
+            echo "- Package: \`$(jq -r .package.name "$report")\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload runtime, tests, package, and failure logs
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: darkpanda-${{ matrix.id }}
-          path: prebuilt/${{ matrix.id }}/*
+          name: darkpanda-result-${{ matrix.id }}
+          path: |
+            reports
+            logs
+            prebuilt/${{ matrix.id }}
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
 
-  aggregate:
-    name: Verify and aggregate archives
-    needs: build
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - name: Download platform archives
-        uses: actions/download-artifact@main
-        with:
-          pattern: darkpanda-*
-          path: downloaded
+      - name: Enforce the platform gate
+        if: always()
+        shell: bash
+        run: |
+          jq -e '.status == "passed"' \
+            "reports/darkpanda-${{ matrix.id }}.json" >/dev/null
 
-      - name: Flatten and verify all checksums
+  aggregate:
+    name: Verify and aggregate Windows/Linux runtimes
+    needs:
+      - prepare
+      - native-summary
+      - darkpanda
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download every DarkPanda platform result
+        id: download_platforms
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: darkpanda-result-*
+          path: platform-results
+
+      - name: Download the resolved source graph
+        id: download_inputs
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: resolved-inputs
+          path: resolved-inputs
+
+      - name: Check out the aggregate validator
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: browser
+          persist-credentials: false
+
+      - name: Validate reports, package contents, and every checksum
+        id: validate
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p release
-          find downloaded -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.sha256' \) -exec cp -- {} release/ \;
-          mapfile -t checksum_files < <(find release -maxdepth 1 -type f -name '*.sha256' | sort)
-          [[ ${#checksum_files[@]} -eq 4 ]] || {
-            echo "Expected four platform checksum files, found ${#checksum_files[@]}" >&2
-            exit 1
-          }
-          (
-            cd release
-            for checksum in *.sha256; do sha256sum --check "$checksum"; done
-            sha256sum *.zip *.tar.gz 2>/dev/null | sort -k2 > SHA256SUMS
-          )
+          python3 browser/tools/ci/aggregate_darkpanda_reports.py \
+            --results platform-results \
+            --resolved-inputs resolved-inputs/resolved-inputs.json \
+            --output aggregate/summary.json \
+            --markdown aggregate/summary.md \
+            --release-dir release
 
-      - name: Upload complete prebuilt set
-        uses: actions/upload-artifact@main
+      - name: Ensure the aggregate failure is machine-readable
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p aggregate
+          if [[ ! -f aggregate/summary.json ]]; then
+            jq -n \
+              --arg platforms '${{ steps.download_platforms.outcome }}' \
+              --arg inputs '${{ steps.download_inputs.outcome }}' \
+              --arg validator '${{ steps.validate.outcome }}' \
+              '{
+                schema: "darkpanda-prebuilt-aggregate/v1",
+                status: "failed",
+                platforms: {},
+                errors: [
+                  "aggregate validator could not run",
+                  ("platform download: " + $platforms),
+                  ("resolved input download: " + $inputs),
+                  ("validator: " + $validator)
+                ]
+              }' > aggregate/summary.json
+          fi
+          if [[ ! -f aggregate/summary.md ]]; then
+            printf '%s\n' \
+              '## DarkPanda Windows/Linux aggregate' \
+              '' \
+              '- Status: `failed`' \
+              '- The aggregate validator could not run.' \
+              > aggregate/summary.md
+          fi
+
+      - name: Publish the final build summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f aggregate/summary.md ]]; then
+            cat aggregate/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '%s\n' \
+              '## DarkPanda Windows/Linux aggregate' \
+              '' \
+              'The aggregate validator did not produce a report.' \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the aggregate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: darkpanda-aggregate-report
+          path: aggregate
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload the complete verified prebuilt set
+        if: steps.validate.outcome == 'success'
+        uses: actions/upload-artifact@v4
         with:
           name: darkpanda-prebuilt-all
-          path: release/*
+          path: release
           if-no-files-found: error
           compression-level: 0
           retention-days: 90
 
-      - name: Resolve release tag
-        id: release
-        if: github.ref_type == 'tag' || inputs.publish_release == true
+      - name: Enforce the final Windows/Linux gate
+        if: always()
         shell: bash
         run: |
-          set -euo pipefail
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            tag=$GITHUB_REF_NAME
-          else
-            tag='${{ inputs.release_tag }}'
-            [[ -n $tag ]] || {
-              echo "release_tag is required when publish_release is enabled" >&2
-              exit 1
-            }
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          test '${{ needs.prepare.result }}' = success
+          test '${{ needs.native-summary.result }}' = success
+          test '${{ needs.darkpanda.result }}' = success
+          test '${{ steps.download_platforms.outcome }}' = success
+          test '${{ steps.download_inputs.outcome }}' = success
+          test '${{ steps.validate.outcome }}' = success
 
-      - name: Publish GitHub Release
-        if: steps.release.outputs.tag != ''
-        shell: bash
+  release:
+    name: Publish verified Windows/Linux prerelease
+    needs:
+      - aggregate
+    if: needs.aggregate.result == 'success' && inputs.publish_release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download the verified prebuilt set
+        uses: actions/download-artifact@v4
+        with:
+          name: darkpanda-prebuilt-all
+          path: release
+
+      - name: Publish or update the prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
         run: |
           set -euo pipefail
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" release/* --repo "$GITHUB_REPOSITORY" --clobber
+          tag="v1.0.0-ci.${GITHUB_RUN_NUMBER}"
+          mapfile -t assets < <(find release -maxdepth 1 -type f -print | sort)
+          test "${#assets[@]}" -ge 5
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber \
+              "${assets[@]}"
           else
-            gh release create "$RELEASE_TAG" release/* \
+            gh release create "$tag" \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
-              --title "DarkPanda $RELEASE_TAG" \
-              --generate-notes
+              --title "DarkPanda CI ${GITHUB_RUN_NUMBER}" \
+              --notes "Verified Windows/Linux prebuilt runtime for commit $GITHUB_SHA." \
+              --prerelease \
+              "${assets[@]}"
           fi
+          gh release view "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json url \
+            --jq '"Release: " + .url' >> "$GITHUB_STEP_SUMMARY"

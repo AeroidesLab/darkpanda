@@ -1,4 +1,4 @@
-"""Exercise the real dynamically loaded rust-skia Canvas backend through FFI."""
+"""Exercise the real dynamically loaded ABI-v5 Canvas backend through FFI."""
 
 from __future__ import annotations
 
@@ -7,19 +7,19 @@ import ctypes
 import json
 from pathlib import Path
 
-from darkpanda import CanvasDriver, ClientProfile, Runtime
+from darkpanda import CanvasDriver, CanvasFallback, ClientProfile, Runtime
 
 
 def native_backend_identity(path: Path) -> tuple[int, str]:
     library = ctypes.CDLL(str(path))
-    library.dp_canvas_backend_abi_version.argtypes = []
-    library.dp_canvas_backend_abi_version.restype = ctypes.c_uint32
-    library.dp_canvas_backend_version.argtypes = []
-    library.dp_canvas_backend_version.restype = ctypes.c_char_p
-    version = library.dp_canvas_backend_version()
+    library.cs_canvas_backend_abi_version.argtypes = []
+    library.cs_canvas_backend_abi_version.restype = ctypes.c_uint32
+    library.cs_canvas_backend_version.argtypes = []
+    library.cs_canvas_backend_version.restype = ctypes.c_char_p
+    version = library.cs_canvas_backend_version()
     if version is None:
         raise AssertionError("Canvas backend returned a null version string")
-    return int(library.dp_canvas_backend_abi_version()), version.decode("utf-8")
+    return int(library.cs_canvas_backend_abi_version()), version.decode("utf-8")
 
 
 def main() -> None:
@@ -41,6 +41,7 @@ def main() -> None:
         wreq_library_path=wreq,
         canvas_library_path=canvas,
         canvas_driver=CanvasDriver.DYNAMIC,
+        canvas_fallback=CanvasFallback.DISABLED,
         profile=ClientProfile.CHROME149,
         locale="en-US",
         timezone="UTC",
@@ -86,8 +87,8 @@ def main() -> None:
     }, result
 
     abi, version = native_backend_identity(canvas)
-    assert abi == 2, abi
-    assert "rust-skia/0.99.0" in version, version
+    assert abi == 5, abi
+    assert version.strip(), version
     print(
         json.dumps(
             {

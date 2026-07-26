@@ -4,6 +4,13 @@ const adapter = @import("../../canvas_backend/adapter.zig");
 
 pub const BackendKind = adapter.BackendKind;
 pub const RGBA8 = adapter.RGBA8;
+pub const Blend = adapter.Blend;
+pub const StyleKind = adapter.StyleKind;
+pub const GradientKind = adapter.GradientKind;
+pub const PatternRepetition = adapter.PatternRepetition;
+pub const StyleHandle = adapter.StyleHandle;
+pub const ReadPixelFormat = adapter.ReadPixelFormat;
+pub const ColorSpace = adapter.ColorSpace;
 
 pub const max_dimension: u32 = 32_768;
 pub const max_surface_bytes: usize = 512 * 1024 * 1024;
@@ -14,37 +21,45 @@ allocator: std.mem.Allocator,
 kind: BackendKind,
 width: u32,
 height: u32,
+flags: u32,
 profile_seed: u64,
 canvas_seed: u64,
 implementation: Implementation,
 fault: ?anyerror = null,
+
+fn isOpaque(self: *const Surface) bool {
+    return self.flags & adapter.SurfaceFlag.OPAQUE != 0;
+}
 
 const Implementation = union(enum) {
     dynamic: adapter.OwnedSurface,
     software: []u8,
 };
 
+/// chrome-skia ABI v5 backend: full Canvas 2D state machine.
 pub fn initDynamic(
     allocator: std.mem.Allocator,
     api: *const adapter.Api,
     kind: BackendKind,
     width: u32,
     height: u32,
+    flags: u32,
     profile_seed: u64,
     canvas_seed: u64,
 ) !Surface {
-    _ = try validateDimensions(width, height);
+    _ = try validateDimensions(width, height, flags);
     var owned = try api.create(&.{
-        .backend_kind = kind,
+        .backend_kind = @enumFromInt(@intFromEnum(kind)),
         .width = width,
         .height = height,
+        .flags = flags,
         .profile_seed = profile_seed,
         .canvas_seed = canvas_seed,
     });
     errdefer owned.deinit() catch {};
 
     const info = try owned.info();
-    if (info.backend_kind != kind or info.width != width or info.height != height or
+    if (@intFromEnum(info.backend_kind) != @intFromEnum(kind) or info.width != width or info.height != height or
         info.pixel_format != .rgba8_premul_srgb or
         info.profile_seed != profile_seed or info.canvas_seed != canvas_seed)
     {
@@ -56,6 +71,7 @@ pub fn initDynamic(
         .kind = kind,
         .width = width,
         .height = height,
+        .flags = flags,
         .profile_seed = profile_seed,
         .canvas_seed = canvas_seed,
         .implementation = .{ .dynamic = owned },
@@ -67,6 +83,7 @@ pub fn initSoftware(
     kind: BackendKind,
     width: u32,
     height: u32,
+    flags: u32,
     profile_seed: u64,
     canvas_seed: u64,
 ) !Surface {
@@ -75,6 +92,7 @@ pub fn initSoftware(
         kind,
         width,
         height,
+        flags,
         profile_seed,
         canvas_seed,
     );
@@ -83,6 +101,7 @@ pub fn initSoftware(
         .kind = kind,
         .width = width,
         .height = height,
+        .flags = flags,
         .profile_seed = profile_seed,
         .canvas_seed = canvas_seed,
         .implementation = .{ .software = pixels },
@@ -111,7 +130,7 @@ pub fn requireHealthy(self: *const Surface) !void {
 
 pub fn resize(self: *Surface, width: u32, height: u32) !void {
     try self.requireHealthy();
-    _ = try validateDimensions(width, height);
+    _ = try validateDimensions(width, height, self.flags);
     switch (self.implementation) {
         .dynamic => |*owned| try owned.resize(width, height),
         .software => |old_pixels| {
@@ -120,6 +139,7 @@ pub fn resize(self: *Surface, width: u32, height: u32) !void {
                 self.kind,
                 width,
                 height,
+                self.flags,
                 self.profile_seed,
                 self.canvas_seed,
             );
@@ -134,9 +154,20 @@ pub fn resize(self: *Surface, width: u32, height: u32) !void {
 pub fn clear(self: *Surface, color: RGBA8) !void {
     try self.requireHealthy();
     switch (self.implementation) {
-        .dynamic => |*owned| try owned.clear(color),
+        .dynamic => |*owned| {
+            // No whole-surface clear in v3: composite kSrc + fillRect, state untouched.
+            try owned.save();
+            defer owned.restore() catch {};
+            try owned.setGlobalCompositeOperation(.src);
+            try owned.setFillStyleColor(color);
+            try owned.fillRect(0, 0, @floatFromInt(self.width), @floatFromInt(self.height));
+        },
         .software => |pixels| {
-            const premultiplied = premultiply(color);
+            const effective = if (self.isOpaque())
+                RGBA8{ .r = color.r, .g = color.g, .b = color.b, .a = 255 }
+            else
+                color;
+            const premultiplied = premultiply(effective);
             var offset: usize = 0;
             while (offset < pixels.len) : (offset += 4) {
                 @memcpy(pixels[offset .. offset + 4], &premultiplied);
@@ -149,15 +180,28 @@ pub fn clearRect(self: *Surface, x: f64, y: f64, width: f64, height: f64) !void 
     try self.requireHealthy();
     switch (self.implementation) {
         .dynamic => |*owned| try owned.clearRect(x, y, width, height),
-        .software => |pixels| try clearSoftwareRect(
-            pixels,
-            self.width,
-            self.height,
-            x,
-            y,
-            width,
-            height,
-        ),
+        .software => |pixels| if (self.isOpaque())
+            try fillSoftwareRect(
+                pixels,
+                self.width,
+                self.height,
+                x,
+                y,
+                width,
+                height,
+                .{ .r = 0, .g = 0, .b = 0, .a = 255 },
+                1,
+            )
+        else
+            try clearSoftwareRect(
+                pixels,
+                self.width,
+                self.height,
+                x,
+                y,
+                width,
+                height,
+            ),
     }
 }
 
@@ -175,7 +219,13 @@ pub fn fillRect(
         return error.InvalidCanvasOpacity;
     }
     switch (self.implementation) {
-        .dynamic => |*owned| try owned.fillRect(x, y, width, height, color, opacity),
+        .dynamic => |*owned| {
+            try owned.save();
+            defer owned.restore() catch {};
+            try owned.setGlobalAlpha(opacity);
+            try owned.setFillStyleColor(color);
+            try owned.fillRect(x, y, width, height);
+        },
         .software => |pixels| try fillSoftwareRect(
             pixels,
             self.width,
@@ -188,6 +238,16 @@ pub fn fillRect(
             opacity,
         ),
     }
+}
+
+/// Access the chrome-skia ABI v5 state machine, when this surface is ABI v5-backed.
+/// Returns null for the software fallback; callers should degrade to the
+/// legacy noop behaviour in that case.
+pub fn backend(self: *Surface) ?*adapter.OwnedSurface {
+    return switch (self.implementation) {
+        .dynamic => |*owned| owned,
+        else => null,
+    };
 }
 
 pub fn readPixels(
@@ -221,6 +281,57 @@ pub fn readPixels(
             height,
             destination,
             row_bytes,
+        ),
+    }
+}
+
+/// Straight-alpha readback used by getImageData's wide-gamut and float pixel
+/// formats. The dynamic backend performs both unpremultiplication and color
+/// conversion in Skia, before quantizing to the requested element type.
+pub fn readPixelsFormat(
+    self: *Surface,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    destination: []u8,
+    row_bytes: usize,
+    format: ReadPixelFormat,
+    color_space: ColorSpace,
+) !void {
+    try self.requireHealthy();
+    try validateRectAndBufferWithBpp(
+        self.width,
+        self.height,
+        x,
+        y,
+        width,
+        height,
+        destination.len,
+        row_bytes,
+        format.bytesPerPixel(),
+    );
+    switch (self.implementation) {
+        .dynamic => |*owned| try owned.readPixelsFormat(
+            x,
+            y,
+            width,
+            height,
+            destination,
+            row_bytes,
+            format,
+            color_space,
+        ),
+        .software => |pixels| readSoftwarePixelsFormat(
+            pixels,
+            self.width,
+            x,
+            y,
+            width,
+            height,
+            destination,
+            row_bytes,
+            format,
         ),
     }
 }
@@ -294,16 +405,33 @@ fn premultiplyChannel(channel: u8, alpha: u8) u8 {
 }
 
 fn unpremultiplyChannel(channel: u8, alpha: u8) u8 {
-    const expanded = (@as(u32, channel) * 255 + @as(u32, alpha) / 2) / @as(u32, alpha);
-    return @intCast(@min(expanded, 255));
+    // Match SkConvertPixels' high-precision raster-pipeline path used by
+    // Chrome getImageData(): normalize bytes as f32, unpremultiply, scale,
+    // then round to nearest-even (the x86 cvtps instruction).
+    const inverse_255: f32 = 1.0 / 255.0;
+    const component = @as(f32, @floatFromInt(channel)) * inverse_255;
+    const normalized_alpha = @as(f32, @floatFromInt(alpha)) * inverse_255;
+    const expanded = component * (1.0 / normalized_alpha) * 255.0;
+    const lower = @floor(expanded);
+    const lower_int: u32 = @intFromFloat(lower);
+    const fraction = expanded - lower;
+    const rounded = if (fraction > 0.5 or (fraction == 0.5 and lower_int & 1 != 0))
+        lower_int + 1
+    else
+        lower_int;
+    return @intCast(@min(rounded, 255));
 }
 
-fn validateDimensions(width: u32, height: u32) !usize {
+fn validateDimensions(width: u32, height: u32, flags: u32) !usize {
+    if (flags & ~adapter.SurfaceFlag.VALID_MASK != 0) return error.InvalidCanvasSurfaceFlags;
     if (width > max_dimension or height > max_dimension) return error.CanvasSizeOverflow;
-    const row_bytes = try std.math.mul(usize, width, 4);
-    const byte_count = try std.math.mul(usize, row_bytes, height);
-    if (byte_count > max_surface_bytes) return error.CanvasSizeOverflow;
-    return byte_count;
+    const pixels = try std.math.mul(usize, width, height);
+    const budget_bpp: usize = if (flags & adapter.SurfaceFlag.FLOAT16 != 0) 8 else 4;
+    const budget_bytes = try std.math.mul(usize, pixels, budget_bpp);
+    if (budget_bytes > max_surface_bytes) return error.CanvasSizeOverflow;
+    // The software fallback and public pixel ABI remain RGBA8 even when the
+    // real Skia backing uses F16.
+    return std.math.mul(usize, pixels, 4);
 }
 
 fn validateRectAndBuffer(
@@ -316,10 +444,34 @@ fn validateRectAndBuffer(
     buffer_len: usize,
     row_bytes: usize,
 ) !void {
+    return validateRectAndBufferWithBpp(
+        surface_width,
+        surface_height,
+        x,
+        y,
+        width,
+        height,
+        buffer_len,
+        row_bytes,
+        4,
+    );
+}
+
+fn validateRectAndBufferWithBpp(
+    surface_width: u32,
+    surface_height: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    buffer_len: usize,
+    row_bytes: usize,
+    bytes_per_pixel: usize,
+) !void {
     const right = std.math.add(u32, x, width) catch return error.CanvasOutOfBounds;
     const bottom = std.math.add(u32, y, height) catch return error.CanvasOutOfBounds;
     if (right > surface_width or bottom > surface_height) return error.CanvasOutOfBounds;
-    const tight = try std.math.mul(usize, width, 4);
+    const tight = try std.math.mul(usize, width, bytes_per_pixel);
     if (height != 0 and row_bytes < tight) return error.CanvasBufferTooSmall;
     const required = if (width == 0 or height == 0)
         0
@@ -337,15 +489,22 @@ fn allocateSoftwarePixels(
     kind: BackendKind,
     width: u32,
     height: u32,
+    flags: u32,
     profile_seed: u64,
     canvas_seed: u64,
 ) ![]u8 {
-    const byte_count = try validateDimensions(width, height);
+    const byte_count = try validateDimensions(width, height, flags);
     const pixels = try allocator.alloc(u8, byte_count);
     errdefer allocator.free(pixels);
     switch (kind) {
         .skia => @memset(pixels, 0),
         .fake => seedFakePixels(pixels, width, height, profile_seed, canvas_seed),
+    }
+    if (flags & adapter.SurfaceFlag.OPAQUE != 0) {
+        var alpha_index: usize = 3;
+        while (alpha_index < pixels.len) : (alpha_index += 4) {
+            pixels[alpha_index] = 255;
+        }
     }
     return pixels;
 }
@@ -523,6 +682,55 @@ fn copyRowsFromSurface(
     }
 }
 
+fn readSoftwarePixelsFormat(
+    surface: []const u8,
+    surface_width: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    destination: []u8,
+    destination_row_bytes: usize,
+    format: ReadPixelFormat,
+) void {
+    const surface_row_bytes = @as(usize, surface_width) * 4;
+    const output_bpp = format.bytesPerPixel();
+    for (0..height) |row| {
+        for (0..width) |column| {
+            const source_offset =
+                (@as(usize, y) + row) * surface_row_bytes +
+                (@as(usize, x) + column) * 4;
+            const source: *const [4]u8 = @ptrCast(surface.ptr + source_offset);
+            const straight = unpremultiplyPixel(source);
+            const output_offset = row * destination_row_bytes + column * output_bpp;
+            switch (format) {
+                .rgba8_unorm => @memcpy(
+                    destination[output_offset .. output_offset + 4],
+                    &straight,
+                ),
+                .rgba_float16 => for (straight, 0..) |channel, component| {
+                    const value: f16 = @floatCast(
+                        @as(f32, @floatFromInt(channel)) / 255.0,
+                    );
+                    const component_offset = output_offset + component * @sizeOf(f16);
+                    @memcpy(
+                        destination[component_offset .. component_offset + @sizeOf(f16)],
+                        std.mem.asBytes(&value),
+                    );
+                },
+                .rgba_float32 => for (straight, 0..) |channel, component| {
+                    const value = @as(f32, @floatFromInt(channel)) / 255.0;
+                    const component_offset = output_offset + component * @sizeOf(f32);
+                    @memcpy(
+                        destination[component_offset .. component_offset + @sizeOf(f32)],
+                        std.mem.asBytes(&value),
+                    );
+                },
+            }
+        }
+    }
+}
+
 fn copyRowsToSurface(
     surface: []u8,
     surface_width: u32,
@@ -546,6 +754,10 @@ fn copyRowsToSurface(
 }
 
 test "premultiply and unpremultiply match Chrome 149 ImageData quantization" {
+    // Direct integer division rounds this tie up to 77; Skia's float32
+    // raster pipeline rounds it to even (76), as observed in Chrome 149.
+    try std.testing.expectEqual(@as(u8, 76), unpremultiplyChannel(42, 140));
+
     const Case = struct { straight: [4]u8, observable: [4]u8 };
     const cases = [_]Case{
         .{ .straight = .{ 1, 2, 3, 0 }, .observable = .{ 0, 0, 0, 0 } },
@@ -563,12 +775,26 @@ test "premultiply and unpremultiply match Chrome 149 ImageData quantization" {
     }
 }
 
+test "all valid premultiplied channels survive Chrome 149 roundtrip" {
+    for (1..256) |alpha_value| {
+        const alpha: u8 = @intCast(alpha_value);
+        var previous: u8 = 0;
+        for (0..alpha_value + 1) |channel_value| {
+            const channel: u8 = @intCast(channel_value);
+            const straight = unpremultiplyChannel(channel, alpha);
+            try std.testing.expect(straight >= previous);
+            try std.testing.expectEqual(channel, premultiplyChannel(straight, alpha));
+            previous = straight;
+        }
+    }
+}
+
 test "software fake is seeded, stable, and uses one coherent surface" {
-    var first = try Surface.initSoftware(std.testing.allocator, .fake, 2, 1, 11, 22);
+    var first = try Surface.initSoftware(std.testing.allocator, .fake, 2, 1, 0, 11, 22);
     defer first.deinit() catch unreachable;
-    var second = try Surface.initSoftware(std.testing.allocator, .fake, 2, 1, 11, 22);
+    var second = try Surface.initSoftware(std.testing.allocator, .fake, 2, 1, 0, 11, 22);
     defer second.deinit() catch unreachable;
-    var different = try Surface.initSoftware(std.testing.allocator, .fake, 2, 1, 11, 23);
+    var different = try Surface.initSoftware(std.testing.allocator, .fake, 2, 1, 0, 11, 23);
     defer different.deinit() catch unreachable;
 
     var a: [8]u8 = undefined;

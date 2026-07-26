@@ -17,9 +17,9 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
-// WHATWG "domain to ASCII" lives in the rust-url FFI (src/html5ever/url.rs),
-// which uses the UTS#46-conformant `idna` crate — the same engine rust-url
-// itself uses.
+// WHATWG "domain to ASCII" lives in the external HTML5ever component's URL
+// ABI, which uses the UTS#46-conformant `idna` crate — the same engine
+// rust-url itself uses.
 extern "c" fn darkpanda_url_domain_to_ascii(
     host_ptr: [*]const u8,
     host_len: usize,

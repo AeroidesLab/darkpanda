@@ -258,8 +258,6 @@ pub fn deinit(self: *Page) void {
     self.popups = .empty;
     self.closed_frames = .empty;
     self.retired_frames = .empty;
-    self.canvas_backend.deinit();
-
     if (comptime IS_DEBUG) {
         std.debug.assert(self.blob_url_registry.count() == 0);
     }
@@ -281,6 +279,13 @@ pub fn deinit(self: *Page) void {
         }
         self.finalizer_callbacks = .empty;
     }
+
+    // CanvasGradient and CanvasPattern finalizers release opaque style handles
+    // through the dynamically loaded canvas API. Keep both the surfaces and
+    // the library alive until every remaining JS-backed object has finalized;
+    // unloading the backend first leaves their cached API function pointers
+    // dangling and turns normal Page teardown into an access violation.
+    self.canvas_backend.deinit();
 
     self.globals.deinit();
 

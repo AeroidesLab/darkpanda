@@ -183,7 +183,8 @@
 
     verifyType(
       () => new ImageData(1, 1, { colorSpace: "rec2020" }),
-      "The provided value 'rec2020' is not a valid enum value of the type PredefinedColorSpace.",
+      "Failed to read the 'colorSpace' property from 'ImageDataSettings': The provided value 'rec2020' is not a valid enum value of type PredefinedColorSpace.",
+      "The provided value 'rec2020' is not a valid enum value of type PredefinedColorSpace.",
     );
     verifyType(
       () => new ImageData(1, 1, { pixelFormat: "rgb10a2" }),

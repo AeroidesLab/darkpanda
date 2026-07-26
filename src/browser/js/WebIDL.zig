@@ -18,6 +18,17 @@ pub const Attribute = struct {
     name: []const u8,
 };
 
+pub const DictionaryMemberParent = union(enum) {
+    operation: Operation,
+    constructor: []const u8,
+};
+
+pub const DictionaryMember = struct {
+    parent: DictionaryMemberParent,
+    dictionary: []const u8,
+    member: []const u8,
+};
+
 /// Context attached to a Web IDL conversion. Constructors, operations, and
 /// attribute getters/setters use different Chrome message prefixes while
 /// sharing the same compact native conversion reason in Error.stack.
@@ -26,6 +37,7 @@ pub const ConversionContext = union(enum) {
     constructor: []const u8,
     attribute_get: Attribute,
     attribute_set: Attribute,
+    dictionary_member: DictionaryMember,
 };
 
 fn fullConstructorMessage(exec: *js.Execution, interface: []const u8, reason: []const u8) ![]const u8 {
@@ -66,6 +78,17 @@ fn contextualMessage(exec: *js.Execution, context: ConversionContext, reason: []
         .constructor => |interface| fullConstructorMessage(exec, interface, reason),
         .attribute_get => |attribute| fullAttributeGetMessage(exec, attribute, reason),
         .attribute_set => |attribute| fullAttributeSetMessage(exec, attribute, reason),
+        .dictionary_member => |member| {
+            const member_reason = try std.fmt.allocPrint(
+                exec.call_arena,
+                "Failed to read the '{s}' property from '{s}': {s}",
+                .{ member.member, member.dictionary, reason },
+            );
+            return switch (member.parent) {
+                .operation => |operation| fullMessage(exec, operation, member_reason),
+                .constructor => |interface| fullConstructorMessage(exec, interface, member_reason),
+            };
+        },
     };
 }
 
@@ -101,16 +124,118 @@ fn materializeStack(local: *const js.Local, exception: *const js.v8.Value) void 
     _ = js.v8.v8__Object__Get(@ptrCast(exception), local.handle, key);
 }
 
+fn v8StringToOwned(
+    allocator: std.mem.Allocator,
+    isolate: *js.v8.Isolate,
+    value: *const js.v8.String,
+) ?[]u8 {
+    const len = js.v8.v8__String__Utf8Length(value, isolate);
+    if (len < 0) return null;
+    const buffer = allocator.alloc(u8, @intCast(len)) catch return null;
+    const written = js.v8.v8__String__WriteUtf8(
+        value,
+        isolate,
+        buffer.ptr,
+        buffer.len,
+        js.v8.NO_NULL_TERMINATION | js.v8.REPLACE_INVALID_UTF8,
+    );
+    if (written > buffer.len) {
+        allocator.free(buffer);
+        return null;
+    }
+    return buffer[0..written];
+}
+
+/// V8 invokes this callback only for exceptions created while a native API
+/// callback is active. Exceptions thrown by author code across a nested
+/// C++ -> JavaScript boundary are deliberately excluded, which is the crucial
+/// distinction that message-text heuristics cannot make.
+pub fn exceptionPropagationCallback(
+    isolate_or_null: ?*js.v8.Isolate,
+    exception_or_null: ?*const js.v8.Object,
+    interface_name_or_null: ?*const js.v8.String,
+    property_name_or_null: ?*const js.v8.String,
+    context_kind: js.v8.ExceptionContext,
+) callconv(.c) void {
+    const isolate = isolate_or_null orelse return;
+    const exception = exception_or_null orelse return;
+    const interface_name_value = interface_name_or_null orelse return;
+    const property_name_value = property_name_or_null orelse return;
+    const context = js.v8.v8__Isolate__GetCurrentContext(isolate) orelse return;
+    const allocator = std.heap.page_allocator;
+
+    const interface_name = v8StringToOwned(allocator, isolate, interface_name_value) orelse return;
+    defer allocator.free(interface_name);
+    const property_name_owned = v8StringToOwned(allocator, isolate, property_name_value) orelse return;
+    defer allocator.free(property_name_owned);
+    var property_name: []const u8 = property_name_owned;
+
+    if (context_kind == js.v8.kExceptionContext_AttributeGet and std.mem.startsWith(u8, property_name, "get ")) {
+        property_name = property_name[4..];
+    } else if (context_kind == js.v8.kExceptionContext_AttributeSet and std.mem.startsWith(u8, property_name, "set ")) {
+        property_name = property_name[4..];
+    }
+
+    const message_key = js.v8.v8__String__NewFromUtf8(isolate, "message", js.v8.kNormal, 7) orelse return;
+    const reason_value = js.v8.v8__Object__Get(exception, context, message_key) orelse return;
+    const reason_string = js.v8.v8__Value__ToString(reason_value, context) orelse return;
+    const reason = v8StringToOwned(allocator, isolate, reason_string) orelse return;
+    defer allocator.free(reason);
+
+    // Materialize Error.stack before replacing the message so its first line
+    // remains the compact native conversion reason, matching Blink.
+    const stack_key = js.v8.v8__String__NewFromUtf8(isolate, "stack", js.v8.kNormal, 5) orelse return;
+    _ = js.v8.v8__Object__Get(exception, context, stack_key);
+
+    const full = switch (context_kind) {
+        js.v8.kExceptionContext_Constructor => std.fmt.allocPrint(
+            allocator,
+            "Failed to construct '{s}': {s}",
+            .{ property_name, reason },
+        ),
+        js.v8.kExceptionContext_Operation => std.fmt.allocPrint(
+            allocator,
+            "Failed to execute '{s}' on '{s}': {s}",
+            .{ property_name, interface_name, reason },
+        ),
+        js.v8.kExceptionContext_AttributeGet => std.fmt.allocPrint(
+            allocator,
+            "Failed to read the '{s}' property from '{s}': {s}",
+            .{ property_name, interface_name, reason },
+        ),
+        js.v8.kExceptionContext_AttributeSet => std.fmt.allocPrint(
+            allocator,
+            "Failed to set the '{s}' property on '{s}': {s}",
+            .{ property_name, interface_name, reason },
+        ),
+        else => return,
+    } catch return;
+    defer allocator.free(full);
+
+    const message_value = js.v8.v8__String__NewFromUtf8(
+        isolate,
+        full.ptr,
+        js.v8.kNormal,
+        @intCast(full.len),
+    ) orelse return;
+    var maybe_result: js.v8.MaybeBool = undefined;
+    js.v8.v8__Object__DefineOwnProperty(
+        exception,
+        context,
+        @ptrCast(message_key),
+        @ptrCast(message_value),
+        js.v8.None,
+        &maybe_result,
+    );
+}
+
 /// Throw a Blink-shaped Web IDL TypeError.  Supplying null intentionally
 /// leaves Error.message unqualified (HTMLAllCollection's callable path is one
 /// of the legacy bindings that does this).
 pub fn typeError(exec: *js.Execution, operation: ?Operation, reason: []const u8) anyerror {
+    _ = operation;
     const local = exec.js.local orelse return error.TypeError;
     const exception = local.isolate.createTypeError(reason);
-    if (operation) |context| {
-        materializeStack(local, exception);
-        replaceMessage(local, exception, try fullMessage(exec, context, reason));
-    }
     _ = local.isolate.throwException(exception);
     return error.TryCatchRethrow;
 }
@@ -166,68 +291,38 @@ pub fn rejectedTypeError(exec: *js.Execution, operation: Operation, reason: []co
 /// happen before argument conversion, such as invoking an interface object
 /// without `new`.
 pub fn constructorTypeError(exec: *js.Execution, interface: []const u8, reason: []const u8) anyerror {
+    _ = interface;
     const local = exec.js.local orelse return error.TypeError;
     const exception = local.isolate.createTypeError(reason);
-    materializeStack(local, exception);
-    replaceMessage(local, exception, try fullConstructorMessage(exec, interface, reason));
     _ = local.isolate.throwException(exception);
     return error.TryCatchRethrow;
 }
 
 pub fn contextualTypeError(exec: *js.Execution, context: ConversionContext, reason: []const u8) anyerror {
     const local = exec.js.local orelse return error.TypeError;
-    const exception = local.isolate.createTypeError(reason);
-    materializeStack(local, exception);
-    replaceMessage(local, exception, try contextualMessage(exec, context, reason));
+    const native_reason = switch (context) {
+        .dictionary_member => |member| try std.fmt.allocPrint(
+            exec.call_arena,
+            "Failed to read the '{s}' property from '{s}': {s}",
+            .{ member.member, member.dictionary, reason },
+        ),
+        else => reason,
+    };
+    const exception = local.isolate.createTypeError(native_reason);
     _ = local.isolate.throwException(exception);
     return error.TryCatchRethrow;
 }
 
-fn isNativeConversionReason(reason: []const u8) bool {
-    return std.mem.eql(u8, reason, "Cannot convert a Symbol value to a string") or
-        std.mem.eql(u8, reason, "Cannot convert a Symbol value to a number") or
-        std.mem.eql(u8, reason, "Cannot convert a BigInt value to a number") or
-        std.mem.eql(u8, reason, "Cannot convert object to primitive value") or
-        (std.mem.indexOf(
-            u8,
-            reason,
-            " returned for property 'Symbol(Symbol.toPrimitive)' ",
-        ) != null and std.mem.endsWith(u8, reason, " is not a function"));
-}
-
-fn messageConversionReason(message: []const u8) ?[]const u8 {
-    const uncaught_type_error = "Uncaught TypeError: ";
-    const reason = if (std.mem.startsWith(u8, message, uncaught_type_error))
-        message[uncaught_type_error.len..]
-    else
-        message;
-    return if (isNativeConversionReason(reason)) reason else null;
-}
-
-/// A V8 conversion can invoke user code before producing a Symbol/BigInt.  A
-/// nested TryCatch lets us decorate only V8's standard conversion failures and
-/// rethrow the original Error object, preserving its compact stack string.
+/// V8's propagation callback decorates native conversion failures before they
+/// reach this TryCatch. Authored exceptions bypass that callback and must be
+/// rethrown byte-for-byte unchanged.
 fn rethrowConversion(
     exec: *js.Execution,
     try_catch: *js.TryCatch,
     context: ?ConversionContext,
 ) anyerror {
-    if (context) |conversion_context| {
-        if (try_catch.exceptionValue()) |exception| {
-            if (try_catch.messageText(exec.call_arena)) |message| {
-                if (messageConversionReason(message)) |reason| {
-                    // TryCatch.caught obtains the stack before `message` is
-                    // replaced, preserving Blink's concise first stack line.
-                    _ = try_catch.caught(exec.call_arena);
-                    replaceMessage(
-                        exec.js.local.?,
-                        exception.handle,
-                        try contextualMessage(exec, conversion_context, reason),
-                    );
-                }
-            }
-        }
-    }
+    _ = exec;
+    _ = context;
     try_catch.rethrow();
     return error.TryCatchRethrow;
 }
@@ -237,7 +332,7 @@ fn conversionTypeError(exec: *js.Execution, context: ?ConversionContext, reason:
         return switch (conversion_context) {
             .operation => |operation| typeError(exec, operation, reason),
             .constructor => |interface| constructorTypeError(exec, interface, reason),
-            .attribute_get, .attribute_set => contextualTypeError(exec, conversion_context, reason),
+            .attribute_get, .attribute_set, .dictionary_member => contextualTypeError(exec, conversion_context, reason),
         };
     }
     return typeError(exec, null, reason);
@@ -276,11 +371,23 @@ pub fn toDOMStringWithContext(value: js.Value, exec: *js.Execution, context: ?Co
 }
 
 pub fn toNumber(value: js.Value, exec: *js.Execution, operation: ?Operation) !f64 {
+    return toNumberWithContext(value, exec, operationContext(operation));
+}
+
+/// Numeric Web IDL conversion used by the generic bridge. Preserve operation,
+/// constructor and attribute context so native Symbol/BigInt conversion
+/// failures expose Blink's qualified `message` while keeping V8's concise
+/// first stack line.
+pub fn toNumberWithContext(
+    value: js.Value,
+    exec: *js.Execution,
+    context: ?ConversionContext,
+) !f64 {
     if (value.isSymbol()) {
-        return typeError(exec, operation, "Cannot convert a Symbol value to a number");
+        return conversionTypeError(exec, context, "Cannot convert a Symbol value to a number");
     }
     if (value.isBigInt()) {
-        return typeError(exec, operation, "Cannot convert a BigInt value to a number");
+        return conversionTypeError(exec, context, "Cannot convert a BigInt value to a number");
     }
 
     var try_catch: js.TryCatch = undefined;
@@ -289,7 +396,7 @@ pub fn toNumber(value: js.Value, exec: *js.Execution, operation: ?Operation) !f6
 
     return value.toF64() catch |err| {
         if (err == error.JsException and try_catch.hasCaught()) {
-            return rethrowConversion(exec, &try_catch, operationContext(operation));
+            return rethrowConversion(exec, &try_catch, context);
         }
         return err;
     };

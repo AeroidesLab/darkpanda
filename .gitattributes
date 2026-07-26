@@ -1,0 +1,10 @@
+* text=auto eol=lf
+*.zig text eol=lf
+*.zon text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+Makefile text eol=lf
+DEPS text eol=lf
+BUILD-ACTIONS-PLAN.md text eol=lf
+.github/workflows/*.yml text eol=lf

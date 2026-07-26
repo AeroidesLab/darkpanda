@@ -118,8 +118,8 @@
 
   // Chrome throws only for a zero source dimension. Negative dimensions are
   // normalized by moving the origin and taking the absolute value.
-  testing.expectError('Index or size', () => ctx.getImageData(0, 0, 0, 10));
-  testing.expectError('Index or size', () => ctx.getImageData(0, 0, 10, 0));
+  testing.expectError('The source width is 0.', () => ctx.getImageData(0, 0, 0, 10));
+  testing.expectError('The source height is 0.', () => ctx.getImageData(0, 0, 10, 0));
   const normalized = ctx.getImageData(5, 10, -5, -10);
   testing.expectEqual(5, normalized.width);
   testing.expectEqual(10, normalized.height);

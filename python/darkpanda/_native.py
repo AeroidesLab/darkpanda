@@ -380,11 +380,11 @@ def _resolve_canvas_backend_path(
     requested_path: str | os.PathLike[str] | None,
 ) -> Path:
     if os.name == "nt":
-        name = "darkpanda_canvas_backend.dll"
+        name = "canvas.dll"
     elif sys.platform == "darwin":
-        name = "libdarkpanda_canvas_backend.dylib"
+        name = "libcanvas.dylib"
     else:
-        name = "libdarkpanda_canvas_backend.so"
+        name = "libcanvas.so"
 
     candidate = library_path.with_name(name) if requested_path is None else Path(requested_path)
     if not candidate.is_absolute():

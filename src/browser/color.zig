@@ -273,6 +273,228 @@ pub const RGBA = packed struct(u32) {
         };
     }
 
+    /// Color with float precision. hsl()/hwb() colors have sub-8-bit precision
+    /// that Chrome carries end-to-end (e.g. hsl(45,80%,50%) = (0.9,0.7,0.1));
+    /// the u8 RGBA is kept for CSS serialization, the float channels for the
+    /// rendering pipeline.
+    pub const ColorSpace = enum(i32) {
+        srgb = 0,
+        display_p3 = 1,
+    };
+
+    pub const Float = struct {
+        rgba: RGBA,
+        f: [4]f32,
+        color_space: ColorSpace = .srgb,
+
+        /// Canvas CSSOM keeps wide-gamut colors in `color(display-p3 ...)`
+        /// form instead of collapsing them to an 8-bit sRGB serialization.
+        pub fn format(self: *const Float, writer: *Io.Writer) Io.Writer.Error!void {
+            if (self.color_space == .srgb) return self.rgba.format(writer);
+
+            try writer.print(
+                "color(display-p3 {d} {d} {d}",
+                .{ self.f[0], self.f[1], self.f[2] },
+            );
+            if (self.f[3] != 1.0) try writer.print(" / {d}", .{self.f[3]});
+            try writer.writeByte(')');
+        }
+    };
+
+    fn u8Of(v: f32) u8 {
+        return @intFromFloat(@round(std.math.clamp(v, 0, 1) * 255));
+    }
+
+    fn f32Of(v: u8) f32 {
+        return @as(f32, @floatFromInt(v)) / 255.0;
+    }
+
+    /// Full-precision parse: hex/rgb()/named round-trip exactly; hsl()/hwb()
+    /// follow the CSS Color 4 algorithm in f32 (gfx::HSLToSRGB/HWBToSRGB).
+    pub fn parseFloat(input: []const u8) !Float {
+        const trimmed = std.mem.trim(u8, input, " \t\r\n\x0c");
+        if (parseFunctionalDisplayP3(trimmed)) |parsed| return parsed;
+        if (!isHexColor(trimmed)) {
+            if (find(trimmed)) |named| {
+                return .{ .rgba = named, .f = .{ f32Of(named.r), f32Of(named.g), f32Of(named.b), f32Of(named.a) } };
+            }
+            if (parseFunctionalHslHwb(trimmed)) |parsed| return parsed;
+        }
+        const rgba = try parse(trimmed);
+        return .{ .rgba = rgba, .f = .{ f32Of(rgba.r), f32Of(rgba.g), f32Of(rgba.b), f32Of(rgba.a) } };
+    }
+
+    fn parseColorComponent(token_raw: []const u8) !f32 {
+        const token = std.mem.trim(u8, token_raw, " \t\r\n\x0c");
+        if (token.len == 0) return error.Invalid;
+        if (std.ascii.eqlIgnoreCase(token, "none")) return 0;
+        const percent = token[token.len - 1] == '%';
+        const value = std.fmt.parseFloat(
+            f32,
+            if (percent) token[0 .. token.len - 1] else token,
+        ) catch return error.Invalid;
+        if (!std.math.isFinite(value)) return error.Invalid;
+        // CSS Color 4 preserves extended-range color() components. Percentages
+        // are normalized but deliberately not clamped; the destination color
+        // space conversion is responsible for gamut mapping.
+        return if (percent) value / 100.0 else value;
+    }
+
+    fn parseFunctionalDisplayP3(input: []const u8) ?Float {
+        const opening = std.mem.indexOfScalar(u8, input, '(') orelse return null;
+        if (input.len < opening + 2 or input[input.len - 1] != ')') return null;
+        if (!std.ascii.eqlIgnoreCase(
+            std.mem.trim(u8, input[0..opening], " \t\r\n\x0c"),
+            "color",
+        )) return null;
+
+        const body = input[opening + 1 .. input.len - 1];
+        var tokens: [5][]const u8 = undefined;
+        var count: usize = 0;
+        var iterator = std.mem.tokenizeAny(u8, body, " \t\r\n\x0c/");
+        while (iterator.next()) |token| {
+            if (count == tokens.len) return null;
+            tokens[count] = token;
+            count += 1;
+        }
+        if ((count != 4 and count != 5) or
+            !std.ascii.eqlIgnoreCase(tokens[0], "display-p3"))
+        {
+            return null;
+        }
+
+        const r = parseColorComponent(tokens[1]) catch return null;
+        const g = parseColorComponent(tokens[2]) catch return null;
+        const b = parseColorComponent(tokens[3]) catch return null;
+        const a = if (count == 5) parseAlphaF(tokens[4]) catch return null else 1.0;
+        return .{
+            .rgba = .{
+                .r = u8Of(r),
+                .g = u8Of(g),
+                .b = u8Of(b),
+                .a = u8Of(a),
+            },
+            .f = .{ r, g, b, a },
+            .color_space = .display_p3,
+        };
+    }
+
+    fn parseHue(token_raw: []const u8) !f32 {
+        const token = std.mem.trim(u8, token_raw, " \t\r\n\x0c");
+        if (token.len == 0) return error.Invalid;
+        var value: f32 = undefined;
+        if (std.mem.endsWith(u8, token, "deg")) {
+            value = std.fmt.parseFloat(f32, token[0 .. token.len - 3]) catch return error.Invalid;
+        } else if (std.mem.endsWith(u8, token, "grad")) {
+            value = (std.fmt.parseFloat(f32, token[0 .. token.len - 4]) catch return error.Invalid) * 0.9;
+        } else if (std.mem.endsWith(u8, token, "rad")) {
+            value = (std.fmt.parseFloat(f32, token[0 .. token.len - 3]) catch return error.Invalid) * (180.0 / std.math.pi);
+        } else if (std.mem.endsWith(u8, token, "turn")) {
+            value = (std.fmt.parseFloat(f32, token[0 .. token.len - 4]) catch return error.Invalid) * 360.0;
+        } else {
+            value = std.fmt.parseFloat(f32, token) catch return error.Invalid;
+        }
+        if (!std.math.isFinite(value)) return error.Invalid;
+        // CSS hue wraps (negative values wrap around the circle).
+        const wrapped = @mod(value, 360.0);
+        return wrapped;
+    }
+
+    fn parsePercent(token_raw: []const u8) !f32 {
+        const token = std.mem.trim(u8, token_raw, " \t\r\n\x0c");
+        if (token.len < 2 or token[token.len - 1] != '%') return error.Invalid;
+        const number = std.fmt.parseFloat(f32, token[0 .. token.len - 1]) catch return error.Invalid;
+        if (!std.math.isFinite(number)) return error.Invalid;
+        return std.math.clamp(number / 100.0, 0, 1);
+    }
+
+    fn parseAlphaF(token_raw: []const u8) !f32 {
+        const token = std.mem.trim(u8, token_raw, " \t\r\n\x0c");
+        if (token.len == 0) return error.Invalid;
+        if (token[token.len - 1] == '%') {
+            const number = std.fmt.parseFloat(f32, token[0 .. token.len - 1]) catch return error.Invalid;
+            if (!std.math.isFinite(number)) return error.Invalid;
+            return std.math.clamp(number / 100.0, 0, 1);
+        }
+        const number = std.fmt.parseFloat(f32, token) catch return error.Invalid;
+        if (!std.math.isFinite(number)) return error.Invalid;
+        return std.math.clamp(number, 0, 1);
+    }
+
+    /// gfx::HSLToSRGB (ui/gfx/color_conversions.cc) — CSS Color 4 hsl-to-rgb,
+    /// f32 arithmetic (fmod is evaluated in f64 there and here).
+    fn hslToSrgb(h: f32, s: f32, l: f32) [3]f32 {
+        if (s == 0) return .{ l, l, l };
+        const a = s * @min(l, 1.0 - l);
+        const F = struct {
+            h: f32,
+            l: f32,
+            a: f32,
+            fn f(self: @This(), n: f32) f32 {
+                const k: f32 = @floatCast(@mod(@as(f64, n + self.h / 30.0), 12.0));
+                const lo = @min(@min(k - 3.0, 9.0 - k), @as(f32, 1.0));
+                return self.l - self.a * @max(-1.0, lo);
+            }
+        };
+        const ctx: F = .{ .h = h, .l = l, .a = a };
+        return .{ ctx.f(0), ctx.f(8), ctx.f(4) };
+    }
+
+    /// gfx::HWBToSRGB.
+    fn hwbToSrgb(h: f32, w: f32, b: f32) [3]f32 {
+        if (w + b >= 1.0) {
+            const gray = w / (w + b);
+            return .{ gray, gray, gray };
+        }
+        var rgb = hslToSrgb(h, 1.0, 0.5);
+        for (&rgb) |*c| {
+            c.* = c.* + w - (w + b) * c.*;
+        }
+        return rgb;
+    }
+
+    fn parseFunctionalHslHwb(input: []const u8) ?Float {
+        const opening = std.mem.indexOfScalar(u8, input, '(') orelse return null;
+        if (input.len < opening + 2 or input[input.len - 1] != ')') return null;
+        const function_name = std.mem.trim(u8, input[0..opening], " \t\r\n\x0c");
+        const is_hsl = std.ascii.eqlIgnoreCase(function_name, "hsl") or std.ascii.eqlIgnoreCase(function_name, "hsla");
+        const is_hwb = std.ascii.eqlIgnoreCase(function_name, "hwb");
+        if (!is_hsl and !is_hwb) return null;
+
+        const body = input[opening + 1 .. input.len - 1];
+        var components: [4][]const u8 = undefined;
+        var count: usize = 0;
+        if (std.mem.indexOfScalar(u8, body, ',')) |_| {
+            if (std.mem.indexOfScalar(u8, body, '/') != null) return null;
+            var iterator = std.mem.splitScalar(u8, body, ',');
+            while (iterator.next()) |part| {
+                if (count == components.len) return null;
+                const token = std.mem.trim(u8, part, " \t\r\n\x0c");
+                if (token.len == 0) return null;
+                components[count] = token;
+                count += 1;
+            }
+        } else {
+            var iterator = std.mem.tokenizeAny(u8, body, " \t\r\n\x0c/");
+            while (iterator.next()) |token| {
+                if (count == components.len) return null;
+                components[count] = token;
+                count += 1;
+            }
+        }
+        if (count != 3 and count != 4) return null;
+
+        const hue = parseHue(components[0]) catch return null;
+        const p1 = parsePercent(components[1]) catch return null;
+        const p2 = parsePercent(components[2]) catch return null;
+        const alpha = if (count == 4) parseAlphaF(components[3]) catch return null else 1.0;
+        const rgb = if (is_hsl) hslToSrgb(hue, p1, p2) else hwbToSrgb(hue, p1, p2);
+        return .{
+            .rgba = .{ .r = u8Of(rgb[0]), .g = u8Of(rgb[1]), .b = u8Of(rgb[2]), .a = u8Of(alpha) },
+            .f = .{ rgb[0], rgb[1], rgb[2], alpha },
+        };
+    }
+
     /// Parses the given color.
     /// Supports the basic CSS colors used by Canvas 2D: named colors, hex,
     /// rgb()/rgba() legacy comma syntax and CSS Color 4 space/slash syntax.
@@ -281,6 +503,7 @@ pub const RGBA = packed struct(u32) {
         if (!isHexColor(trimmed)) {
             // Try named colors.
             if (find(trimmed)) |named| return named;
+            if (parseFunctionalHslHwb(trimmed)) |parsed| return parsed.rgba;
             return parseFunctionalRgb(trimmed);
         }
 
@@ -401,4 +624,21 @@ test "RGBA uses Chrome-compatible shortest alpha serialization" {
         try value.format(&output.writer);
         try std.testing.expectEqualStrings(case[1], output.written());
     }
+}
+
+test "RGBA parses and serializes display-p3 float colors without quantizing" {
+    const parsed = try RGBA.parseFloat("color(display-p3 1 0 25% / 50%)");
+    try std.testing.expectEqual(RGBA.ColorSpace.display_p3, parsed.color_space);
+    try std.testing.expectEqual(@as(f32, 1), parsed.f[0]);
+    try std.testing.expectEqual(@as(f32, 0), parsed.f[1]);
+    try std.testing.expectEqual(@as(f32, 0.25), parsed.f[2]);
+    try std.testing.expectEqual(@as(f32, 0.5), parsed.f[3]);
+
+    var output = Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try parsed.format(&output.writer);
+    try std.testing.expectEqualStrings(
+        "color(display-p3 1 0 0.25 / 0.5)",
+        output.written(),
+    );
 }

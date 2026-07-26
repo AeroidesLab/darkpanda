@@ -45,7 +45,7 @@ pub fn main() !void {
 
     const env = Env.init(allocator);
 
-    var runner = Runner.init(allocator, arena.allocator(), &ta, env);
+    var runner = Runner.init(allocator, gpa.allocator(), arena.allocator(), &ta, env);
     RUNNER = &runner;
     try runner.run();
 }
@@ -53,19 +53,27 @@ pub fn main() !void {
 const Runner = struct {
     env: Env,
     allocator: Allocator,
+    report_allocator: Allocator,
     ta: *TrackingAllocator,
 
     // per-test arena, used for collecting substests
     arena: Allocator,
     subtests: std.ArrayList([]const u8),
 
-    fn init(allocator: Allocator, arena: Allocator, ta: *TrackingAllocator, env: Env) Runner {
+    fn init(
+        allocator: Allocator,
+        report_allocator: Allocator,
+        arena: Allocator,
+        ta: *TrackingAllocator,
+        env: Env,
+    ) Runner {
         return .{
             .ta = ta,
             .env = env,
             .arena = arena,
             .subtests = .empty,
             .allocator = allocator,
+            .report_allocator = report_allocator,
         };
     }
 
@@ -74,11 +82,13 @@ const Runner = struct {
         defer slowest.deinit();
 
         var fail_list: std.ArrayList([]const u8) = .empty;
+        var test_results: std.ArrayList(TestResult) = .empty;
 
         var pass: usize = 0;
         var fail: usize = 0;
         var skip: usize = 0;
         var leak: usize = 0;
+        var selected: usize = 0;
         // track all tests duration, excluding setup and teardown.
         var ns_duration: u64 = 0;
 
@@ -142,30 +152,34 @@ const Runner = struct {
             const result = t.func();
             current_test = null;
 
+            const leaked = std.testing.allocator_instance.deinit() == .leak;
             if (webapi_html_test_mode and self.subtests.items.len == 0) {
+                if (leaked) {
+                    leak += 1;
+                    fail += 1;
+                    Printer.status(.fail, "\n{s}\n\"{s}\" - Memory Leak\n{s}\n", .{ BORDER, friendly_name, BORDER });
+                    try fail_list.append(self.report_allocator, friendly_name);
+                    if (self.env.fail_first) break;
+                }
                 continue;
             }
 
             const ns_taken = slowest.endTiming(friendly_name, is_unnamed_test);
             ns_duration += ns_taken;
 
-            if (std.testing.allocator_instance.deinit() == .leak) {
+            if (leaked) {
                 leak += 1;
                 Printer.status(.fail, "\n{s}\n\"{s}\" - Memory Leak\n{s}\n", .{ BORDER, friendly_name, BORDER });
             }
 
-            if (result) |_| {
-                if (!is_unnamed_test) {
-                    pass += 1;
-                }
-            } else |err| switch (err) {
+            var error_name: ?[]const u8 = null;
+            var was_skipped = false;
+            if (result) |_| {} else |err| switch (err) {
                 error.SkipZigTest => {
-                    skip += 1;
-                    status = .skip;
+                    was_skipped = true;
                 },
                 else => {
-                    status = .fail;
-                    fail += 1;
+                    error_name = @errorName(err);
                     Printer.status(.fail, "\n{s}\n\"{s}\" - {s}\n", .{ BORDER, friendly_name, @errorName(err) });
                     if (self.subtests.getLastOrNull()) |st| {
                         Printer.status(.fail, " {s}\n", .{st});
@@ -174,14 +188,36 @@ const Runner = struct {
                     if (@errorReturnTrace()) |trace| {
                         std.debug.dumpStackTrace(trace.*);
                     }
-                    if (self.env.fail_first) {
-                        break;
-                    }
-                    try fail_list.append(self.allocator, try self.allocator.dupe(u8, friendly_name));
                 },
             }
 
+            const failed = leaked or error_name != null;
+            if (failed) {
+                status = .fail;
+                fail += 1;
+                try fail_list.append(self.report_allocator, friendly_name);
+            } else if (was_skipped) {
+                status = .skip;
+                skip += 1;
+            } else if (!is_unnamed_test) {
+                pass += 1;
+            }
+
             if (!is_unnamed_test) {
+                selected += 1;
+                try test_results.append(self.report_allocator, .{
+                    .name = friendly_name,
+                    .status = switch (status) {
+                        .pass => .passed,
+                        .fail => .failed,
+                        .skip => .skipped,
+                        .text => unreachable,
+                    },
+                    .duration_nanoseconds = ns_taken,
+                    .error_name = error_name,
+                    .memory_leak = leaked,
+                });
+
                 if (self.env.verbose) {
                     const ms = @as(f64, @floatFromInt(ns_taken)) / 1_000_000.0;
                     Printer.status(status, "{s} ({d:.2}ms)\n", .{ friendly_name, ms });
@@ -192,6 +228,8 @@ const Runner = struct {
                     Printer.status(status, ".", .{});
                 }
             }
+
+            if (failed and self.env.fail_first) break;
         }
 
         for (builtin.test_functions) |t| {
@@ -203,8 +241,14 @@ const Runner = struct {
             }
         }
 
+        const zero_matches = selected == 0;
+        if (zero_matches) {
+            Printer.status(.fail, "\nNo tests matched the requested filter.\n", .{});
+        }
+
         const total_tests = pass + fail;
-        const status = if (total_tests > 0 and fail == 0) Status.pass else Status.fail;
+        const succeeded = !zero_matches and fail == 0 and leak == 0;
+        const status = if (succeeded) Status.pass else Status.fail;
         Printer.status(status, "\n{d} of {d} test{s} passed\n", .{ pass, total_tests, if (total_tests != 1) "s" else "" });
         if (skip > 0) {
             Printer.status(.skip, "{d} test{s} skipped\n", .{ skip, if (skip != 1) "s" else "" });
@@ -246,7 +290,20 @@ const Runner = struct {
             Printer.fmt("\n", .{});
         }
 
-        std.posix.exit(if (fail == 0) 0 else 1);
+        const summary: RunSummary = .{
+            .selected = selected,
+            .passed = pass,
+            .failed = fail,
+            .skipped = skip,
+            .leaked = leak,
+            .duration_nanoseconds = ns_duration,
+            .fail_first = self.env.fail_first,
+            .zero_matches = zero_matches,
+            .success = succeeded,
+        };
+        try writeReports(self.report_allocator, self.env, summary, test_results.items);
+
+        std.posix.exit(summary.exitCode());
     }
 };
 
@@ -281,6 +338,186 @@ const Status = enum {
     skip,
     text,
 };
+
+const TestStatus = enum {
+    passed,
+    failed,
+    skipped,
+};
+
+const TestResult = struct {
+    name: []const u8,
+    status: TestStatus,
+    duration_nanoseconds: u64,
+    error_name: ?[]const u8,
+    memory_leak: bool,
+};
+
+const RunSummary = struct {
+    selected: usize,
+    passed: usize,
+    failed: usize,
+    skipped: usize,
+    leaked: usize,
+    duration_nanoseconds: u64,
+    fail_first: bool,
+    zero_matches: bool,
+    success: bool,
+
+    fn exitCode(self: RunSummary) u8 {
+        return if (self.success) 0 else 1;
+    }
+};
+
+const JsonReport = struct {
+    schema: []const u8 = "darkpanda-test-results/v1",
+    summary: RunSummary,
+    tests: []const TestResult,
+};
+
+fn writeReports(
+    allocator: Allocator,
+    env: Env,
+    summary: RunSummary,
+    test_results: []const TestResult,
+) !void {
+    if (env.json_output) |path| {
+        try writeJsonReport(allocator, path, summary, test_results);
+    }
+    if (env.junit_output) |path| {
+        try writeJUnitReport(allocator, path, summary, test_results);
+    }
+}
+
+fn writeJsonReport(
+    allocator: Allocator,
+    path: []const u8,
+    summary: RunSummary,
+    test_results: []const TestResult,
+) !void {
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
+
+    try std.json.Stringify.value(
+        JsonReport{
+            .summary = summary,
+            .tests = test_results,
+        },
+        .{ .whitespace = .indent_2 },
+        &output.writer,
+    );
+    try output.writer.writeByte('\n');
+    try writeOutputFile(path, output.written());
+}
+
+fn writeJUnitReport(
+    allocator: Allocator,
+    path: []const u8,
+    summary: RunSummary,
+    test_results: []const TestResult,
+) !void {
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    const writer = &output.writer;
+
+    var reported_failures: usize = 0;
+    var reported_skips: usize = 0;
+    for (test_results) |result| {
+        switch (result.status) {
+            .passed => {},
+            .failed => reported_failures += 1,
+            .skipped => reported_skips += 1,
+        }
+    }
+
+    const discovery_failure: usize = @intFromBool(summary.zero_matches);
+    const suite_tests = test_results.len + discovery_failure;
+    const suite_failures = reported_failures + discovery_failure;
+    const seconds = @as(f64, @floatFromInt(summary.duration_nanoseconds)) /
+        @as(f64, @floatFromInt(std.time.ns_per_s));
+
+    try writer.writeAll("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    try writer.print(
+        "<testsuites tests=\"{d}\" failures=\"{d}\" errors=\"0\" skipped=\"{d}\" time=\"{d:.9}\">\n",
+        .{ suite_tests, suite_failures, reported_skips, seconds },
+    );
+    try writer.print(
+        "  <testsuite name=\"darkpanda\" tests=\"{d}\" failures=\"{d}\" errors=\"0\" skipped=\"{d}\" time=\"{d:.9}\">\n",
+        .{ suite_tests, suite_failures, reported_skips, seconds },
+    );
+
+    for (test_results) |result| {
+        const test_seconds = @as(f64, @floatFromInt(result.duration_nanoseconds)) /
+            @as(f64, @floatFromInt(std.time.ns_per_s));
+        try writer.writeAll("    <testcase name=\"");
+        try writeXmlEscaped(writer, result.name);
+        try writer.print("\" classname=\"darkpanda\" time=\"{d:.9}\"", .{test_seconds});
+        switch (result.status) {
+            .passed => try writer.writeAll("/>\n"),
+            .skipped => try writer.writeAll("><skipped/></testcase>\n"),
+            .failed => {
+                try writer.writeAll(">\n      <failure message=\"");
+                try writeFailureDescription(writer, result);
+                try writer.writeAll("\">");
+                try writeFailureDescription(writer, result);
+                try writer.writeAll("</failure>\n    </testcase>\n");
+            },
+        }
+    }
+
+    if (summary.zero_matches) {
+        try writer.writeAll(
+            "    <testcase name=\"test discovery\" classname=\"darkpanda.test-runner\" time=\"0.000000000\">\n" ++
+                "      <failure message=\"No tests matched\">No tests matched the requested filter.</failure>\n" ++
+                "    </testcase>\n",
+        );
+    }
+
+    try writer.writeAll("  </testsuite>\n</testsuites>\n");
+    try writeOutputFile(path, output.written());
+}
+
+fn writeFailureDescription(writer: *std.Io.Writer, result: TestResult) !void {
+    if (result.error_name) |name| {
+        try writeXmlEscaped(writer, name);
+        if (result.memory_leak) try writer.writeAll("; ");
+    }
+    if (result.memory_leak) {
+        try writer.writeAll("Memory leak detected");
+    } else if (result.error_name == null) {
+        try writer.writeAll("Test failed");
+    }
+}
+
+fn writeXmlEscaped(writer: *std.Io.Writer, value: []const u8) !void {
+    var start: usize = 0;
+    for (value, 0..) |byte, index| {
+        const replacement: ?[]const u8 = switch (byte) {
+            '&' => "&amp;",
+            '<' => "&lt;",
+            '>' => "&gt;",
+            '"' => "&quot;",
+            '\'' => "&apos;",
+            else => null,
+        };
+        if (replacement) |escaped| {
+            try writer.writeAll(value[start..index]);
+            try writer.writeAll(escaped);
+            start = index + 1;
+        }
+    }
+    try writer.writeAll(value[start..]);
+}
+
+fn writeOutputFile(path: []const u8, data: []const u8) !void {
+    if (std.fs.path.dirname(path)) |directory| {
+        if (directory.len > 0) try std.fs.cwd().makePath(directory);
+    }
+    var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(data);
+    try file.sync();
+}
 
 const SlowTracker = struct {
     const SlowestQueue = std.PriorityDequeue(TestInfo, void, compareTiming);
@@ -366,6 +603,8 @@ const Env = struct {
     filter: ?[]const u8,
     subfilter: ?[]const u8,
     metrics: bool,
+    json_output: ?[]const u8,
+    junit_output: ?[]const u8,
 
     fn init(allocator: Allocator) Env {
         const full_filter = readEnv(allocator, "TEST_FILTER");
@@ -376,6 +615,8 @@ const Env = struct {
             .filter = filter,
             .subfilter = subfilter,
             .metrics = readEnvBool(allocator, "METRICS", false),
+            .json_output = readEnvPath(allocator, "TEST_JSON_OUTPUT"),
+            .junit_output = readEnvPath(allocator, "TEST_JUNIT_OUTPUT"),
         };
     }
 
@@ -400,6 +641,13 @@ const Env = struct {
         const value = readEnv(allocator, key) orelse return deflt;
         defer allocator.free(value);
         return std.ascii.eqlIgnoreCase(value, "true");
+    }
+
+    fn readEnvPath(allocator: Allocator, key: []const u8) ?[]const u8 {
+        const value = readEnv(allocator, key) orelse return null;
+        if (value.len > 0) return value;
+        allocator.free(value);
+        return null;
     }
 
     fn parseFilter(full_filter: ?[]const u8) struct { ?[]const u8, ?[]const u8 } {

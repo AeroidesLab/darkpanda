@@ -1,0 +1,83 @@
+{
+  "schema": "darkpanda-chromium-profile/v1",
+  "policy": {
+    "browser": "fixed",
+    "components": "latest-main-at-build-start"
+  },
+  "chrome_for_testing_version": "149.0.7827.203",
+  "chromium_revision": "48860e577c01de4a313192cc79596c46b52efb3a",
+  "chromium_deps": {
+    "gitiles_url": "https://chromium.googlesource.com/chromium/src/+/48860e577c01de4a313192cc79596c46b52efb3a/DEPS?format=TEXT",
+    "decoded_sha256": "6379a8a30190ea2a8a26f76c2b19e2b1769623bcd118895a85d7638c981f59be"
+  },
+  "skia_revision": "75c589e1f436688fca8f5b7f7a8affeafaa4f923",
+  "darkpanda_build": {
+    "zig": {
+      "version": "0.15.2",
+      "sha256": {
+        "windows-x86_64": "3a0ed1e8799a2f8ce2a6e6290a9ff22e6906f8227865911fb7ddedc3cc14cb0c",
+        "linux-x86_64": "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239"
+      }
+    },
+    "v8": {
+      "version": "14.9.207.35",
+      "revision": "933ce636c562cd54d68e7f7c93ab5cdffd685fca",
+      "zig_v8_repository": "AeroidesLab/zig-v8-fork",
+      "zig_v8_revision": "4a3aef113f5f4d3d287b5813af9aabd904afd5a1"
+    }
+  },
+  "skia_git_dependencies": {
+    "third_party/externals/freetype": "b6bcd2177f72bb4842c7701d7b7f633bb3fc951a",
+    "third_party/externals/harfbuzz": "e6741e2205309752839da60ff075b7fa2e7cddd3",
+    "third_party/externals/icu": "3859e64eed5d34544b27fbcab0ac1685ce83df3c",
+    "third_party/externals/libjpeg-turbo": "d1f5f2393e0d51f840207342ae86e55a86443288",
+    "third_party/externals/libwebp": "c00d83f6642e7838a12bb03bca94237f03cc2e00",
+    "third_party/externals/wuffs": "50869df0ea703b4f41b238bfe26aec6ec9c86889"
+  },
+  "skia_chromium_subtrees": {
+    "third_party/externals/libpng": {
+      "source_path": "third_party/libpng",
+      "tree_id": "daa014bc3b1dcd22f4c31b7ddb84eb1c69f2d600",
+      "content_tree_sha256": "9c2151014b1360959c7b79032be0a4bc50c61e810403aede9f951b82a6e22852"
+    },
+    "third_party/externals/zlib": {
+      "source_path": "third_party/zlib",
+      "tree_id": "900150756d04b118912c8965c121a068354c6d09",
+      "content_tree_sha256": "f529362367a7a550d077e7216f23acb1761fac1ca081d4d42e39fea4aaaad216"
+    }
+  },
+  "llvm": {
+    "revision": "20b6ec66967ac2a8f932863c1abf251e5b17a843",
+    "package": "llvmorg-23-init-10931-g20b6ec66-8"
+  },
+  "rust": {
+    "revision": "4c4205163abcbd08948b3efab796c543ba1ea687",
+    "package_subrevision": 2,
+    "paired_llvm_package": "llvmorg-23-init-10931-g20b6ec66"
+  },
+  "gn": {
+    "cipd_version": "git_revision:1740f5c25bcac5a650ee3d1c1ec22bfa25fcd756",
+    "expected_version": "2384 (1740f5c25bca)"
+  },
+  "ninja": {
+    "cipd_version": "version:3@1.12.1.chromium.4",
+    "expected_version": "1.12.1"
+  },
+  "linux_x86_64_sysroot": {
+    "sha256": "52d61d4446ffebfaa3dda2cd02da4ab4876ff237853f46d273e7f9b666652e1d",
+    "generation": 1770327973518330
+  },
+  "gclient_transport_payloads": {
+    "windows-x86_64": [
+      "llvm/.Win_clang-llvmorg-23-init-10931-g20b6ec66-8.tar.xz",
+      "llvm/.Win_llvmobjdump-llvmorg-23-init-10931-g20b6ec66-8.tar.xz",
+      "rust/.Win_rust-toolchain-4c4205163abcbd08948b3efab796c543ba1ea687-2-llvmorg-23-init-10931-g20b6ec66.tar.xz"
+    ],
+    "linux-x86_64": [
+      "llvm/.Linux_x64_clang-llvmorg-23-init-10931-g20b6ec66-8.tar.xz",
+      "llvm/.Linux_x64_llvmobjdump-llvmorg-23-init-10931-g20b6ec66-8.tar.xz",
+      "rust/.Linux_x64_rust-toolchain-4c4205163abcbd08948b3efab796c543ba1ea687-2-llvmorg-23-init-10931-g20b6ec66.tar.xz",
+      "sysroot/.52d61d4446ffebfaa3dda2cd02da4ab4876ff237853f46d273e7f9b666652e1d"
+    ]
+  }
+}

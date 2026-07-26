@@ -16,7 +16,9 @@ pub const Identity = struct {
 
 pub const Options = struct {
     kind: BackendKind = .skia,
-    driver: Driver = .software,
+    /// chrome-skia ABI v5 is the default driver. Software fallback is opt-in
+    /// so a missing or incompatible production backend is visible.
+    driver: Driver = .dynamic,
     fallback: Fallback = .disabled,
     library_path: ?[]const u8 = null,
     profile_seed: u64 = 0x4450_5052_4f46_494c,
@@ -39,6 +41,8 @@ pub fn init(allocator: std.mem.Allocator, options: Options) !Provider {
         .actual_driver = options.driver,
     };
     if (options.driver == .dynamic) {
+        // chrome-skia ABI v5 backend (full Canvas 2D state machine) from an explicit
+        // path or the library adjacent to the darkpanda image.
         result.api = if (options.library_path) |path| blk: {
             if (!std.fs.path.isAbsolute(path)) return error.CanvasBackendPathMustBeAbsolute;
             break :blk adapter.Api.open(path) catch |err| switch (options.fallback) {
@@ -132,18 +136,19 @@ pub fn configuredIdentity(self: *const Provider) Identity {
     };
 }
 
-pub fn createSurface(self: *Provider, width: u32, height: u32) !*Surface {
+pub fn createSurface(self: *Provider, width: u32, height: u32, flags: u32) !*Surface {
     const sequence = self.next_canvas_sequence;
     const per_canvas_seed = splitMix64(self.options.canvas_seed ^ sequence *% 0x9e37_79b9_7f4a_7c15);
     const surface = try self.allocator.create(Surface);
     errdefer self.allocator.destroy(surface);
-    surface.* = if (self.actual_driver == .dynamic)
+    surface.* = if (self.api != null)
         try Surface.initDynamic(
             self.allocator,
-            &(self.api orelse return error.CanvasBackendUnavailable),
+            &(self.api orelse unreachable),
             self.options.kind,
             width,
             height,
+            flags,
             self.options.profile_seed,
             per_canvas_seed,
         )
@@ -153,6 +158,7 @@ pub fn createSurface(self: *Provider, width: u32, height: u32) !*Surface {
             self.options.kind,
             width,
             height,
+            flags,
             self.options.profile_seed,
             per_canvas_seed,
         );
@@ -192,8 +198,8 @@ test "provider gives fake canvases distinct stable seeds" {
         .canvas_seed = 22,
     });
     defer provider.deinit();
-    const first = try provider.createSurface(1, 1);
-    const second = try provider.createSurface(1, 1);
+    const first = try provider.createSurface(1, 1, 0);
+    const second = try provider.createSurface(1, 1, 0);
     var a: [4]u8 = undefined;
     var b: [4]u8 = undefined;
     try first.readPixels(0, 0, 1, 1, &a, 4);
@@ -209,9 +215,9 @@ test "provider gives fake canvases distinct stable seeds" {
 
 test "dynamic load failure is explicit unless software fallback is configured" {
     const missing = if (builtin.os.tag == .windows)
-        "Z:\\definitely-missing-darkpanda-canvas-backend.dll"
+        "Z:\\definitely-missing-canvas.dll"
     else
-        "/definitely-missing-darkpanda-canvas-backend.so";
+        "/definitely-missing-libcanvas.so";
     if (Provider.init(std.testing.allocator, .{
         .kind = .skia,
         .driver = .dynamic,
@@ -236,9 +242,9 @@ test "dynamic load failure is explicit unless software fallback is configured" {
 
 test "configureIdentity preserves driver and fallback selection" {
     const missing = if (builtin.os.tag == .windows)
-        "Z:\\definitely-missing-darkpanda-canvas-backend.dll"
+        "Z:\\definitely-missing-canvas.dll"
     else
-        "/definitely-missing-darkpanda-canvas-backend.so";
+        "/definitely-missing-libcanvas.so";
     var provider = try Provider.init(std.testing.allocator, .{
         .kind = .skia,
         .driver = .dynamic,

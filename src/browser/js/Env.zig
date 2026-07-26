@@ -27,6 +27,7 @@ const Scheduler = @import("Scheduler.zig");
 const Isolate = @import("Isolate.zig");
 const Platform = @import("Platform.zig");
 const Inspector = @import("Inspector.zig");
+const WebIDL = @import("WebIDL.zig");
 const WasmStreaming = @import("WasmStreaming.zig");
 const OwnerMailbox = @import("../OwnerMailbox.zig");
 const milliTimestamp = @import("../../datetime.zig").milliTimestamp;
@@ -183,6 +184,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
 
     v8.v8__Isolate__SetHostImportModuleDynamicallyCallback(isolate_handle, Context.dynamicModuleCallback);
     v8.v8__Isolate__SetPromiseRejectCallback(isolate_handle, promiseRejectCallback);
+    v8.v8__Isolate__SetExceptionPropagationCallback(isolate_handle, WebIDL.exceptionPropagationCallback);
     v8.v8__Isolate__SetFailedAccessCheckCallbackFunction(isolate_handle, Window.failedAccessCheckCallback);
     v8.v8__Isolate__SetMicrotasksPolicy(isolate_handle, v8.kExplicit);
     v8.v8__Isolate__SetFatalErrorHandler(isolate_handle, fatalCallback);
