@@ -480,6 +480,7 @@ jobs:
           fn main() {}
           '@ | Set-Content -LiteralPath (Join-Path $probe 'main.rs') -Encoding ascii
           $clang = Join-Path $bundle 'llvm/bin/clang-cl.exe'
+          $lld = Join-Path $bundle 'llvm/bin/lld-link.exe'
           $rustc = Join-Path $bundle 'rust/bin/rustc.exe'
           & $clang `
             /nologo `
@@ -490,8 +491,7 @@ jobs:
           & (Join-Path $probe 'c-smoke.exe')
           & $rustc `
             --target x86_64-pc-windows-msvc `
-            "-Clinker=$clang" `
-            "-Clink-arg=-fuse-ld=lld" `
+            "-Clinker=$lld" `
             (Join-Path $probe 'main.rs') `
             -o (Join-Path $probe 'rust-smoke.exe')
           & (Join-Path $probe 'rust-smoke.exe')
