@@ -43,7 +43,7 @@
     "third_party/externals/zlib": {
       "source_path": "third_party/zlib",
       "tree_id": "900150756d04b118912c8965c121a068354c6d09",
-      "content_tree_sha256": "f529362367a7a550d077e7216f23acb1761fac1ca081d4d42e39fea4aaaad216"
+      "content_tree_sha256": "7d78663a8e909a69f29cf1ba361721b572b6f45715d29374d0f56417cc9de3b0"
     }
   },
   "llvm": {
