@@ -34,6 +34,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  BROWSER_CHROME_VERSION: 149.0.7827.203
+  BROWSER_CHROMIUM_REVISION: 48860e577c01de4a313192cc79596c46b52efb3a
+  BROWSER_SKIA_REVISION: 75c589e1f436688fca8f5b7f7a8affeafaa4f923
+  BROWSER_LLVM_REVISION: 20b6ec66967ac2a8f932863c1abf251e5b17a843
+  BROWSER_RUST_REVISION: 4c4205163abcbd08948b3efab796c543ba1ea687
   CACHE_GENERATION: ${{ inputs.dependency_cache_generation || 'v1' }}
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
@@ -43,13 +48,13 @@ env:
 
 jobs:
   prepare:
-    name: Resolve latest source graph
+    name: Resolve component commits and fixed browser profile
     runs-on: ubuntu-24.04
     outputs:
       canvas_revision: ${{ steps.resolve.outputs.canvas_revision }}
       skia_revision: ${{ steps.resolve.outputs.skia_revision }}
       chromium_revision: ${{ steps.resolve.outputs.chromium_revision }}
-      depot_tools_revision: ${{ steps.resolve.outputs.depot_tools_revision }}
+      chrome_version: ${{ steps.resolve.outputs.chrome_version }}
     steps:
       - name: Check out latest external component sources
         uses: actions/checkout@main
@@ -61,18 +66,16 @@ jobs:
           path: components/canvas
           persist-credentials: false
 
-      - name: Resolve latest commits for this run
+      - name: Resolve latest component commit for this run
         id: resolve
         shell: bash
         run: |
           set -euo pipefail
           canvas_revision=$(git -C components/canvas rev-parse HEAD)
-          skia_revision=$(git ls-remote https://skia.googlesource.com/skia.git HEAD | cut -f1)
-          chromium_revision=$(git ls-remote https://chromium.googlesource.com/chromium/src.git HEAD | cut -f1)
-          depot_tools_revision=$(git ls-remote https://chromium.googlesource.com/chromium/tools/depot_tools.git HEAD | cut -f1)
+          skia_revision=$BROWSER_SKIA_REVISION
+          chromium_revision=$BROWSER_CHROMIUM_REVISION
           for revision in \
-            "$canvas_revision" "$skia_revision" \
-            "$chromium_revision" "$depot_tools_revision"; do
+            "$canvas_revision" "$skia_revision" "$chromium_revision"; do
             [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || {
               echo "::error::Could not resolve an exact source revision"
               exit 1
@@ -82,7 +85,7 @@ jobs:
             echo "canvas_revision=$canvas_revision"
             echo "skia_revision=$skia_revision"
             echo "chromium_revision=$chromium_revision"
-            echo "depot_tools_revision=$depot_tools_revision"
+            echo "chrome_version=$BROWSER_CHROME_VERSION"
           } >> "$GITHUB_OUTPUT"
           jq -n \
             --arg buildId "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
@@ -90,22 +93,24 @@ jobs:
             --arg canvas "$canvas_revision" \
             --arg skia "$skia_revision" \
             --arg chromium "$chromium_revision" \
-            --arg depotTools "$depot_tools_revision" \
+            --arg chrome "$BROWSER_CHROME_VERSION" \
+            --arg llvm "$BROWSER_LLVM_REVISION" \
+            --arg rust "$BROWSER_RUST_REVISION" \
             '{
-              schema: "darkpanda-resolved-inputs/v1",
-              selectionPolicy: "latest-at-build-start",
+              schema: "darkpanda-resolved-inputs/v2",
+              componentSelectionPolicy: "latest-at-build-start",
+              browserProfilePolicy: "fixed",
               buildId: $buildId,
               darkpanda: {repository: "AeroidesLab/darkpanda", revision: $darkpanda},
               components: {
-                canvas: {repository: "AeroidesLab/canvas", revision: $canvas},
-                html5ever: {repository: "AeroidesLab/darkpanda", revision: $darkpanda, state: "embedded-migration"},
-                wreq: {repository: "AeroidesLab/darkpanda", revision: $darkpanda, state: "embedded-migration"},
-                boringssl: {repository: "AeroidesLab/darkpanda", revision: $darkpanda, state: "embedded-migration"}
+                canvas: {repository: "AeroidesLab/canvas", revision: $canvas}
               },
-              chromium: {
+              browserProfile: {
+                chromeForTestingVersion: $chrome,
                 skiaRevision: $skia,
-                sourceRevision: $chromium,
-                depotToolsRevision: $depotTools
+                chromiumRevision: $chromium,
+                llvmRevision: $llvm,
+                rustRevision: $rust
               }
             }' > resolved-inputs.json
 
@@ -136,7 +141,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
 
     steps:
-      - name: Check out resolved latest Chromium declarations
+      - name: Check out fixed Chrome 149 tool declarations
         shell: bash
         run: |
           set -euo pipefail
@@ -202,14 +207,22 @@ jobs:
               throw "Missing Chromium toolchain file: $path"
             }
           }
+          $clangVersion = (& "$env:GITHUB_WORKSPACE/toolchain/llvm/bin/clang-cl.exe" --version) -join "`n"
+          $rustVersion = (& "$env:GITHUB_WORKSPACE/toolchain/rust/bin/rustc.exe" --version)
+          if ($clangVersion -notmatch $env:BROWSER_LLVM_REVISION.Substring(0, 8)) {
+            throw "Chromium LLVM does not match fixed Chrome 149 profile: $clangVersion"
+          }
+          if ($rustVersion -notmatch $env:BROWSER_RUST_REVISION.Substring(0, 8)) {
+            throw "Chromium Rust does not match fixed Chrome 149 profile: $rustVersion"
+          }
           $metadata = [ordered]@{
             schema = 'chromium-toolchain/v1'
             target = '${{ matrix.id }}'
+            chromeForTestingVersion = '${{ needs.prepare.outputs.chrome_version }}'
             chromiumRevision = '${{ needs.prepare.outputs.chromium_revision }}'
             skiaRevision = '${{ needs.prepare.outputs.skia_revision }}'
-            depotToolsRevision = '${{ needs.prepare.outputs.depot_tools_revision }}'
-            clang = (& "$env:GITHUB_WORKSPACE/toolchain/llvm/bin/clang-cl.exe" --version)[0]
-            rustc = (& "$env:GITHUB_WORKSPACE/toolchain/rust/bin/rustc.exe" --version)
+            clang = $clangVersion.Split("`n")[0]
+            rustc = $rustVersion
             cargo = (& "$env:GITHUB_WORKSPACE/toolchain/rust/bin/cargo.exe" --version)
             gn = (& "$env:GITHUB_WORKSPACE/toolchain/buildtools/gn.exe" --version)
             ninja = (& "$env:GITHUB_WORKSPACE/toolchain/buildtools/ninja.exe" --version)
@@ -248,22 +261,32 @@ jobs:
               exit 1
             }
           done
+          clang_version=$(toolchain/llvm/bin/clang --version)
+          rust_version=$(toolchain/rust/bin/rustc --version)
+          grep -Fq "${BROWSER_LLVM_REVISION:0:8}" <<<"$clang_version" || {
+            echo "::error::Chromium LLVM does not match fixed Chrome 149 profile"
+            exit 1
+          }
+          grep -Fq "${BROWSER_RUST_REVISION:0:8}" <<<"$rust_version" || {
+            echo "::error::Chromium Rust does not match fixed Chrome 149 profile"
+            exit 1
+          }
           jq -n \
             --arg target '${{ matrix.id }}' \
+            --arg chrome '${{ needs.prepare.outputs.chrome_version }}' \
             --arg chromium '${{ needs.prepare.outputs.chromium_revision }}' \
             --arg skia '${{ needs.prepare.outputs.skia_revision }}' \
-            --arg depotTools '${{ needs.prepare.outputs.depot_tools_revision }}' \
-            --arg clang "$(toolchain/llvm/bin/clang --version | head -n1)" \
-            --arg rustc "$(toolchain/rust/bin/rustc --version)" \
+            --arg clang "$(head -n1 <<<"$clang_version")" \
+            --arg rustc "$rust_version" \
             --arg cargo "$(toolchain/rust/bin/cargo --version)" \
             --arg gn "$(toolchain/buildtools/gn --version)" \
             --arg ninja "$(toolchain/buildtools/ninja --version)" \
             '{
               schema: "chromium-toolchain/v1",
               target: $target,
+              chromeForTestingVersion: $chrome,
               chromiumRevision: $chromium,
               skiaRevision: $skia,
-              depotToolsRevision: $depotTools,
               clang: $clang,
               rustc: $rustc,
               cargo: $cargo,
@@ -338,7 +361,7 @@ jobs:
           name: chromium-toolchain-${{ matrix.id }}
           path: toolchain
 
-      - name: Check out exact Skia source and dependencies
+      - name: Check out fixed Chrome 149 Skia source
         shell: bash
         run: |
           set -euo pipefail
