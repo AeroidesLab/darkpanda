@@ -155,12 +155,16 @@ jobs:
             https://chromium.googlesource.com/chromium/src.git
           git -C chromium sparse-checkout init --cone
           git -C chromium sparse-checkout set tools/clang/scripts tools/rust
-          git -C chromium fetch --depth 1 origin '${{ needs.prepare.outputs.chromium_revision }}'
+          git -C chromium fetch --depth 1 --filter=blob:none \
+            origin '${{ needs.prepare.outputs.chromium_revision }}'
           git -C chromium checkout --detach FETCH_HEAD
 
           git -c core.autocrlf=false init skia-tools
           git -C skia-tools remote add origin https://skia.googlesource.com/skia.git
-          git -C skia-tools fetch --depth 1 origin '${{ needs.prepare.outputs.skia_revision }}'
+          git -C skia-tools sparse-checkout init --no-cone
+          git -C skia-tools sparse-checkout set /bin/ /DEPS
+          git -C skia-tools fetch --depth 1 --filter=blob:none \
+            origin '${{ needs.prepare.outputs.skia_revision }}'
           git -C skia-tools checkout --detach FETCH_HEAD
 
           test "$(git -C chromium rev-parse HEAD)" = '${{ needs.prepare.outputs.chromium_revision }}'
