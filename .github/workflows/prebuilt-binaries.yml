@@ -70,7 +70,7 @@ jobs:
           path: components/canvas
           persist-credentials: false
 
-      - name: Freeze source revisions for this run
+      - name: Resolve latest commits for this run
         id: resolve
         shell: bash
         run: |
@@ -146,13 +146,13 @@ jobs:
     runs-on: ${{ matrix.runner }}
 
     steps:
-      - name: Check out exact Chromium tool declarations
+      - name: Check out resolved latest Chromium declarations
         shell: bash
         run: |
           set -euo pipefail
-          git -c core.autocrlf=false clone \
-            --no-checkout --filter=blob:none \
-            https://chromium.googlesource.com/chromium/src.git chromium
+          git -c core.autocrlf=false init chromium
+          git -C chromium remote add origin \
+            https://chromium.googlesource.com/chromium/src.git
           git -C chromium sparse-checkout init --cone
           git -C chromium sparse-checkout set tools/clang/scripts tools/rust
           git -C chromium fetch --depth 1 origin '${{ needs.prepare.outputs.chromium_revision }}'
@@ -309,7 +309,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
 
     steps:
-      - name: Check out exact component source
+      - name: Check out resolved latest component source
         uses: actions/checkout@main
         with:
           repository: AeroidesLab/canvas
@@ -484,7 +484,7 @@ jobs:
 
     steps:
       - name: Check out DarkPanda
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@main
         with:
           fetch-depth: 0
           path: browser
@@ -615,14 +615,14 @@ jobs:
 
       - name: Restore immutable V8 dependency bundle
         id: v8-cache
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache/restore@main
         with:
           path: dependency-cache/${{ matrix.id }}/v8
           key: darkpanda-v8-${{ matrix.id }}-zig-${{ env.ZIG_VERSION }}-v8-${{ env.V8_VERSION }}-${{ env.ZIG_V8_SOURCE_REVISION }}-target-${{ matrix.zig_target }}-deployment-${{ matrix.platform == 'macos' && env.MACOSX_DEPLOYMENT_TARGET || 'na' }}-${{ env.CACHE_GENERATION }}
           enableCrossOsArchive: false
 
       - name: Restore Cargo source downloads
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@main
         with:
           path: |
             ~/.cargo/registry
@@ -736,7 +736,7 @@ jobs:
 
       - name: Save verified V8 dependency bundle
         if: steps.v8-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache/save@main
         with:
           path: dependency-cache/${{ matrix.id }}/v8
           key: ${{ steps.v8-cache.outputs.cache-primary-key }}
@@ -966,7 +966,7 @@ jobs:
           rm -rf -- "$output"/darkpanda-*/
 
       - name: Upload platform archive
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@main
         with:
           name: darkpanda-${{ matrix.id }}
           path: prebuilt/${{ matrix.id }}/*
@@ -982,7 +982,7 @@ jobs:
       contents: write
     steps:
       - name: Download platform archives
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@main
         with:
           pattern: darkpanda-*
           path: downloaded
@@ -1005,7 +1005,7 @@ jobs:
           )
 
       - name: Upload complete prebuilt set
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@main
         with:
           name: darkpanda-prebuilt-all
           path: release/*
