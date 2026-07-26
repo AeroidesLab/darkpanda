@@ -36,6 +36,7 @@ TARGETS = {
             "cxx": "llvm/bin/clang++",
             "linker": "llvm/bin/ld.lld",
             "archiver": "llvm/bin/llvm-ar",
+            "ranlib": "llvm/bin/llvm-ranlib",
             "objdump": "llvm/bin/llvm-objdump",
             "rustc": "rust/bin/rustc",
             "cargo": "rust/bin/cargo",

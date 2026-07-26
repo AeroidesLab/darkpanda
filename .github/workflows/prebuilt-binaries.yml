@@ -435,6 +435,18 @@ jobs:
             --toolchain-dir gclient/browser/chromium-toolchain \
             --output gclient/browser/chromium-toolchain/metadata/skia-chromium-subtrees.json
 
+      - name: Complete Chromium tool aliases
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          llvm_bin=gclient/browser/chromium-toolchain/llvm/bin
+          test -x "$llvm_bin/llvm-ar"
+          if [[ ! -e "$llvm_bin/llvm-ranlib" ]]; then
+            ln -s llvm-ar "$llvm_bin/llvm-ranlib"
+          fi
+          test -x "$llvm_bin/llvm-ranlib"
+
       - name: Prove the minimal graph against official Chromium DEPS
         shell: bash
         run: |
