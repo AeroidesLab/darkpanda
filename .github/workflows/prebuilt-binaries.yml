@@ -856,6 +856,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p logs
+          set +e
           '${{ matrix.python }}' component/tools/build.py \
             --target '${{ matrix.id }}' \
             --profile release \
@@ -864,6 +865,17 @@ jobs:
             --toolchain chromium \
             --toolchain-dir "$GITHUB_WORKSPACE/toolchain" \
             2>&1 | tee "logs/${{ matrix.component }}-${{ matrix.id }}.log"
+          build_status=${PIPESTATUS[0]}
+          set -e
+          if (( build_status != 0 )); then
+            tail -n 20 "logs/${{ matrix.component }}-${{ matrix.id }}.log" |
+              while IFS= read -r line; do
+                line=${line//'%'/'%25'}
+                line=${line//$'\r'/'%0D'}
+                echo "::error title=${{ matrix.component }}/${{ matrix.id }}::$line"
+              done
+            exit "$build_status"
+          fi
 
       - name: Ensure a machine-readable failure report exists
         if: always()
