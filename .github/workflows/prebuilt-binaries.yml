@@ -1,4 +1,5 @@
-name: DarkPanda build
+name: build
+run-name: ${{ github.sha }}
 
 on:
   workflow_dispatch:
@@ -28,7 +29,7 @@ env:
 
 jobs:
   prepare:
-    name: Resolve fixed browser profile and latest component commits
+    name: prepare
     runs-on: ubuntu-24.04
     outputs:
       canvas_revision: ${{ steps.resolve.outputs.canvas_revision }}
@@ -349,7 +350,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   toolchain:
-    name: Chromium toolchain / ${{ matrix.id }}
+    name: toolchain/${{ matrix.id }}
     needs: prepare
     timeout-minutes: 180
     strategy:
@@ -593,7 +594,7 @@ jobs:
           retention-days: 30
 
   components:
-    name: ${{ matrix.component }} / ${{ matrix.id }}
+    name: ${{ matrix.component }}/${{ matrix.id }}
     needs:
       - prepare
       - toolchain
@@ -899,7 +900,7 @@ jobs:
           retention-days: 30
 
   native-summary:
-    name: Native component gate
+    name: native
     needs:
       - prepare
       - components
@@ -1018,7 +1019,7 @@ jobs:
           test '${{ steps.aggregate.outcome }}' = success
 
   darkpanda:
-    name: DarkPanda / ${{ matrix.id }}
+    name: build/${{ matrix.id }}
     needs:
       - prepare
       - native-summary
@@ -2084,7 +2085,7 @@ jobs:
             "reports/darkpanda-${{ matrix.id }}.json" >/dev/null
 
   aggregate:
-    name: Verify and aggregate Windows/Linux runtimes
+    name: package
     needs:
       - prepare
       - native-summary
@@ -2205,7 +2206,7 @@ jobs:
           test '${{ steps.validate.outcome }}' = success
 
   release:
-    name: Publish verified Windows/Linux prerelease
+    name: release
     needs:
       - aggregate
     if: needs.aggregate.result == 'success' && inputs.publish_release
