@@ -17,8 +17,8 @@ on:
         description: Release tag for a manual publish (for example v1.0.0-ci.1)
         required: false
         type: string
-      canvas_validation_only:
-        description: Build and test the latest private Canvas source without packaging DarkPanda
+      native_components_only:
+        description: Build and test external native components without packaging DarkPanda
         required: true
         default: false
         type: boolean
@@ -51,8 +51,85 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "12.0"
 
 jobs:
-  canvas:
-    name: Canvas ${{ matrix.id }} (Chromium toolchain)
+  prepare:
+    name: Resolve latest source graph
+    runs-on: ubuntu-24.04
+    outputs:
+      canvas_revision: ${{ steps.resolve.outputs.canvas_revision }}
+      skia_revision: ${{ steps.resolve.outputs.skia_revision }}
+      chromium_revision: ${{ steps.resolve.outputs.chromium_revision }}
+      depot_tools_revision: ${{ steps.resolve.outputs.depot_tools_revision }}
+    steps:
+      - name: Check out latest external component sources
+        uses: actions/checkout@main
+        with:
+          repository: AeroidesLab/canvas
+          ref: main
+          token: ${{ secrets.SOURCE_READ_TOKEN || secrets.CANVAS_READ_TOKEN }}
+          fetch-depth: 1
+          path: components/canvas
+          persist-credentials: false
+
+      - name: Freeze source revisions for this run
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          canvas_revision=$(git -C components/canvas rev-parse HEAD)
+          skia_revision=$(git ls-remote https://skia.googlesource.com/skia.git HEAD | cut -f1)
+          chromium_revision=$(git ls-remote https://chromium.googlesource.com/chromium/src.git HEAD | cut -f1)
+          depot_tools_revision=$(git ls-remote https://chromium.googlesource.com/chromium/tools/depot_tools.git HEAD | cut -f1)
+          for revision in \
+            "$canvas_revision" "$skia_revision" \
+            "$chromium_revision" "$depot_tools_revision"; do
+            [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "::error::Could not resolve an exact source revision"
+              exit 1
+            }
+          done
+          {
+            echo "canvas_revision=$canvas_revision"
+            echo "skia_revision=$skia_revision"
+            echo "chromium_revision=$chromium_revision"
+            echo "depot_tools_revision=$depot_tools_revision"
+          } >> "$GITHUB_OUTPUT"
+          jq -n \
+            --arg buildId "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --arg darkpanda "$GITHUB_SHA" \
+            --arg canvas "$canvas_revision" \
+            --arg skia "$skia_revision" \
+            --arg chromium "$chromium_revision" \
+            --arg depotTools "$depot_tools_revision" \
+            --arg boringssl "$BORINGSSL_SOURCE_REVISION" \
+            '{
+              schema: "darkpanda-resolved-inputs/v1",
+              selectionPolicy: "latest-at-build-start",
+              buildId: $buildId,
+              darkpanda: {repository: "AeroidesLab/darkpanda", revision: $darkpanda},
+              components: {
+                canvas: {repository: "AeroidesLab/canvas", revision: $canvas},
+                html5ever: {repository: "AeroidesLab/darkpanda", revision: $darkpanda, state: "embedded-migration"},
+                wreq: {repository: "AeroidesLab/darkpanda", revision: $darkpanda, state: "embedded-migration"},
+                boringssl: {repository: "AeroidesLab/darkpanda-release-source", revision: $boringssl, state: "legacy-migration"}
+              },
+              chromium: {
+                skiaRevision: $skia,
+                sourceRevision: $chromium,
+                depotToolsRevision: $depotTools
+              }
+            }' > resolved-inputs.json
+
+      - name: Upload resolved source graph
+        uses: actions/upload-artifact@main
+        with:
+          name: resolved-inputs
+          path: resolved-inputs.json
+          if-no-files-found: error
+          retention-days: 30
+
+  toolchain:
+    name: Chromium toolchain / ${{ matrix.id }}
+    needs: prepare
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -69,33 +146,25 @@ jobs:
     runs-on: ${{ matrix.runner }}
 
     steps:
-      - name: Check out latest private Canvas source
-        uses: actions/checkout@main
-        with:
-          repository: AeroidesLab/canvas
-          ref: main
-          token: ${{ secrets.CANVAS_READ_TOKEN }}
-          fetch-depth: 1
-          path: canvas
-          persist-credentials: false
-
-      - name: Verify source-only repository contract
+      - name: Check out exact Chromium tool declarations
         shell: bash
         run: |
           set -euo pipefail
-          jq -e '.selection_policy == "latest-at-build-start"' \
-            canvas/source-policy.json >/dev/null
-          test ! -d canvas/.github/workflows
-          forbidden=$(
-            git -C canvas ls-files |
-              grep -E '(^|/)(target|out|skia|chromium|tools-bin)/|Cargo\.lock$|\.(dll|dylib|so|lib|a|exe|pdb|obj|o|log)$' ||
-              true
-          )
-          if [[ -n "$forbidden" ]]; then
-            echo "::error::Generated or binary files are tracked by AeroidesLab/canvas"
-            printf '%s\n' "$forbidden"
-            exit 1
-          fi
+          git -c core.autocrlf=false clone \
+            --no-checkout --filter=blob:none \
+            https://chromium.googlesource.com/chromium/src.git chromium
+          git -C chromium sparse-checkout init --cone
+          git -C chromium sparse-checkout set tools/clang/scripts tools/rust
+          git -C chromium fetch --depth 1 origin '${{ needs.prepare.outputs.chromium_revision }}'
+          git -C chromium checkout --detach FETCH_HEAD
+
+          git -c core.autocrlf=false init skia-tools
+          git -C skia-tools remote add origin https://skia.googlesource.com/skia.git
+          git -C skia-tools fetch --depth 1 origin '${{ needs.prepare.outputs.skia_revision }}'
+          git -C skia-tools checkout --detach FETCH_HEAD
+
+          test "$(git -C chromium rev-parse HEAD)" = '${{ needs.prepare.outputs.chromium_revision }}'
+          test "$(git -C skia-tools rev-parse HEAD)" = '${{ needs.prepare.outputs.skia_revision }}'
 
       - name: Install Linux prerequisites
         if: runner.os == 'Linux'
@@ -106,123 +175,266 @@ jobs:
           sudo apt-get install --yes --no-install-recommends \
             ca-certificates git nasm python3 xz-utils
 
-      - name: Resolve latest Skia and Chromium toolchain declarations
-        shell: bash
-        run: |
-          set -euo pipefail
-          git -c core.autocrlf=false clone \
-            --depth 1 \
-            https://skia.googlesource.com/skia.git \
-            skia
-          git -c core.autocrlf=false clone \
-            --depth 1 \
-            --filter=blob:none \
-            --sparse \
-            https://chromium.googlesource.com/chromium/src.git \
-            chromium
-          git -C chromium sparse-checkout set \
-            tools/clang/scripts \
-            tools/rust
-          {
-            echo "CANVAS_REVISION=$(git -C canvas rev-parse HEAD)"
-            echo "SKIA_REVISION=$(git -C skia rev-parse HEAD)"
-            echo "CHROMIUM_REVISION=$(git -C chromium rev-parse HEAD)"
-          } >> "$GITHUB_ENV"
-
-      - name: Synchronize Skia dependencies and Chromium tools on Windows
+      - name: Materialize Chromium compiler bundle on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          Push-Location skia
+          python chromium/tools/clang/scripts/update.py `
+            --output-dir="$env:GITHUB_WORKSPACE/toolchain/llvm"
+          python chromium/tools/rust/update_rust.py `
+            --output-dir="$env:GITHUB_WORKSPACE/toolchain/rust"
+          Push-Location skia-tools
           try {
-            python tools/git-sync-deps
             python bin/fetch-gn
             python bin/fetch-ninja
           } finally {
             Pop-Location
           }
-          python chromium/tools/clang/scripts/update.py `
-            --output-dir="$env:GITHUB_WORKSPACE/toolchain/llvm"
-          python chromium/tools/rust/update_rust.py `
-            --output-dir="$env:GITHUB_WORKSPACE/toolchain/rust"
+          New-Item -ItemType Directory -Force toolchain/buildtools | Out-Null
+          Copy-Item skia-tools/bin/gn.exe toolchain/buildtools/gn.exe
+          Copy-Item skia-tools/third_party/ninja/ninja.exe toolchain/buildtools/ninja.exe
+          $required = @(
+            'toolchain/llvm/bin/clang-cl.exe',
+            'toolchain/llvm/bin/lld-link.exe',
+            'toolchain/rust/bin/cargo.exe',
+            'toolchain/rust/bin/rustc.exe',
+            'toolchain/buildtools/gn.exe',
+            'toolchain/buildtools/ninja.exe'
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Missing Chromium toolchain file: $path"
+            }
+          }
+          $metadata = [ordered]@{
+            schema = 'chromium-toolchain/v1'
+            target = '${{ matrix.id }}'
+            chromiumRevision = '${{ needs.prepare.outputs.chromium_revision }}'
+            skiaRevision = '${{ needs.prepare.outputs.skia_revision }}'
+            depotToolsRevision = '${{ needs.prepare.outputs.depot_tools_revision }}'
+            clang = (& "$env:GITHUB_WORKSPACE/toolchain/llvm/bin/clang-cl.exe" --version)[0]
+            rustc = (& "$env:GITHUB_WORKSPACE/toolchain/rust/bin/rustc.exe" --version)
+            cargo = (& "$env:GITHUB_WORKSPACE/toolchain/rust/bin/cargo.exe" --version)
+            gn = (& "$env:GITHUB_WORKSPACE/toolchain/buildtools/gn.exe" --version)
+            ninja = (& "$env:GITHUB_WORKSPACE/toolchain/buildtools/ninja.exe" --version)
+          }
+          New-Item -ItemType Directory -Force toolchain/metadata | Out-Null
+          $metadata | ConvertTo-Json -Depth 5 |
+            Set-Content -LiteralPath toolchain/metadata/toolchain.json -Encoding utf8
 
-      - name: Synchronize Skia dependencies and Chromium tools on Linux
+      - name: Materialize Chromium compiler bundle on Linux
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
-          (
-            cd skia
-            python3 tools/git-sync-deps
-            python3 bin/fetch-gn
-            python3 bin/fetch-ninja
-          )
           python3 chromium/tools/clang/scripts/update.py \
             --output-dir="$GITHUB_WORKSPACE/toolchain/llvm"
           python3 chromium/tools/rust/update_rust.py \
             --output-dir="$GITHUB_WORKSPACE/toolchain/rust"
+          (
+            cd skia-tools
+            python3 bin/fetch-gn
+            python3 bin/fetch-ninja
+          )
+          mkdir -p toolchain/buildtools toolchain/metadata
+          install -m 755 skia-tools/bin/gn toolchain/buildtools/gn
+          install -m 755 skia-tools/third_party/ninja/ninja toolchain/buildtools/ninja
+          for path in \
+            toolchain/llvm/bin/clang \
+            toolchain/llvm/bin/clang++ \
+            toolchain/llvm/bin/ld.lld \
+            toolchain/rust/bin/cargo \
+            toolchain/rust/bin/rustc \
+            toolchain/buildtools/gn \
+            toolchain/buildtools/ninja; do
+            test -x "$path" || {
+              echo "::error::Missing Chromium toolchain file: $path"
+              exit 1
+            }
+          done
+          jq -n \
+            --arg target '${{ matrix.id }}' \
+            --arg chromium '${{ needs.prepare.outputs.chromium_revision }}' \
+            --arg skia '${{ needs.prepare.outputs.skia_revision }}' \
+            --arg depotTools '${{ needs.prepare.outputs.depot_tools_revision }}' \
+            --arg clang "$(toolchain/llvm/bin/clang --version | head -n1)" \
+            --arg rustc "$(toolchain/rust/bin/rustc --version)" \
+            --arg cargo "$(toolchain/rust/bin/cargo --version)" \
+            --arg gn "$(toolchain/buildtools/gn --version)" \
+            --arg ninja "$(toolchain/buildtools/ninja --version)" \
+            '{
+              schema: "chromium-toolchain/v1",
+              target: $target,
+              chromiumRevision: $chromium,
+              skiaRevision: $skia,
+              depotToolsRevision: $depotTools,
+              clang: $clang,
+              rustc: $rustc,
+              cargo: $cargo,
+              gn: $gn,
+              ninja: $ninja
+            }' > toolchain/metadata/toolchain.json
 
-      - name: Build and test Canvas on Windows
+      - name: Upload shared Chromium toolchain
+        uses: actions/upload-artifact@main
+        with:
+          name: chromium-toolchain-${{ matrix.id }}
+          path: toolchain
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  components:
+    name: Native component / ${{ matrix.component }} / ${{ matrix.id }}
+    needs:
+      - prepare
+      - toolchain
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: canvas
+            id: windows-x86_64
+            runner: windows-2022
+            python: python
+            jobs: 4
+          - component: canvas
+            id: linux-x86_64
+            runner: ubuntu-24.04
+            python: python3
+            jobs: 4
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out exact component source
+        uses: actions/checkout@main
+        with:
+          repository: AeroidesLab/canvas
+          ref: ${{ needs.prepare.outputs.canvas_revision }}
+          token: ${{ secrets.SOURCE_READ_TOKEN || secrets.CANVAS_READ_TOKEN }}
+          fetch-depth: 1
+          path: components/canvas
+          persist-credentials: false
+
+      - name: Verify source-only component contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C components/canvas rev-parse HEAD)" = '${{ needs.prepare.outputs.canvas_revision }}'
+          jq -e '.selection_policy == "latest-at-build-start"' \
+            components/canvas/source-policy.json >/dev/null
+          test ! -d components/canvas/.github/workflows
+          forbidden=$(
+            git -C components/canvas ls-files |
+              grep -E '(^|/)(target|out|skia|chromium|tools-bin)/|Cargo\.lock$|\.(dll|dylib|so|lib|a|exe|pdb|obj|o|log)$' ||
+              true
+          )
+          if [[ -n "$forbidden" ]]; then
+            echo "::error::Generated or binary files are tracked by AeroidesLab/canvas"
+            printf '%s\n' "$forbidden"
+            exit 1
+          fi
+
+      - name: Download shared Chromium toolchain
+        uses: actions/download-artifact@main
+        with:
+          name: chromium-toolchain-${{ matrix.id }}
+          path: toolchain
+
+      - name: Check out exact Skia source and dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c core.autocrlf=false init skia
+          git -C skia remote add origin https://skia.googlesource.com/skia.git
+          git -C skia fetch --depth 1 origin '${{ needs.prepare.outputs.skia_revision }}'
+          git -C skia checkout --detach FETCH_HEAD
+          test "$(git -C skia rev-parse HEAD)" = '${{ needs.prepare.outputs.skia_revision }}'
+
+      - name: Install Linux prerequisites
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            ca-certificates git nasm python3 xz-utils
+          chmod +x \
+            toolchain/llvm/bin/* \
+            toolchain/rust/bin/* \
+            toolchain/buildtools/*
+
+      - name: Synchronize Skia source dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd skia
+          '${{ matrix.python }}' tools/git-sync-deps
+
+      - name: Build and test component on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          python canvas/tools/build.py `
+          python components/canvas/tools/build.py `
             --target windows-x86_64 `
             --skia-dir "$env:GITHUB_WORKSPACE/skia" `
             --clang-dir "$env:GITHUB_WORKSPACE/toolchain/llvm" `
             --rust-dir "$env:GITHUB_WORKSPACE/toolchain/rust" `
-            --dist-dir "$env:GITHUB_WORKSPACE/canvas-dist/windows-x86_64" `
+            --buildtools-dir "$env:GITHUB_WORKSPACE/toolchain/buildtools" `
+            --dist-dir "$env:GITHUB_WORKSPACE/component-dist/canvas/windows-x86_64" `
             --jobs ${{ matrix.jobs }}
 
-      - name: Build and test Canvas on Linux
+      - name: Build and test component on Linux
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
-          python3 canvas/tools/build.py \
+          python3 components/canvas/tools/build.py \
             --target linux-x86_64 \
             --skia-dir "$GITHUB_WORKSPACE/skia" \
             --clang-dir "$GITHUB_WORKSPACE/toolchain/llvm" \
             --rust-dir "$GITHUB_WORKSPACE/toolchain/rust" \
-            --dist-dir "$GITHUB_WORKSPACE/canvas-dist/linux-x86_64" \
+            --buildtools-dir "$GITHUB_WORKSPACE/toolchain/buildtools" \
+            --dist-dir "$GITHUB_WORKSPACE/component-dist/canvas/linux-x86_64" \
             --jobs '${{ matrix.jobs }}'
 
-      - name: Write Canvas build summary
+      - name: Write component build summary
         if: always()
         shell: bash
         run: |
           {
-            echo "## Canvas ${{ matrix.id }}"
+            echo "## Native component: ${{ matrix.component }} / ${{ matrix.id }}"
             echo
-            echo "- Canvas: \`${CANVAS_REVISION:-unresolved}\`"
-            echo "- Skia: \`${SKIA_REVISION:-unresolved}\`"
-            echo "- Chromium toolchain declaration: \`${CHROMIUM_REVISION:-unresolved}\`"
-            if [[ -f "canvas-dist/${{ matrix.id }}/metadata/build-info.json" ]]; then
+            echo "- Canvas: \`${{ needs.prepare.outputs.canvas_revision }}\`"
+            echo "- Skia: \`${{ needs.prepare.outputs.skia_revision }}\`"
+            echo "- Chromium: \`${{ needs.prepare.outputs.chromium_revision }}\`"
+            if [[ -f "component-dist/canvas/${{ matrix.id }}/metadata/build-info.json" ]]; then
               echo
               echo '```json'
-              cat "canvas-dist/${{ matrix.id }}/metadata/build-info.json"
+              cat "component-dist/canvas/${{ matrix.id }}/metadata/build-info.json"
               echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload Canvas library and reports
+      - name: Upload component library and reports
         if: always()
         uses: actions/upload-artifact@main
         with:
           name: canvas-${{ matrix.id }}
-          path: canvas-dist/${{ matrix.id }}
+          path: component-dist/canvas/${{ matrix.id }}
           if-no-files-found: warn
           compression-level: 0
           retention-days: 30
 
   build:
-    name: ${{ matrix.id }}
-    needs: canvas
-    if: inputs.canvas_validation_only != true
+    name: DarkPanda / ${{ matrix.id }}
+    needs: components
+    if: inputs.native_components_only != true
     timeout-minutes: 360
     strategy:
       fail-fast: false
