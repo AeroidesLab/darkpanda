@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ntpath
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ class MaterializeSkiaCpuDepsTest(unittest.TestCase):
             root = Path(temporary)
             files = {
                 "BUILD.gn": b"build",
+                "arm0.c": b"root",
                 "arm/arm_init.c": b"arm",
                 "README.chromium": b"readme",
             }
@@ -23,7 +25,17 @@ class MaterializeSkiaCpuDepsTest(unittest.TestCase):
                 path.write_bytes(content)
 
             expected = hashlib.sha256()
-            for relative in sorted(files, key=lambda value: (value.casefold(), value)):
+            expected_order = [
+                "arm0.c",
+                "arm/arm_init.c",
+                "BUILD.gn",
+                "README.chromium",
+            ]
+            self.assertEqual(
+                expected_order,
+                sorted(files, key=lambda value: (ntpath.normcase(value), value)),
+            )
+            for relative in expected_order:
                 encoded = relative.encode("utf-8")
                 expected.update(len(encoded).to_bytes(8, "big"))
                 expected.update(encoded)

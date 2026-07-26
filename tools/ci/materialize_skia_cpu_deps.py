@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import ntpath
 import os
 import pathlib
 import shutil
@@ -33,12 +34,11 @@ def tree_digest(root: pathlib.Path) -> tuple[str, int]:
         for path in root.rglob("*")
         if path.is_file()
     ]
-    # pathlib orders WindowsPath case-insensitively but PosixPath
-    # case-sensitively.  The fixed profile digests were generated with the
-    # former ordering, so define it explicitly to make both runners hash the
-    # same byte stream.  The original spelling is a deterministic tie-breaker
-    # for paths that differ only by case.
-    files.sort(key=lambda entry: (entry[0].casefold(), entry[0]))
+    # The fixed profile digests were generated from WindowsPath ordering,
+    # which normalizes both case and path separators.  Apply that comparison
+    # key explicitly so every runner hashes the same byte stream.  The original
+    # spelling is a deterministic tie-breaker for paths that normalize equally.
+    files.sort(key=lambda entry: (ntpath.normcase(entry[0]), entry[0]))
     for relative_text, path in files:
         relative = relative_text.encode("utf-8")
         content_digest = bytes.fromhex(sha256_file(path))
