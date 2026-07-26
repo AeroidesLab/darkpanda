@@ -34,15 +34,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ZIG_VERSION: 0.15.2
-  RUST_VERSION: 1.88.0
-  V8_VERSION: 14.9.207.35
-  V8_REVISION: 933ce636c562cd54d68e7f7c93ab5cdffd685fca
-  ZIG_V8_SOURCE_REVISION: 88b51c8f58652501b7076b36ef4d9e16a44aca38
-  BORINGSSL_SOURCE_REVISION: 391764c3c0224eaa64d3bfbfe05cb8121bd41151
-  DEPENDENCY_SOURCE_RELEASE: build-dependencies-v1
-  ZIG_V8_SOURCE_ARCHIVE_SHA256: a62265bad6e94bf391edc8a99e35bbba78644be7202f87d9ac1eb6f767c1556b
-  BORINGSSL_SOURCE_ARCHIVE_SHA256: e9e1d9a342699b0eb0c28556377b4258b722ce8f61ecc98f5029646256cd5a1a
   CACHE_GENERATION: ${{ inputs.dependency_cache_generation || 'v1' }}
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
@@ -100,7 +91,6 @@ jobs:
             --arg skia "$skia_revision" \
             --arg chromium "$chromium_revision" \
             --arg depotTools "$depot_tools_revision" \
-            --arg boringssl "$BORINGSSL_SOURCE_REVISION" \
             '{
               schema: "darkpanda-resolved-inputs/v1",
               selectionPolicy: "latest-at-build-start",
@@ -110,7 +100,7 @@ jobs:
                 canvas: {repository: "AeroidesLab/canvas", revision: $canvas},
                 html5ever: {repository: "AeroidesLab/darkpanda", revision: $darkpanda, state: "embedded-migration"},
                 wreq: {repository: "AeroidesLab/darkpanda", revision: $darkpanda, state: "embedded-migration"},
-                boringssl: {repository: "AeroidesLab/darkpanda-release-source", revision: $boringssl, state: "legacy-migration"}
+                boringssl: {repository: "AeroidesLab/darkpanda", revision: $darkpanda, state: "embedded-migration"}
               },
               chromium: {
                 skiaRevision: $skia,
@@ -161,8 +151,8 @@ jobs:
 
           git -c core.autocrlf=false init skia-tools
           git -C skia-tools remote add origin https://skia.googlesource.com/skia.git
-          git -C skia-tools sparse-checkout init --no-cone
-          git -C skia-tools sparse-checkout set /bin/ /DEPS
+          git -C skia-tools sparse-checkout init --cone
+          git -C skia-tools sparse-checkout set bin
           git -C skia-tools fetch --depth 1 --filter=blob:none \
             origin '${{ needs.prepare.outputs.skia_revision }}'
           git -C skia-tools checkout --detach FETCH_HEAD
@@ -439,6 +429,18 @@ jobs:
     name: DarkPanda / ${{ matrix.id }}
     needs: components
     if: inputs.native_components_only != true
+    env:
+      # Temporary legacy inputs. Remove this block as the remaining three
+      # external component repositories enter the components matrix.
+      ZIG_VERSION: 0.15.2
+      RUST_VERSION: 1.88.0
+      V8_VERSION: 14.9.207.35
+      V8_REVISION: 933ce636c562cd54d68e7f7c93ab5cdffd685fca
+      ZIG_V8_SOURCE_REVISION: 88b51c8f58652501b7076b36ef4d9e16a44aca38
+      BORINGSSL_SOURCE_REVISION: 391764c3c0224eaa64d3bfbfe05cb8121bd41151
+      DEPENDENCY_SOURCE_RELEASE: build-dependencies-v1
+      ZIG_V8_SOURCE_ARCHIVE_SHA256: a62265bad6e94bf391edc8a99e35bbba78644be7202f87d9ac1eb6f767c1556b
+      BORINGSSL_SOURCE_ARCHIVE_SHA256: e9e1d9a342699b0eb0c28556377b4258b722ce8f61ecc98f5029646256cd5a1a
     timeout-minutes: 360
     strategy:
       fail-fast: false
