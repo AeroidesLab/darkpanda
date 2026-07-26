@@ -738,6 +738,8 @@ jobs:
           path: toolchain-archive
 
       - name: Verify and unpack the shared Chromium bundle
+        env:
+          MSYS: winsymlinks:nativestrict
         shell: bash
         run: |
           set -euo pipefail
@@ -868,12 +870,11 @@ jobs:
           build_status=${PIPESTATUS[0]}
           set -e
           if (( build_status != 0 )); then
-            tail -n 20 "logs/${{ matrix.component }}-${{ matrix.id }}.log" |
-              while IFS= read -r line; do
-                line=${line//'%'/'%25'}
-                line=${line//$'\r'/'%0D'}
-                echo "::error title=${{ matrix.component }}/${{ matrix.id }}::$line"
-              done
+            failure_tail=$(tail -n 20 "logs/${{ matrix.component }}-${{ matrix.id }}.log")
+            failure_tail=${failure_tail//'%'/'%25'}
+            failure_tail=${failure_tail//$'\r'/'%0D'}
+            failure_tail=${failure_tail//$'\n'/'%0A'}
+            echo "::error title=${{ matrix.component }}/${{ matrix.id }}::$failure_tail"
             exit "$build_status"
           fi
 
