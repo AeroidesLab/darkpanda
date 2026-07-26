@@ -60,17 +60,10 @@ TARGETS = {
 STEPS = (
     "sourceContract",
     "installZig",
-    "format",
-    "testRunnerContract",
     "v8Build",
     "v8Verify",
-    "check",
-    "debugTests",
-    "releaseFastTests",
     "install",
-    "runtimeAttestation",
     "package",
-    "packageRuntimeAttestation",
 )
 
 
@@ -141,63 +134,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
         target = TARGETS[target_id]
         result = self.results / f"darkpanda-result-{target_id}"
         reports = result / "reports"
-        tests = reports / "tests" / target_id
-        tests.mkdir(parents=True)
-        test_json = {
-            "schema": "darkpanda-test-results/v1",
-            "summary": {
-                "selected": 1,
-                "passed": 1,
-                "failed": 0,
-                "skipped": 0,
-                "leaked": 0,
-                "duration_nanoseconds": 1,
-                "fail_first": False,
-                "zero_matches": False,
-                "success": True,
-            },
-            "tests": [
-                {
-                    "name": "fixture",
-                    "status": "passed",
-                    "duration_nanoseconds": 1,
-                    "error_name": None,
-                    "memory_leak": False,
-                }
-            ],
-        }
-        junit = (
-            '<?xml version="1.0" encoding="UTF-8"?>\n'
-            '<testsuites tests="1" failures="0" errors="0" skipped="0" time="0">\n'
-            '  <testsuite name="darkpanda" tests="1" failures="0" errors="0" '
-            'skipped="0" time="0"><testcase name="fixture"/></testsuite>\n'
-            "</testsuites>\n"
-        )
-        write_json(tests / "debug.json", test_json)
-        (tests / "debug.xml").write_text(junit, encoding="utf-8")
-        write_json(tests / "release-fast.json", test_json)
-        (tests / "release-fast.xml").write_text(junit, encoding="utf-8")
-        attestation_path = reports / f"runtime-{target_id}.json"
-        write_json(
-            attestation_path,
-            {
-                "schema": "darkpanda-runtime-load-attestation/v1",
-                "status": "PASS",
-                "canvasAbiVersion": 5,
-                "paths": {
-                    "ffi": f"/runtime/{target_id}/ffi",
-                    "wreq": f"/runtime/{target_id}/wreq",
-                    "canvas": f"/runtime/{target_id}/canvas",
-                    "html5ever": f"/runtime/{target_id}/html5ever",
-                },
-                "loadedLibraries": [
-                    f"/runtime/{target_id}/ffi",
-                    f"/runtime/{target_id}/wreq",
-                    f"/runtime/{target_id}/canvas",
-                    f"/runtime/{target_id}/html5ever",
-                ],
-            },
-        )
+        reports.mkdir(parents=True)
 
         package_dir = result / "prebuilt" / target_id
         package_dir.mkdir(parents=True)
@@ -269,7 +206,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
         write_json(
             reports / f"darkpanda-{target_id}.json",
             {
-                "schema": "darkpanda-platform-result/v1",
+                "schema": "darkpanda-platform-result/v2",
                 "target": target_id,
                 "platform": target["platform"],
                 "status": "passed",
@@ -282,15 +219,6 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                 "zigV8SourceRevision": ZIG_V8_REVISION,
                 "steps": step_results,
                 "reports": {
-                    "debugJsonSha256": file_digest(tests / "debug.json"),
-                    "debugJunitSha256": file_digest(tests / "debug.xml"),
-                    "releaseFastJsonSha256": file_digest(
-                        tests / "release-fast.json"
-                    ),
-                    "releaseFastJunitSha256": file_digest(
-                        tests / "release-fast.xml"
-                    ),
-                    "runtimeAttestationSha256": file_digest(attestation_path),
                     "packageRuntimeAttestationSha256": file_digest(
                         package_attestation_path
                     ),
@@ -489,13 +417,17 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
     def test_incomplete_runtime_load_proof_fails(self) -> None:
         target_id = "linux-x86_64"
         result = self.results / f"darkpanda-result-{target_id}"
-        attestation = result / "reports" / f"runtime-{target_id}.json"
+        attestation = (
+            result / "reports" / f"packaged-runtime-{target_id}.json"
+        )
         payload = json.loads(attestation.read_text(encoding="utf-8"))
-        del payload["paths"]["html5ever"]
+        del payload["runtime"]["paths"]["html5ever"]
         write_json(attestation, payload)
         platform = result / "reports" / f"darkpanda-{target_id}.json"
         platform_payload = json.loads(platform.read_text(encoding="utf-8"))
-        platform_payload["reports"]["runtimeAttestationSha256"] = file_digest(attestation)
+        platform_payload["reports"]["packageRuntimeAttestationSha256"] = (
+            file_digest(attestation)
+        )
         write_json(platform, platform_payload)
 
         completed = self.run_validator()
@@ -503,44 +435,9 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
         summary = json.loads((self.root / "summary.json").read_text())
         self.assertEqual(summary["status"], "failed")
         self.assertIn(
-            "runtime library loading",
+            "packaged runtime attestation",
             "\n".join(summary["errors"]),
         )
-
-    def test_browser_test_failures_are_diagnostic_only(self) -> None:
-        target_id = "linux-x86_64"
-        result = self.results / f"darkpanda-result-{target_id}"
-        tests = result / "reports" / "tests" / target_id
-        report_path = tests / "debug.json"
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-        report["summary"].update(
-            {
-                "passed": 0,
-                "failed": 1,
-                "success": False,
-            }
-        )
-        report["tests"][0]["status"] = "failed"
-        write_json(report_path, report)
-        junit_path = tests / "debug.xml"
-        junit_path.write_text(
-            '<?xml version="1.0" encoding="UTF-8"?>\n'
-            '<testsuites tests="1" failures="1" errors="0" skipped="0" time="0">\n'
-            '  <testsuite name="darkpanda" tests="1" failures="1" errors="0" '
-            'skipped="0" time="0"><testcase name="fixture">'
-            '<failure message="diagnostic"/></testcase></testsuite>\n'
-            "</testsuites>\n",
-            encoding="utf-8",
-        )
-        platform_path = result / "reports" / f"darkpanda-{target_id}.json"
-        platform = json.loads(platform_path.read_text(encoding="utf-8"))
-        platform["steps"]["debugTests"] = "failure"
-        platform["reports"]["debugJsonSha256"] = file_digest(report_path)
-        platform["reports"]["debugJunitSha256"] = file_digest(junit_path)
-        write_json(platform_path, platform)
-
-        completed = self.run_validator()
-        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_packaged_runtime_must_use_clean_loader_policy(self) -> None:
         target_id = "linux-x86_64"

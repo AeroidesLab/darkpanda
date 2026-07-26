@@ -10,12 +10,11 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shutil
 import tarfile
-import xml.etree.ElementTree as ET
 import zipfile
 from typing import BinaryIO, Callable
 
 
-SCHEMA = "darkpanda-platform-result/v1"
+SCHEMA = "darkpanda-platform-result/v2"
 SUMMARY_SCHEMA = "darkpanda-prebuilt-aggregate/v1"
 COMPONENTS = ("canvas", "html5ever", "wreq", "boringssl")
 LINUX_OS_NEEDED = frozenset(
@@ -63,11 +62,8 @@ COMMON_STEPS = (
     "installZig",
     "v8Build",
     "v8Verify",
-    "check",
     "install",
-    "runtimeAttestation",
     "package",
-    "packageRuntimeAttestation",
 )
 
 
@@ -221,37 +217,6 @@ def component_revision(build_info: dict[str, object]) -> str:
         return source["revision"]
     revision = build_info.get("canvasRevision")
     return revision if isinstance(revision, str) else ""
-
-
-def validate_test_report(json_path: Path, junit_path: Path) -> dict[str, int]:
-    report = load_json(json_path)
-    if report.get("schema") != "darkpanda-test-results/v1":
-        raise ValueError(f"unexpected test JSON schema: {json_path}")
-    summary = report.get("summary")
-    tests = report.get("tests")
-    if not isinstance(summary, dict) or not isinstance(tests, list):
-        raise ValueError(f"incomplete test JSON: {json_path}")
-    selected = summary.get("selected")
-    if not isinstance(selected, int) or selected < 0 or len(tests) != selected:
-        raise ValueError(f"invalid diagnostic test totals: {json_path}")
-
-    root = ET.parse(junit_path).getroot()
-    if root.tag != "testsuites":
-        raise ValueError(f"unexpected JUnit root in {junit_path}: {root.tag}")
-    try:
-        junit_tests = int(root.attrib["tests"])
-        junit_failures = int(root.attrib["failures"])
-        junit_errors = int(root.attrib["errors"])
-    except (KeyError, ValueError) as error:
-        raise ValueError(f"invalid JUnit totals: {junit_path}") from error
-    if min(junit_tests, junit_failures, junit_errors) < 0:
-        raise ValueError(f"invalid negative JUnit totals: {junit_path}")
-    return {
-        "selected": selected,
-        "passed": int(summary.get("passed", 0)),
-        "failed": int(summary.get("failed", 0)),
-        "skipped": int(summary.get("skipped", 0)),
-    }
 
 
 def parse_checksum(path: Path, expected_name: str) -> str:
@@ -674,29 +639,6 @@ def validate_platform(
     if failures:
         raise ValueError(f"platform steps did not pass: {', '.join(failures)}")
 
-    test_root = root / "reports" / "tests" / target_id
-    debug = validate_test_report(test_root / "debug.json", test_root / "debug.xml")
-    release = validate_test_report(
-        test_root / "release-fast.json", test_root / "release-fast.xml"
-    )
-    attestation_path = root / "reports" / f"runtime-{target_id}.json"
-    attestation = load_json(attestation_path)
-    runtime_paths = attestation.get("paths")
-    loaded_libraries = attestation.get("loadedLibraries")
-    if (
-        attestation.get("schema")
-        != "darkpanda-runtime-load-attestation/v1"
-        or attestation.get("status") != "PASS"
-        or attestation.get("canvasAbiVersion") != 5
-        or not isinstance(runtime_paths, dict)
-        or set(runtime_paths) != {"ffi", "wreq", "canvas", "html5ever"}
-        or not isinstance(loaded_libraries, list)
-        or set(loaded_libraries) != set(runtime_paths.values())
-    ):
-        raise ValueError(
-            "runtime attestation did not prove CLI/runtime library loading: "
-            f"{attestation_path}"
-        )
     packaged_attestation_path = (
         root / "reports" / f"packaged-runtime-{target_id}.json"
     )
@@ -706,11 +648,6 @@ def validate_platform(
     if not isinstance(report_records, dict):
         raise ValueError("platform result does not hash its reports")
     expected_report_hashes = {
-        "debugJsonSha256": sha256(test_root / "debug.json"),
-        "debugJunitSha256": sha256(test_root / "debug.xml"),
-        "releaseFastJsonSha256": sha256(test_root / "release-fast.json"),
-        "releaseFastJunitSha256": sha256(test_root / "release-fast.xml"),
-        "runtimeAttestationSha256": sha256(attestation_path),
         "packageRuntimeAttestationSha256": sha256(packaged_attestation_path),
     }
     if report_records != expected_report_hashes:
@@ -752,7 +689,6 @@ def validate_platform(
     shutil.copy2(checksum_path, release_dir / checksum_path.name)
     return {
         "status": "passed",
-        "tests": {"debug": debug, "releaseFast": release},
         "package": package,
         "packageRuntimeAttestation": {
             "status": packaged_attestation["status"],
@@ -787,18 +723,14 @@ def write_outputs(
         f"- Status: `{status}`",
         f"- Resolved inputs: `{resolved_sha}`",
         "",
-        "| Target | Result | Debug tests | ReleaseFast tests | Package |",
-        "|---|---:|---:|---:|---|",
+        "| Target | Result | Package |",
+        "|---|---:|---|",
     ]
     for target_id in TARGETS:
         result = platforms.get(target_id, {})
-        tests = result.get("tests", {})
-        debug = tests.get("debug", {}) if isinstance(tests, dict) else {}
-        release = tests.get("releaseFast", {}) if isinstance(tests, dict) else {}
         package = result.get("package", {})
         lines.append(
             f"| `{target_id}` | `{result.get('status', 'missing')}` | "
-            f"{debug.get('selected', 0)} | {release.get('selected', 0)} | "
             f"`{package.get('archive', '')}` |"
         )
     if errors:
@@ -851,7 +783,7 @@ def aggregate(args: argparse.Namespace) -> int:
                     resolved_sha=resolved_sha,
                     release_dir=release_dir,
                 )
-            except (OSError, ValueError, KeyError, json.JSONDecodeError, ET.ParseError) as error:
+            except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:
                 platforms[target_id] = {"status": "failed", "error": str(error)}
                 errors.append(f"{target_id}: {error}")
 

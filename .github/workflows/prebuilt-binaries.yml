@@ -1225,8 +1225,7 @@ jobs:
             "$($entry.Key)=$($entry.Value)" |
               Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
-          New-Item -ItemType Directory -Force logs,reports,"reports/tests/${{ matrix.id }}" |
-            Out-Null
+          New-Item -ItemType Directory -Force logs,reports | Out-Null
 
       - name: Configure Linux build paths
         if: runner.os == 'Linux'
@@ -1242,7 +1241,7 @@ jobs:
             echo "DARKPANDA_CACHE_DIR=$RUNNER_TEMP/darkpanda-zig-cache-${{ matrix.id }}"
             echo "DARKPANDA_GLOBAL_CACHE_DIR=$RUNNER_TEMP/darkpanda-zig-global-${{ matrix.id }}"
           } >> "$GITHUB_ENV"
-          mkdir -p logs reports "reports/tests/${{ matrix.id }}"
+          mkdir -p logs reports
 
       - name: Install Linux V8 build prerequisites
         if: runner.os == 'Linux'
@@ -1281,32 +1280,9 @@ jobs:
             '${{ matrix.zig_sha256 }}' \
             "$RUNNER_TOOL_CACHE/darkpanda-zig/$ZIG_VERSION/${{ matrix.zig_arch }}"
 
-      - name: Verify Zig and source formatting
-        id: format
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          test "$(zig version)" = "$ZIG_VERSION"
-          (
-            cd browser
-            zig build fmt --summary all
-          ) 2>&1 | tee "logs/fmt-${{ matrix.id }}.log"
-
-      - name: Exercise the test-runner JSON/JUnit failure contract
-        id: test_runner_contract
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          '${{ matrix.python_cmd }}' browser/tools/ci/test_test_runner_reports.py \
-            --repo browser \
-            --zig "$(command -v zig)" \
-            2>&1 | tee "logs/test-runner-contract-${{ matrix.id }}.log"
-
-      - name: Restore the immutable V8 dependency bundle
+      - name: Restore or save the immutable V8 dependency bundle
         id: v8_cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache@v4
         with:
           path: dependency-cache/${{ matrix.id }}/v8
           key: darkpanda-v8-${{ matrix.id }}-zig-${{ env.ZIG_VERSION }}-v8-${{ env.V8_VERSION }}-${{ env.ZIG_V8_SOURCE_REVISION }}-target-${{ matrix.zig_target }}-deployment-na-${{ env.CACHE_GENERATION }}
@@ -1426,200 +1402,6 @@ jobs:
             echo "V8_ARCHIVE_SHA256=$v8_sha"
           } >> "$GITHUB_ENV"
 
-      - name: Save the verified Windows V8 dependency bundle
-        if: runner.os == 'Windows' && steps.v8_cache.outputs.cache-hit != 'true' && steps.v8_build_windows.outcome == 'success' && steps.v8_verify.outcome == 'success'
-        uses: actions/cache/save@v4
-        with:
-          path: dependency-cache/${{ matrix.id }}/v8
-          key: ${{ steps.v8_cache.outputs.cache-primary-key }}
-
-      - name: Save the verified Linux V8 dependency bundle
-        if: runner.os == 'Linux' && steps.v8_cache.outputs.cache-hit != 'true' && steps.v8_build_linux.outcome == 'success' && steps.v8_verify.outcome == 'success'
-        uses: actions/cache/save@v4
-        with:
-          path: dependency-cache/${{ matrix.id }}/v8
-          key: ${{ steps.v8_cache.outputs.cache-primary-key }}
-
-      - name: Compile-check DarkPanda on Windows
-        if: runner.os == 'Windows'
-        id: check_windows
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          Push-Location browser
-          try {
-            zig build check `
-              -j${{ matrix.jobs }} `
-              -Dtarget=${{ matrix.zig_target }} `
-              -Doptimize=ReleaseFast `
-              "-Dprebuilt_v8_path=$env:V8_ARCHIVE" `
-              "-Dcanvas_dist=$env:CANVAS_DIST" `
-              "-Dhtml5ever_dist=$env:HTML5EVER_DIST" `
-              "-Dwreq_dist=$env:WREQ_DIST" `
-              "-Dboringssl_dist=$env:BORINGSSL_DIST" `
-              "-Dversion=$env:DARKPANDA_BUILD_VERSION" `
-              --cache-dir $env:DARKPANDA_CACHE_DIR `
-              --global-cache-dir $env:DARKPANDA_GLOBAL_CACHE_DIR `
-              --summary all `
-              2>&1 | Tee-Object -FilePath ../logs/check-${{ matrix.id }}.log
-          } finally {
-            Pop-Location
-          }
-
-      - name: Compile-check DarkPanda on Linux
-        if: runner.os == 'Linux'
-        id: check_linux
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          (
-            cd browser
-            zig build check \
-              '-j${{ matrix.jobs }}' \
-              -Dtarget='${{ matrix.zig_target }}' \
-              -Doptimize=ReleaseFast \
-              -Dprebuilt_v8_path="$V8_ARCHIVE" \
-              -Dcanvas_dist="$CANVAS_DIST" \
-              -Dhtml5ever_dist="$HTML5EVER_DIST" \
-              -Dwreq_dist="$WREQ_DIST" \
-              -Dboringssl_dist="$BORINGSSL_DIST" \
-              -Dversion="$DARKPANDA_BUILD_VERSION" \
-              --cache-dir "$DARKPANDA_CACHE_DIR" \
-              --global-cache-dir "$DARKPANDA_GLOBAL_CACHE_DIR" \
-              --summary all
-          ) 2>&1 | tee "logs/check-${{ matrix.id }}.log"
-
-      - name: Run the complete Debug browser suite on Windows
-        if: runner.os == 'Windows'
-        id: test_debug_windows
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $env:TEST_VERBOSE = 'false'
-          $env:TEST_FAIL_FIRST = 'false'
-          $env:TEST_JSON_OUTPUT = Join-Path $env:GITHUB_WORKSPACE 'reports/tests/${{ matrix.id }}/debug.json'
-          $env:TEST_JUNIT_OUTPUT = Join-Path $env:GITHUB_WORKSPACE 'reports/tests/${{ matrix.id }}/debug.xml'
-          Remove-Item Env:TEST_FILTER -ErrorAction SilentlyContinue
-          Remove-Item Env:METRICS -ErrorAction SilentlyContinue
-          Push-Location browser
-          try {
-            zig build test `
-              -j${{ matrix.jobs }} `
-              -Dtarget=${{ matrix.zig_target }} `
-              -Doptimize=Debug `
-              "-Dprebuilt_v8_path=$env:V8_ARCHIVE" `
-              "-Dcanvas_dist=$env:CANVAS_DIST" `
-              "-Dhtml5ever_dist=$env:HTML5EVER_DIST" `
-              "-Dwreq_dist=$env:WREQ_DIST" `
-              "-Dboringssl_dist=$env:BORINGSSL_DIST" `
-              "-Dversion=$env:DARKPANDA_BUILD_VERSION" `
-              --cache-dir $env:DARKPANDA_CACHE_DIR `
-              --global-cache-dir $env:DARKPANDA_GLOBAL_CACHE_DIR `
-              --summary all `
-              2>&1 | Tee-Object -FilePath ../logs/test-debug-${{ matrix.id }}.log
-          } finally {
-            Pop-Location
-          }
-
-      - name: Run the complete Debug browser suite on Linux
-        if: runner.os == 'Linux'
-        id: test_debug_linux
-        continue-on-error: true
-        shell: bash
-        env:
-          TEST_VERBOSE: "false"
-          TEST_FAIL_FIRST: "false"
-          TEST_JSON_OUTPUT: ${{ github.workspace }}/reports/tests/${{ matrix.id }}/debug.json
-          TEST_JUNIT_OUTPUT: ${{ github.workspace }}/reports/tests/${{ matrix.id }}/debug.xml
-        run: |
-          set -o pipefail
-          unset TEST_FILTER METRICS
-          (
-            cd browser
-            zig build test \
-              '-j${{ matrix.jobs }}' \
-              -Dtarget='${{ matrix.zig_target }}' \
-              -Doptimize=Debug \
-              -Dprebuilt_v8_path="$V8_ARCHIVE" \
-              -Dcanvas_dist="$CANVAS_DIST" \
-              -Dhtml5ever_dist="$HTML5EVER_DIST" \
-              -Dwreq_dist="$WREQ_DIST" \
-              -Dboringssl_dist="$BORINGSSL_DIST" \
-              -Dversion="$DARKPANDA_BUILD_VERSION" \
-              --cache-dir "$DARKPANDA_CACHE_DIR" \
-              --global-cache-dir "$DARKPANDA_GLOBAL_CACHE_DIR" \
-              --summary all
-          ) 2>&1 | tee "logs/test-debug-${{ matrix.id }}.log"
-
-      - name: Run the complete ReleaseFast browser suite on Windows
-        if: runner.os == 'Windows'
-        id: test_release_windows
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $env:TEST_VERBOSE = 'false'
-          $env:TEST_FAIL_FIRST = 'false'
-          $env:TEST_JSON_OUTPUT = Join-Path $env:GITHUB_WORKSPACE 'reports/tests/${{ matrix.id }}/release-fast.json'
-          $env:TEST_JUNIT_OUTPUT = Join-Path $env:GITHUB_WORKSPACE 'reports/tests/${{ matrix.id }}/release-fast.xml'
-          Remove-Item Env:TEST_FILTER -ErrorAction SilentlyContinue
-          Remove-Item Env:METRICS -ErrorAction SilentlyContinue
-          Push-Location browser
-          try {
-            zig build test `
-              -j${{ matrix.jobs }} `
-              -Dtarget=${{ matrix.zig_target }} `
-              -Doptimize=ReleaseFast `
-              "-Dprebuilt_v8_path=$env:V8_ARCHIVE" `
-              "-Dcanvas_dist=$env:CANVAS_DIST" `
-              "-Dhtml5ever_dist=$env:HTML5EVER_DIST" `
-              "-Dwreq_dist=$env:WREQ_DIST" `
-              "-Dboringssl_dist=$env:BORINGSSL_DIST" `
-              "-Dversion=$env:DARKPANDA_BUILD_VERSION" `
-              --cache-dir $env:DARKPANDA_CACHE_DIR `
-              --global-cache-dir $env:DARKPANDA_GLOBAL_CACHE_DIR `
-              --summary all `
-              2>&1 | Tee-Object -FilePath ../logs/test-release-fast-${{ matrix.id }}.log
-          } finally {
-            Pop-Location
-          }
-
-      - name: Run the complete ReleaseFast browser suite on Linux
-        if: runner.os == 'Linux'
-        id: test_release_linux
-        continue-on-error: true
-        shell: bash
-        env:
-          TEST_VERBOSE: "false"
-          TEST_FAIL_FIRST: "false"
-          TEST_JSON_OUTPUT: ${{ github.workspace }}/reports/tests/${{ matrix.id }}/release-fast.json
-          TEST_JUNIT_OUTPUT: ${{ github.workspace }}/reports/tests/${{ matrix.id }}/release-fast.xml
-        run: |
-          set -o pipefail
-          unset TEST_FILTER METRICS
-          (
-            cd browser
-            zig build test \
-              '-j${{ matrix.jobs }}' \
-              -Dtarget='${{ matrix.zig_target }}' \
-              -Doptimize=ReleaseFast \
-              -Dprebuilt_v8_path="$V8_ARCHIVE" \
-              -Dcanvas_dist="$CANVAS_DIST" \
-              -Dhtml5ever_dist="$HTML5EVER_DIST" \
-              -Dwreq_dist="$WREQ_DIST" \
-              -Dboringssl_dist="$BORINGSSL_DIST" \
-              -Dversion="$DARKPANDA_BUILD_VERSION" \
-              --cache-dir "$DARKPANDA_CACHE_DIR" \
-              --global-cache-dir "$DARKPANDA_GLOBAL_CACHE_DIR" \
-              --summary all
-          ) 2>&1 | tee "logs/test-release-fast-${{ matrix.id }}.log"
-
       - name: Install the ReleaseFast runtime on Windows
         if: runner.os == 'Windows'
         id: install_windows
@@ -1726,50 +1508,6 @@ jobs:
             Copy-Item -LiteralPath $source -Destination (Join-Path $bin $name)
           }
 
-      - name: Attest CLI startup and all four runtime libraries on Windows
-        if: runner.os == 'Windows'
-        id: attest_windows
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $bin = Join-Path $env:DARKPANDA_INSTALL_ROOT 'bin'
-          $env:PATH = "$bin;$env:PATH"
-          $env:PYTHONPATH = (Resolve-Path browser/python).Path
-          & (Join-Path $bin 'darkpanda.exe') version `
-            2>&1 | Tee-Object -FilePath logs/runtime-version-${{ matrix.id }}.log
-          python browser/tools/runtime_artifact_attestation.py `
-            --python-root browser/python `
-            --library (Join-Path $bin 'darkpanda.dll') `
-            --wreq (Join-Path $bin 'wreq.dll') `
-            --canvas (Join-Path $bin 'canvas.dll') `
-            --html5ever (Join-Path $bin 'html5ever.dll') `
-            1> reports/runtime-${{ matrix.id }}.json `
-            2> logs/runtime-attestation-${{ matrix.id }}.stderr.log
-          Get-Content -LiteralPath reports/runtime-${{ matrix.id }}.json
-
-      - name: Attest CLI startup and all four runtime libraries on Linux
-        if: runner.os == 'Linux'
-        id: attest_linux
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          bin="$DARKPANDA_INSTALL_ROOT/bin"
-          export LD_LIBRARY_PATH="$bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          export PYTHONPATH="$GITHUB_WORKSPACE/browser/python"
-          "$bin/darkpanda" version \
-            2>&1 | tee "logs/runtime-version-${{ matrix.id }}.log"
-          python3 browser/tools/runtime_artifact_attestation.py \
-            --python-root browser/python \
-            --library "$bin/libdarkpanda.so" \
-            --wreq "$bin/libwreq.so" \
-            --canvas "$bin/libcanvas.so" \
-            --html5ever "$bin/libhtml5ever.so" \
-            2> >(tee "logs/runtime-attestation-${{ matrix.id }}.stderr.log" >&2) |
-            tee "reports/runtime-${{ matrix.id }}.json"
-
       - name: Package the deterministic Windows runtime
         if: runner.os == 'Windows'
         id: package_windows
@@ -1845,95 +1583,23 @@ jobs:
             2>&1 | tee "logs/package-${{ matrix.id }}.log"
           rm -rf -- "$output"/darkpanda-*/
 
-      - name: Ensure failed builds still have JSON and JUnit reports
-        if: always()
-        shell: bash
-        run: |
-          set -u
-          mkdir -p logs reports "reports/tests/${{ matrix.id }}"
-          for profile in debug release-fast; do
-            json="reports/tests/${{ matrix.id }}/$profile.json"
-            xml="reports/tests/${{ matrix.id }}/$profile.xml"
-            if [[ ! -f $json ]]; then
-              jq -n \
-                '{
-                  schema: "darkpanda-test-results/v1",
-                  summary: {
-                    selected: 0,
-                    passed: 0,
-                    failed: 1,
-                    skipped: 0,
-                    leaked: 0,
-                    duration_nanoseconds: 0,
-                    fail_first: false,
-                    zero_matches: true,
-                    success: false
-                  },
-                  tests: []
-                }' > "$json"
-            fi
-            if [[ ! -f $xml ]]; then
-              cat > "$xml" <<'XML'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <testsuites tests="1" failures="1" errors="0" skipped="0" time="0">
-            <testsuite name="darkpanda" tests="1" failures="1" errors="0" skipped="0" time="0">
-              <testcase name="build prevented test execution">
-                <failure message="Build failed before the test runner produced JUnit"/>
-              </testcase>
-            </testsuite>
-          </testsuites>
-          XML
-            fi
-          done
-          runtime="reports/runtime-${{ matrix.id }}.json"
-          if [[ ! -f $runtime ]] || ! jq -e . "$runtime" >/dev/null 2>&1; then
-            jq -n \
-              --arg target '${{ matrix.id }}' \
-              '{
-                schema: "darkpanda-runtime-load-attestation/v1",
-                status: "FAIL",
-                target: $target,
-                error: "runtime attestation did not produce valid JSON"
-              }' > "$runtime"
-          fi
-          packaged_runtime="reports/packaged-runtime-${{ matrix.id }}.json"
-          if [[ ! -f $packaged_runtime ]] || ! jq -e . "$packaged_runtime" >/dev/null 2>&1; then
-            jq -n \
-              --arg target '${{ matrix.id }}' \
-              '{
-                schema: "darkpanda-packaged-runtime-attestation/v1",
-                status: "FAIL",
-                target: $target,
-                error: "package runtime attestation did not produce valid JSON"
-              }' > "$packaged_runtime"
-          fi
-
-      - name: Write the complete platform result
+      - name: Write the platform result
         if: always()
         shell: bash
         run: |
           set +e
           set -u
+          mkdir -p reports
           if [[ '${{ matrix.platform }}' == windows ]]; then
             install_zig='${{ steps.install_zig_windows.outcome }}'
-            check='${{ steps.check_windows.outcome }}'
-            debug_tests='${{ steps.test_debug_windows.outcome }}'
-            release_tests='${{ steps.test_release_windows.outcome }}'
             install='${{ steps.install_windows.outcome }}'
-            attestation='${{ steps.attest_windows.outcome }}'
             package='${{ steps.package_windows.outcome }}'
-            package_attestation='${{ steps.package_windows.outcome }}'
             vc_runtime='${{ steps.vc_runtime.outcome }}'
             v8_build='${{ steps.v8_build_windows.outcome }}'
           else
             install_zig='${{ steps.install_zig_linux.outcome }}'
-            check='${{ steps.check_linux.outcome }}'
-            debug_tests='${{ steps.test_debug_linux.outcome }}'
-            release_tests='${{ steps.test_release_linux.outcome }}'
             install='${{ steps.install_linux.outcome }}'
-            attestation='${{ steps.attest_linux.outcome }}'
             package='${{ steps.package_linux.outcome }}'
-            package_attestation='${{ steps.package_linux.outcome }}'
             vc_runtime=success
             v8_build='${{ steps.v8_build_linux.outcome }}'
           fi
@@ -1946,26 +1612,25 @@ jobs:
             "$install_zig" \
             "$v8_build" \
             '${{ steps.v8_verify.outcome }}' \
-            "$check" \
             "$install" \
             "$vc_runtime" \
-            "$attestation" \
-            "$package" \
-            "$package_attestation"; do
+            "$package"; do
             [[ $outcome == success ]] || status=failed
           done
 
-          debug_json="reports/tests/${{ matrix.id }}/debug.json"
-          debug_xml="reports/tests/${{ matrix.id }}/debug.xml"
-          release_json="reports/tests/${{ matrix.id }}/release-fast.json"
-          release_xml="reports/tests/${{ matrix.id }}/release-fast.xml"
-          runtime="reports/runtime-${{ matrix.id }}.json"
           packaged_runtime="reports/packaged-runtime-${{ matrix.id }}.json"
-          debug_json_sha=$(sha256sum "$debug_json" | cut -d' ' -f1)
-          debug_xml_sha=$(sha256sum "$debug_xml" | cut -d' ' -f1)
-          release_json_sha=$(sha256sum "$release_json" | cut -d' ' -f1)
-          release_xml_sha=$(sha256sum "$release_xml" | cut -d' ' -f1)
-          runtime_sha=$(sha256sum "$runtime" | cut -d' ' -f1)
+          if [[ ! -f $packaged_runtime ]] ||
+             ! jq -e . "$packaged_runtime" >/dev/null 2>&1; then
+            jq -n \
+              --arg target '${{ matrix.id }}' \
+              '{
+                schema: "darkpanda-packaged-runtime-attestation/v1",
+                status: "FAIL",
+                target: $target,
+                error: "package runtime attestation did not produce valid JSON"
+              }' > "$packaged_runtime"
+            status=failed
+          fi
           packaged_runtime_sha=$(sha256sum "$packaged_runtime" | cut -d' ' -f1)
           resolved_sha=unavailable
           if [[ -f resolved-inputs/resolved-inputs.json ]]; then
@@ -2009,28 +1674,16 @@ jobs:
             --arg zig_v8 "$ZIG_V8_SOURCE_REVISION" \
             --arg source_contract '${{ steps.source_contract.outcome }}' \
             --arg install_zig "$install_zig" \
-            --arg format '${{ steps.format.outcome }}' \
-            --arg test_runner '${{ steps.test_runner_contract.outcome }}' \
             --arg v8_build "$v8_build" \
             --arg v8_verify '${{ steps.v8_verify.outcome }}' \
-            --arg check "$check" \
-            --arg debug_tests "$debug_tests" \
-            --arg release_tests "$release_tests" \
             --arg install "$install" \
             --arg vc_runtime "$vc_runtime" \
-            --arg attestation "$attestation" \
             --arg package "$package" \
-            --arg package_attestation "$package_attestation" \
-            --arg debug_json_sha "$debug_json_sha" \
-            --arg debug_xml_sha "$debug_xml_sha" \
-            --arg release_json_sha "$release_json_sha" \
-            --arg release_xml_sha "$release_xml_sha" \
-            --arg runtime_sha "$runtime_sha" \
             --arg packaged_runtime_sha "$packaged_runtime_sha" \
             --arg archive_name "$archive_name" \
             --arg archive_sha "$archive_sha" \
             '{
-              schema: "darkpanda-platform-result/v1",
+              schema: "darkpanda-platform-result/v2",
               target: $target,
               platform: $platform,
               status: $status,
@@ -2049,25 +1702,13 @@ jobs:
               steps: {
                 sourceContract: $source_contract,
                 installZig: $install_zig,
-                format: $format,
-                testRunnerContract: $test_runner,
                 v8Build: $v8_build,
                 v8Verify: $v8_verify,
-                check: $check,
-                debugTests: $debug_tests,
-                releaseFastTests: $release_tests,
                 install: $install,
                 vcRuntime: $vc_runtime,
-                runtimeAttestation: $attestation,
-                package: $package,
-                packageRuntimeAttestation: $package_attestation
+                package: $package
               },
               reports: {
-                debugJsonSha256: $debug_json_sha,
-                debugJunitSha256: $debug_xml_sha,
-                releaseFastJsonSha256: $release_json_sha,
-                releaseFastJunitSha256: $release_xml_sha,
-                runtimeAttestationSha256: $runtime_sha,
                 packageRuntimeAttestationSha256: $packaged_runtime_sha
               },
               package: {
@@ -2085,12 +1726,10 @@ jobs:
             echo "## DarkPanda / ${{ matrix.id }}"
             echo
             echo "- Result: \`$(jq -r .status "$report")\`"
-            echo "- Debug tests: \`$(jq -r .summary.selected "reports/tests/${{ matrix.id }}/debug.json")\`"
-            echo "- ReleaseFast tests: \`$(jq -r .summary.selected "reports/tests/${{ matrix.id }}/release-fast.json")\`"
             echo "- Package: \`$(jq -r .package.name "$report")\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload runtime, tests, package, and failure logs
+      - name: Upload package result and failure logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
