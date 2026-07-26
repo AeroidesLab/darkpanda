@@ -1,0 +1,132 @@
+name: Source flow smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-flow-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  canvas-source:
+    name: Resolve and stage latest Canvas source
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out DarkPanda
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 1
+          path: browser
+          persist-credentials: false
+
+      - name: Verify private source credential
+        shell: bash
+        env:
+          CANVAS_READ_TOKEN: ${{ secrets.CANVAS_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CANVAS_READ_TOKEN" ]]; then
+            echo "::error::CANVAS_READ_TOKEN must be a fine-grained token with read-only Contents access to AeroidesLab/canvas"
+            exit 1
+          fi
+
+      - name: Check out latest Canvas source
+        uses: actions/checkout@main
+        with:
+          repository: AeroidesLab/canvas
+          ref: main
+          token: ${{ secrets.CANVAS_READ_TOKEN }}
+          fetch-depth: 1
+          path: components/canvas
+          persist-credentials: false
+
+      - name: Verify source-only repository contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '.selection_policy == "latest-at-build-start"' \
+            components/canvas/source-policy.json >/dev/null
+          test ! -d components/canvas/.github/workflows
+          forbidden=$(
+            git -C components/canvas ls-files |
+              grep -E '(^|/)(target|out|skia|chromium|tools-bin)/|Cargo\.lock$|\.(dll|dylib|so|lib|a|exe|pdb|obj|o|log)$' ||
+              true
+          )
+          if [[ -n "$forbidden" ]]; then
+            echo "::error::Generated or binary files are tracked by the Canvas source repository"
+            printf '%s\n' "$forbidden"
+            exit 1
+          fi
+
+      - name: Resolve latest Skia source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone \
+            --depth 1 \
+            --filter=blob:none \
+            --no-checkout \
+            https://skia.googlesource.com/skia.git \
+            upstream/skia
+          git -C upstream/skia sparse-checkout init --no-cone
+          git -C upstream/skia sparse-checkout set /BUILD.gn
+          git -C upstream/skia checkout --detach HEAD
+
+      - name: Apply Canvas overlay and checked patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          python3 components/canvas/tools/stage_skia.py \
+            --skia-dir upstream/skia \
+            --report reports/source-flow.json
+
+      - name: Finalize source report
+        shell: bash
+        run: |
+          set -euo pipefail
+          darkpanda_revision=$(git -C browser rev-parse HEAD)
+          generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          jq \
+            --arg darkpanda_revision "$darkpanda_revision" \
+            --arg generated_at "$generated_at" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            '. + {
+              darkpanda_revision: $darkpanda_revision,
+              generated_at: $generated_at,
+              repository: $repository,
+              run_id: $run_id,
+              run_attempt: $run_attempt
+            }' \
+            reports/source-flow.json > reports/source-flow.final.json
+          mv reports/source-flow.final.json reports/source-flow.json
+
+      - name: Write job summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f reports/source-flow.json ]]; then
+            {
+              echo "## Canvas source flow"
+              echo
+              echo '```json'
+              cat reports/source-flow.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload source report
+        if: always()
+        uses: actions/upload-artifact@main
+        with:
+          name: source-flow-report
+          path: reports/source-flow.json
+          if-no-files-found: warn
+          retention-days: 30
