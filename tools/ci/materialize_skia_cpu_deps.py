@@ -28,8 +28,19 @@ def sha256_file(path: pathlib.Path) -> str:
 def tree_digest(root: pathlib.Path) -> tuple[str, int]:
     digest = hashlib.sha256()
     count = 0
-    for path in sorted(item for item in root.rglob("*") if item.is_file()):
-        relative = path.relative_to(root).as_posix().encode("utf-8")
+    files = [
+        (path.relative_to(root).as_posix(), path)
+        for path in root.rglob("*")
+        if path.is_file()
+    ]
+    # pathlib orders WindowsPath case-insensitively but PosixPath
+    # case-sensitively.  The fixed profile digests were generated with the
+    # former ordering, so define it explicitly to make both runners hash the
+    # same byte stream.  The original spelling is a deterministic tie-breaker
+    # for paths that differ only by case.
+    files.sort(key=lambda entry: (entry[0].casefold(), entry[0]))
+    for relative_text, path in files:
+        relative = relative_text.encode("utf-8")
         content_digest = bytes.fromhex(sha256_file(path))
         digest.update(len(relative).to_bytes(8, "big"))
         digest.update(relative)

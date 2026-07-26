@@ -384,6 +384,8 @@ jobs:
 
       - name: Synchronize the profile with gclient on Windows
         if: runner.os == 'Windows'
+        env:
+          DEPOT_TOOLS_UPDATE: "1"
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
