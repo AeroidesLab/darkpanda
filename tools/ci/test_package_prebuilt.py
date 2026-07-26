@@ -170,6 +170,20 @@ class PackagePrebuiltContractTest(unittest.TestCase):
         self.assertNotIn(str(dependency), encoded)
         self.assertNotIn("0x", encoded)
 
+    def test_ldd_parser_resolves_the_glibc_loader_directly(self) -> None:
+        loader = Path("/lib64/ld-linux-x86-64.so.2")
+
+        self.assertEqual(
+            package_prebuilt.parse_ldd_resolutions(
+                "\t/lib64/ld-linux-x86-64.so.2 (0x00007f0000000000)\n"
+            ),
+            {"ld-linux-x86-64.so.2": loader},
+        )
+        self.assertIn(
+            "ld-linux-x86-64.so.2",
+            package_prebuilt.LINUX_OS_NEEDED,
+        )
+
     def test_elf_dependency_contract_rejects_absolute_runpath(self) -> None:
         binary = Path(self.temporary.name) / "libdarkpanda.so"
         dependency = Path(self.temporary.name) / "libcanvas.so"

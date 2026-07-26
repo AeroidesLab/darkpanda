@@ -62,6 +62,7 @@ PACKAGE_TARGETS = {
 }
 LINUX_OS_NEEDED = frozenset(
     {
+        "ld-linux-x86-64.so.2",
         "libc.so.6",
         "libdl.so.2",
         "libgcc_s.so.1",
@@ -287,6 +288,11 @@ def parse_ldd_resolutions(linked: str) -> dict[str, Path]:
         match = re.match(r"(\S+)\s+=>\s+(\S+)\s+\(", line)
         if match is not None and match.group(2) != "not":
             resolutions[match.group(1)] = Path(match.group(2))
+            continue
+        direct = re.match(r"(/\S+)\s+\(", line)
+        if direct is not None:
+            path = Path(direct.group(1))
+            resolutions[path.name] = path
     return resolutions
 
 

@@ -19,6 +19,7 @@ SUMMARY_SCHEMA = "darkpanda-prebuilt-aggregate/v1"
 COMPONENTS = ("canvas", "html5ever", "wreq", "boringssl")
 LINUX_OS_NEEDED = frozenset(
     {
+        "ld-linux-x86-64.so.2",
         "libc.so.6",
         "libdl.so.2",
         "libgcc_s.so.1",

@@ -272,6 +272,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                             if name.endswith(".so")
                         }
                         | {
+                            "ld-linux-x86-64.so.2",
                             "libc.so.6",
                             "libdl.so.2",
                             "libgcc_s.so.1",
