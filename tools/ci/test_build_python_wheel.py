@@ -126,6 +126,66 @@ class BuildPythonWheelTests(unittest.TestCase):
         self.assertIn(f"--ld-path={tools['linker']}", flags)
         self.assertIn(f"--sysroot={tools['sysroot']}", flags)
 
+    def test_linux_rust_unit_test_uses_host_python_with_chromium_linker(
+        self,
+    ) -> None:
+        environment = {
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/toolchain/clang",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS": (
+                "-Clink-arg=-fuse-ld=lld "
+                "-Clink-arg=--ld-path=/toolchain/ld.lld "
+                "-Clink-arg=--sysroot=/toolchain/sysroot"
+            ),
+        }
+
+        result = subject.rust_test_environment(environment, "linux-x86_64")
+
+        self.assertEqual(
+            result["CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"],
+            "/toolchain/clang",
+        )
+        flags = result["CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS"]
+        self.assertIn("-fuse-ld=lld", flags)
+        self.assertIn("--ld-path=/toolchain/ld.lld", flags)
+        self.assertNotIn("--sysroot=", flags)
+
+    def test_non_ascii_tool_output_is_safe_for_legacy_windows_code_pages(
+        self,
+    ) -> None:
+        original = subject.sys.stdout
+
+        class LegacyConsole:
+            encoding = "cp1252"
+
+        subject.sys.stdout = LegacyConsole()  # type: ignore[assignment]
+        try:
+            rendered = subject.console_text("🍹 wheel built")
+        finally:
+            subject.sys.stdout = original
+
+        rendered.encode("cp1252")
+        self.assertIn("wheel built", rendered)
+
+    def test_tool_path_preserves_the_manifest_symlink_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            target = root / "lld"
+            target.write_bytes(b"linker")
+            alias = root / "ld.lld"
+            try:
+                alias.symlink_to(target.name)
+            except OSError as error:
+                self.skipTest(f"file symlinks unavailable: {error}")
+            record = {
+                "path": alias.name,
+                "sha256": subject.sha256(target),
+            }
+
+            resolved = subject.tool_path(root, record, "linker")
+
+            self.assertEqual(resolved.name, "ld.lld")
+            self.assertEqual(resolved.resolve(), target)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -195,8 +195,9 @@ def tool_path(root: Path, record: object, name: str) -> Path:
     pure = PurePosixPath(relative)
     if pure.is_absolute() or ".." in pure.parts:
         raise ValueError(f"unsafe Chromium tool path: {name}")
-    path = root.joinpath(*pure.parts).resolve(strict=True)
-    path.relative_to(root)
+    path = root.joinpath(*pure.parts)
+    resolved = path.resolve(strict=True)
+    resolved.relative_to(root)
     if not path.is_file() or record.get("sha256") != sha256(path):
         raise ValueError(f"Chromium tool digest mismatch: {name}")
     return path
@@ -249,6 +250,8 @@ def build_environment(
     environment["CXX"] = str(tools["cxx"])
     environment["CARGO_TARGET_DIR"] = str(cargo_target)
     environment["CARGO_BUILD_JOBS"] = str(jobs)
+    environment["PYTHONIOENCODING"] = "utf-8"
+    environment["PYTHONUTF8"] = "1"
     environment.pop("RUSTC_WRAPPER", None)
     environment.pop("RUSTC_WORKSPACE_WRAPPER", None)
     environment["PATH"] = os.pathsep.join(
@@ -270,6 +273,27 @@ def build_environment(
             )
         )
     return environment
+
+
+def rust_test_environment(
+    environment: dict[str, str], target_id: str
+) -> dict[str, str]:
+    result = environment.copy()
+    if target_id.startswith("linux-"):
+        target = str(TARGETS[target_id]["rust_target"])
+        key = target.upper().replace("-", "_")
+        name = f"CARGO_TARGET_{key}_RUSTFLAGS"
+        result[name] = " ".join(
+            flag
+            for flag in result[name].split()
+            if "--sysroot=" not in flag
+        )
+    return result
+
+
+def console_text(value: str) -> str:
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    return value.encode(encoding, errors="backslashreplace").decode(encoding)
 
 
 def run_step(
@@ -294,7 +318,7 @@ def run_step(
         check=False,
     )
     if result.stdout:
-        print(result.stdout.rstrip(), flush=True)
+        print(console_text(result.stdout.rstrip()), flush=True)
     steps[name] = {
         "status": "passed" if result.returncode == 0 else "failed",
         "exitCode": result.returncode,
@@ -400,7 +424,7 @@ def build(args: argparse.Namespace) -> int:
                     str(args.jobs),
                 ],
                 cwd=stage,
-                environment=environment,
+                environment=rust_test_environment(environment, args.target),
                 steps=steps,
             )
             wheel_build = temporary_root / "wheel"
