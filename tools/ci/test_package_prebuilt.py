@@ -298,6 +298,37 @@ class PackagePrebuiltContractTest(unittest.TestCase):
             },
         )
 
+    def test_portable_runtime_proof_preserves_the_inner_schema(self) -> None:
+        root = Path(self.temporary.name) / "runtime-proof"
+        paths = {
+            name: root / "bin" / filename
+            for name, filename in {
+                "ffi": "libdarkpanda.so",
+                "wreq": "libwreq.so",
+                "canvas": "libcanvas.so",
+                "html5ever": "libhtml5ever.so",
+            }.items()
+        }
+        runtime = {
+            "schema": "darkpanda-runtime-load-attestation/v1",
+            "status": "PASS",
+            "canvasAbiVersion": 5,
+        }
+
+        proof = package_prebuilt.portable_runtime_proof(
+            runtime,
+            paths,
+            root,
+            ("ffi", "wreq", "canvas", "html5ever"),
+        )
+
+        self.assertEqual(
+            proof["schema"],
+            "darkpanda-runtime-load-attestation/v1",
+        )
+        self.assertEqual(proof["status"], "PASS")
+        self.assertEqual(proof["paths"]["ffi"], "bin/libdarkpanda.so")
+
     def test_windows_import_contract_allows_only_api_set_or_system32(self) -> None:
         root = Path(self.temporary.name)
         system32 = root / "Windows" / "System32"

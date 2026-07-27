@@ -791,6 +791,37 @@ def subprocess_failure(error: BaseException) -> str:
     return str(error)
 
 
+def portable_runtime_proof(
+    runtime: dict[str, Any],
+    paths: dict[str, Path],
+    extracted_root: Path,
+    closure_names: tuple[str, ...],
+) -> dict[str, Any]:
+    proof = {
+        name: runtime[name]
+        for name in (
+            "schema",
+            "status",
+            "ffiAbiVersion",
+            "ffiVersion",
+            "wreqAbiVersion",
+            "wreqVersion",
+            "canvasAbiVersion",
+            "canvasVersion",
+        )
+        if name in runtime
+    }
+    proof["loadedLibraries"] = [
+        paths[name].relative_to(extracted_root).as_posix()
+        for name in closure_names
+    ]
+    proof["paths"] = {
+        name: paths[name].relative_to(extracted_root).as_posix()
+        for name in closure_names
+    }
+    return proof
+
+
 def attest_runtime_archive(
     *,
     platform: str,
@@ -900,27 +931,12 @@ def attest_runtime_archive(
                     raise ValueError(
                         f"archive runtime attestation loaded {name} outside the archive"
                     )
-            runtime_proof = {
-                name: runtime[name]
-                for name in (
-                    "status",
-                    "ffiAbiVersion",
-                    "ffiVersion",
-                    "wreqAbiVersion",
-                    "wreqVersion",
-                    "canvasAbiVersion",
-                    "canvasVersion",
-                )
-                if name in runtime
-            }
-            runtime_proof["loadedLibraries"] = [
-                paths[name].relative_to(extracted_root).as_posix()
-                for name in closure_names
-            ]
-            runtime_proof["paths"] = {
-                name: paths[name].relative_to(extracted_root).as_posix()
-                for name in closure_names
-            }
+            runtime_proof = portable_runtime_proof(
+                runtime,
+                paths,
+                extracted_root,
+                closure_names,
+            )
             report.update(
                 {
                     "status": "PASS",
