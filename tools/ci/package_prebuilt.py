@@ -588,15 +588,18 @@ def normalize_mode(path: Path) -> int:
 
 
 def payload_records(
-    root: Path, excluded_names: frozenset[str] = frozenset()
+    root: Path, excluded_paths: frozenset[str] = frozenset()
 ) -> list[dict[str, Any]]:
     records = []
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.name in excluded_names:
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        if relative in excluded_paths:
             continue
         records.append(
             {
-                "path": path.relative_to(root).as_posix(),
+                "path": relative,
                 "size": path.stat().st_size,
                 "sha256": sha256(path),
             }

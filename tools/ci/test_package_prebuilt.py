@@ -277,6 +277,27 @@ class PackagePrebuiltContractTest(unittest.TestCase):
                 package_prebuilt.sha256(second),
             )
 
+    def test_payload_exclusion_is_root_relative_not_recursive_basename(self) -> None:
+        root = Path(self.temporary.name) / "payload-records"
+        component = root / "metadata" / "components" / "canvas"
+        component.mkdir(parents=True)
+        (root / "SHA256SUMS").write_text("root\n", encoding="utf-8")
+        (component / "SHA256SUMS").write_text("component\n", encoding="utf-8")
+        (component / "build-info.json").write_text("{}\n", encoding="utf-8")
+
+        records = package_prebuilt.payload_records(
+            root,
+            frozenset({"SHA256SUMS"}),
+        )
+
+        self.assertEqual(
+            {record["path"] for record in records},
+            {
+                "metadata/components/canvas/SHA256SUMS",
+                "metadata/components/canvas/build-info.json",
+            },
+        )
+
     def test_windows_import_contract_allows_only_api_set_or_system32(self) -> None:
         root = Path(self.temporary.name)
         system32 = root / "Windows" / "System32"
