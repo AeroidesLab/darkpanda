@@ -391,6 +391,24 @@ class PackagePrebuiltContractTest(unittest.TestCase):
             any(name.startswith(("LD_", "DYLD_")) for name in environment)
         )
 
+    def test_archive_runtime_environment_does_not_inject_python_package_paths(
+        self,
+    ) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PYTHONPATH": "/legacy/ctypes-package",
+                "PYTHONHOME": "/legacy/python",
+            },
+            clear=False,
+        ):
+            environment, policy = package_prebuilt.archive_runtime_environment(
+                "linux", Path("/runtime/bin")
+            )
+        self.assertEqual(policy, "elf-origin-plus-system")
+        self.assertNotIn("PYTHONPATH", environment)
+        self.assertNotIn("PYTHONHOME", environment)
+
 
 if __name__ == "__main__":
     unittest.main()

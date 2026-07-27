@@ -16,7 +16,6 @@ import http.server
 import json
 import os
 from pathlib import Path
-import sys
 import threading
 import time
 from typing import Any, Iterator
@@ -177,14 +176,11 @@ def chrome_probe(endpoint: str, url: str) -> tuple[dict[str, Any], dict[str, Any
 
 
 def darkpanda_probe(library: Path, wreq: Path, url: str) -> dict[str, Any]:
-    binding_root = Path(__file__).resolve().parents[1] / "python"
-    if str(binding_root) not in sys.path:
-        sys.path.insert(0, str(binding_root))
     from darkpanda import ClientProfile, Runtime
 
     with Runtime(
         library_path=library,
-        wreq_transport_path=wreq,
+        wreq_library_path=wreq,
         navigation_timeout_ms=15_000,
         profile=ClientProfile.CHROME149,
     ) as runtime:

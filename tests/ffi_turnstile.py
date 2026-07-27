@@ -510,7 +510,7 @@ def main() -> None:
 
     with Runtime(
         library_path=args.library,
-        wreq_transport_path=args.wreq,
+        wreq_library_path=args.wreq,
         navigation_timeout_ms=30_000,
         locale="en-US",
         timezone="UTC",

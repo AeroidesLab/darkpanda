@@ -207,7 +207,7 @@ def main() -> None:
     ):
         with Runtime(
             library_path=args.library,
-            wreq_transport_path=args.wreq,
+            wreq_library_path=args.wreq,
             dns_nameservers=[dns_nameserver],
             navigation_timeout_ms=15_000,
             locale="en-US",

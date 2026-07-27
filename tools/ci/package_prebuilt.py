@@ -762,12 +762,11 @@ def runtime_paths(platform: str, root: Path) -> dict[str, Path]:
 def archive_runtime_environment(
     platform: str,
     bin_dir: Path,
-    python_root: Path,
 ) -> tuple[dict[str, str], str]:
     environment = clean_loader_environment()
     environment.pop("PYTHONHOME", None)
-    environment["PYTHONPATH"] = str(python_root)
-    environment["PYTHONNOUSERSITE"] = "1"
+    environment.pop("PYTHONPATH", None)
+    environment.pop("PYTHONNOUSERSITE", None)
     if platform == "windows":
         system_root = Path(environment.get("SystemRoot", r"C:\Windows"))
         environment["PATH"] = os.pathsep.join(
@@ -849,11 +848,8 @@ def attest_runtime_archive(
                 archive_path, extraction, archive_root
             )
             paths = runtime_paths(platform, extracted_root)
-            python_root = extracted_root / "python"
-            if not python_root.is_dir():
-                raise ValueError(f"archive Python package is missing: {python_root}")
             environment, loader_policy = archive_runtime_environment(
-                platform, extracted_root / "bin", python_root
+                platform, extracted_root / "bin"
             )
             version = subprocess.run(
                 [str(paths["cli"]), "version"],
@@ -890,8 +886,6 @@ def attest_runtime_archive(
                 [
                     sys.executable,
                     str(attestation_script),
-                    "--python-root",
-                    str(python_root),
                     "--library",
                     str(paths["ffi"]),
                     "--wreq",
@@ -1051,8 +1045,6 @@ def package(args: argparse.Namespace) -> None:
             dist / "metadata",
             staging / "metadata" / "components" / component,
         )
-    copy_tree_files(repo / "python" / "darkpanda", staging / "python" / "darkpanda")
-
     staged_runtime = [staging / "bin" / path.name for path in runtime]
     dependencies = dependency_report(args.platform, staged_runtime)
     (staging / "metadata" / "runtime-dependencies.json").write_text(

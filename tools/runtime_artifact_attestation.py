@@ -33,14 +33,12 @@ def exported_identity(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--python-root", required=True, type=Path)
     parser.add_argument("--library", required=True, type=absolute_file)
     parser.add_argument("--wreq", required=True, type=absolute_file)
     parser.add_argument("--canvas", required=True, type=absolute_file)
     parser.add_argument("--html5ever", required=True, type=absolute_file)
     args = parser.parse_args()
 
-    args.python_root.resolve(strict=True)
     ffi_abi, ffi_version = exported_identity(
         args.library, "dp_abi_version", "dp_version"
     )

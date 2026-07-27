@@ -79,7 +79,7 @@ def _expected_initial_state() -> dict[str, object]:
 def _runtime_kwargs(args: argparse.Namespace) -> dict[str, object]:
     return {
         "library_path": args.library,
-        "wreq_transport_path": args.wreq,
+        "wreq_library_path": args.wreq,
         "navigation_timeout_ms": 10_000,
         "locale": "en-US",
         "timezone": "UTC",

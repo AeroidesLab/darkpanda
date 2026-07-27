@@ -180,7 +180,7 @@ def main() -> None:
 
     with fixture_server() as port, Runtime(
         library_path=args.library,
-        wreq_transport_path=args.wreq,
+        wreq_library_path=args.wreq,
         navigation_timeout_ms=15_000,
         profile=ClientProfile.CHROME149,
     ) as runtime:

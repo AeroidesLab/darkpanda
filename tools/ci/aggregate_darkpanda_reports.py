@@ -748,13 +748,20 @@ def aggregate(args: argparse.Namespace) -> int:
     errors: list[str] = []
     platforms: dict[str, dict[str, object]] = {}
     if (
-        resolved.get("schema") != "darkpanda-resolved-inputs/v4"
+        resolved.get("schema") != "darkpanda-resolved-inputs/v5"
         or not isinstance(resolved.get("darkpanda"), dict)
+        or not isinstance(resolved.get("pythonBinding"), dict)
+        or resolved["pythonBinding"].get("repository")  # type: ignore[index]
+        != "AeroidesLab/py-darkpanda"
+        or not re.fullmatch(
+            r"[0-9a-f]{40}",
+            str(resolved["pythonBinding"].get("revision", "")),  # type: ignore[index]
+        )
         or not isinstance(resolved.get("browserProfile"), dict)
         or not isinstance(resolved.get("components"), dict)
         or set(resolved["components"]) != set(COMPONENTS)  # type: ignore[arg-type]
     ):
-        errors.append("resolved-inputs.json does not contain the v4 fixed-build graph")
+        errors.append("resolved-inputs.json does not contain the v5 fixed-build graph")
     try:
         build_dependency_values(resolved)
     except ValueError as error:

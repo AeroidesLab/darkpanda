@@ -122,7 +122,7 @@ def _runtime_kwargs(args: argparse.Namespace) -> dict[str, object]:
         "profile": ClientProfile.CHROME149,
     }
     if os.name == "nt":
-        result["wreq_transport_path"] = args.wreq
+        result["wreq_library_path"] = args.wreq
     return result
 
 

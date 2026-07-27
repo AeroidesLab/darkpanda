@@ -12,12 +12,13 @@
 ## 项目简介 / Overview
 
 DarkPanda 基于 Lightpanda 的 Zig 浏览器代码演进，集成了固定版本的 V8、
-Zig DOM/Web API、标准 CDP、进程内 C/Python FFI、Rust `wreq` HTTP/TLS 传输层，
-以及真实的 CPU Chrome-Skia Canvas 后端。
+Zig DOM/Web API、标准 CDP、进程内 C ABI、PyO3 Python 扩展、Rust `wreq`
+HTTP/TLS 传输层，以及真实的 CPU Chrome-Skia Canvas 后端。
 
 DarkPanda is derived from the Lightpanda Zig browser codebase. It combines a
-pinned V8 runtime, a Zig DOM/Web API layer, standard CDP, an in-process C/Python
-FFI, the Rust `wreq` HTTP/TLS stack, and a real CPU Chrome-Skia Canvas backend.
+pinned V8 runtime, a Zig DOM/Web API layer, standard CDP, an in-process C ABI,
+the PyO3 Python extension, the Rust `wreq` HTTP/TLS stack, and a real CPU
+Chrome-Skia Canvas backend.
 
 项目目标是补齐自动化和当前挑战验收所需的浏览器行为，而不是实现完整渲染引擎，
 也不声称等价于 Chromium 的 Blink、GPU、多进程隔离或全部 Web Platform Tests。
@@ -48,7 +49,7 @@ than a claim of full Blink, GPU, process-isolation, or WPT parity.
 | Role | Windows | Linux | macOS |
 | --- | --- | --- | --- |
 | Browser / CDP | `darkpanda.exe` | `darkpanda` | `darkpanda` |
-| C/Python FFI | `darkpanda.dll` | `libdarkpanda.so` | `libdarkpanda.dylib` |
+| C ABI | `darkpanda.dll` | `libdarkpanda.so` | `libdarkpanda.dylib` |
 | HTTP/TLS | `wreq.dll` | `libwreq.so` | `libwreq.dylib` |
 | CPU Canvas | `canvas.dll` | `libcanvas.so` | `libcanvas.dylib` |
 | HTML parser | `html5ever.dll` | `libhtml5ever.so` | `libhtml5ever.dylib` |
@@ -74,54 +75,35 @@ macOS x64/arm64 和正式稳定版仍是后续验收阶段。手动运行默认�
 源码目录编译 Cargo/CMake 项目。
 
 Actions 在组装浏览器前验证每个 dist 的 `metadata/build-info.json`、
-`metadata/test-results.json` 和 `metadata/SHA256SUMS`。最终归档包含相邻的全部
-运行时库、`darkpanda.h`、`canvas.h`、Python 包装层、组件证明和运行时依赖报告。
+`metadata/test-results.json` 和 `metadata/SHA256SUMS`。原生归档包含相邻的全部
+运行时库、`darkpanda.h`、`canvas.h`、组件证明和运行时依赖报告；Python API
+只由 [`AeroidesLab/py-darkpanda`](https://github.com/AeroidesLab/py-darkpanda)
+的 PyO3 wheel 提供，不再发布主仓库的 ctypes 包装层。
 发布硬门会启动 CLI，并在安装目录和重新解压后的干净环境中加载
 `darkpanda`、`wreq`、Canvas ABI v5 和 HTML5ever 四个动态库。完整 Canvas 像素与
 software fallback 测试仍会运行并保留报告，但暂不阻断 Windows/Linux 预发行版。
 
 ## Python API
 
-设置 `DARKPANDA_BIN_DIR` 为某个已验证 artifact set 的 `bin` 目录：
+安装主仓库发布的 `py-darkpanda` wheel。wheel 自带同次构建的四个原生库，
+正常使用不需要手工拼接 DLL/SO 路径；开发时也可设置 `DARKPANDA_BIN_DIR`
+指向某个已验证原生归档的 `bin` 目录：
 
 ```python
-import os
-import sys
-from pathlib import Path
+from darkpanda import Browser, CanvasDriver, ClientProfile
 
-from darkpanda import CanvasDriver, ClientProfile, Runtime
-
-bin_dir = Path(os.environ["DARKPANDA_BIN_DIR"]).resolve()
-if os.name == "nt":
-    ffi_name, wreq_name, canvas_name = "darkpanda.dll", "wreq.dll", "canvas.dll"
-elif sys.platform == "darwin":
-    ffi_name, wreq_name, canvas_name = (
-        "libdarkpanda.dylib",
-        "libwreq.dylib",
-        "libcanvas.dylib",
-    )
-else:
-    ffi_name, wreq_name, canvas_name = (
-        "libdarkpanda.so",
-        "libwreq.so",
-        "libcanvas.so",
-    )
-
-with Runtime(
-    library_path=bin_dir / ffi_name,
-    wreq_library_path=bin_dir / wreq_name,
-    canvas_library_path=bin_dir / canvas_name,
+with Browser(
     canvas_driver=CanvasDriver.DYNAMIC,
     profile=ClientProfile.CHROME149,
     locale="en-US",
     timezone="UTC",
-) as runtime:
-    with runtime.new_page() as page:
+) as browser:
+    with browser.new_page() as page:
         page.navigate("https://example.com/")
         print(page.evaluate("({ title: document.title, url: location.href })"))
 ```
 
-该 API 直接在 Python 进程中加载 DarkPanda，不绑定 CDP 端口，也不启动浏览器
+该 PyO3 API 直接在 Python 进程中加载 DarkPanda，不绑定 CDP 端口，也不启动浏览器
 子进程。ABI 生命周期和 Windows 加载细节见 [WINDOWS_NATIVE.md](WINDOWS_NATIVE.md)。
 
 ## 构建模型 / Build model

@@ -467,7 +467,7 @@ def run_darkpanda(
 
     runtime = Runtime(
         library_path=library,
-        wreq_transport_path=wreq,
+        wreq_library_path=wreq,
         navigation_timeout_ms=20_000,
         locale="en-US",
         timezone="UTC",

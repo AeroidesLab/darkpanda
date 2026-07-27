@@ -25,6 +25,8 @@ env:
   GIT_TERMINAL_PROMPT: "0"
   DEPOT_TOOLS_UPDATE: "0"
   CACHE_GENERATION: ${{ inputs.dependency_cache_generation || 'v1' }}
+  MATURIN_VERSION: "1.9.6"
+  PYTEST_VERSION: "8.4.1"
 
 jobs:
   prepare:
@@ -35,6 +37,7 @@ jobs:
       html5ever_revision: ${{ steps.resolve.outputs.html5ever_revision }}
       wreq_revision: ${{ steps.resolve.outputs.wreq_revision }}
       boringssl_revision: ${{ steps.resolve.outputs.boringssl_revision }}
+      py_darkpanda_revision: ${{ steps.resolve.outputs.py_darkpanda_revision }}
       chrome_version: ${{ steps.resolve.outputs.chrome_version }}
       chromium_revision: ${{ steps.resolve.outputs.chromium_revision }}
       skia_revision: ${{ steps.resolve.outputs.skia_revision }}
@@ -98,6 +101,17 @@ jobs:
           path: components/boringssl
           persist-credentials: false
 
+      - name: Check out latest PyO3 binding source
+        id: checkout_py_darkpanda
+        uses: actions/checkout@v4
+        with:
+          repository: AeroidesLab/py-darkpanda
+          ref: main
+          token: ${{ secrets.SOURCE_READ_TOKEN || secrets.CANVAS_READ_TOKEN }}
+          fetch-depth: 1
+          path: components/py-darkpanda
+          persist-credentials: false
+
       - name: Resolve the immutable inputs for this run
         id: resolve
         shell: bash
@@ -115,6 +129,7 @@ jobs:
           html5ever_revision=$(git -C components/html5ever rev-parse HEAD)
           wreq_revision=$(git -C components/wreq rev-parse HEAD)
           boringssl_revision=$(git -C components/boringssl rev-parse HEAD)
+          py_darkpanda_revision=$(git -C components/py-darkpanda rev-parse HEAD)
           chrome_version=$(jq -r .chrome_for_testing_version "$profile")
           chromium_revision=$(jq -r .chromium_revision "$profile")
           skia_revision=$(jq -r .skia_revision "$profile")
@@ -131,6 +146,7 @@ jobs:
             "$html5ever_revision" \
             "$wreq_revision" \
             "$boringssl_revision" \
+            "$py_darkpanda_revision" \
             "$chromium_revision" \
             "$skia_revision" \
             "$v8_revision" \
@@ -159,6 +175,7 @@ jobs:
             echo "html5ever_revision=$html5ever_revision"
             echo "wreq_revision=$wreq_revision"
             echo "boringssl_revision=$boringssl_revision"
+            echo "py_darkpanda_revision=$py_darkpanda_revision"
             echo "chrome_version=$chrome_version"
             echo "chromium_revision=$chromium_revision"
             echo "skia_revision=$skia_revision"
@@ -178,6 +195,7 @@ jobs:
             --arg html5ever "$html5ever_revision" \
             --arg wreq "$wreq_revision" \
             --arg boringssl "$boringssl_revision" \
+            --arg py_darkpanda "$py_darkpanda_revision" \
             --arg chrome "$chrome_version" \
             --arg chromium "$chromium_revision" \
             --arg skia "$skia_revision" \
@@ -189,15 +207,20 @@ jobs:
             --arg v8_revision "$v8_revision" \
             --arg zig_v8_revision "$zig_v8_revision" \
             '{
-              schema: "darkpanda-resolved-inputs/v4",
+              schema: "darkpanda-resolved-inputs/v5",
               buildId: $build_id,
               policies: {
                 browserProfile: "fixed-in-darkpanda",
-                components: "latest-main-at-build-start"
+                components: "latest-main-at-build-start",
+                pythonBinding: "latest-main-at-build-start"
               },
               darkpanda: {
                 repository: "AeroidesLab/darkpanda",
                 revision: $darkpanda
+              },
+              pythonBinding: {
+                repository: "AeroidesLab/py-darkpanda",
+                revision: $py_darkpanda
               },
               browserProfile: {
                 chromeForTestingVersion: $chrome,
@@ -251,6 +274,8 @@ jobs:
           python3 -m unittest \
             tools.ci.test_aggregate_component_reports \
             tools.ci.test_aggregate_darkpanda_reports \
+            tools.ci.test_aggregate_python_wheels \
+            tools.ci.test_build_python_wheel \
             tools.ci.test_package_prebuilt \
             tools.ci.test_verify_chromium_toolchain
 
@@ -264,17 +289,19 @@ jobs:
           html5ever='${{ steps.checkout_html5ever.outcome }}'
           wreq='${{ steps.checkout_wreq.outcome }}'
           boringssl='${{ steps.checkout_boringssl.outcome }}'
+          py_darkpanda='${{ steps.checkout_py_darkpanda.outcome }}'
           resolve='${{ steps.resolve.outcome }}'
           contracts='${{ steps.contract_tests.outcome }}'
           valid=false
           if [[ -f resolved-inputs.json ]] &&
-             jq -e '.schema == "darkpanda-resolved-inputs/v4"' \
+             jq -e '.schema == "darkpanda-resolved-inputs/v5"' \
                resolved-inputs.json >/dev/null &&
              [[ $browser == success &&
                 $canvas == success &&
                 $html5ever == success &&
                 $wreq == success &&
                 $boringssl == success &&
+                $py_darkpanda == success &&
                 $resolve == success &&
                 $contracts == success ]]; then
             valid=true
@@ -288,6 +315,7 @@ jobs:
               --arg html5ever "$html5ever" \
               --arg wreq "$wreq" \
               --arg boringssl "$boringssl" \
+              --arg py_darkpanda "$py_darkpanda" \
               --arg resolve "$resolve" \
               --arg contracts "$contracts" \
               '{
@@ -299,8 +327,9 @@ jobs:
                   browserCheckout: $browser,
                   canvasCheckout: $canvas,
                   html5everCheckout: $html5ever,
-                  wreqCheckout: $wreq,
-                  boringsslCheckout: $boringssl,
+                   wreqCheckout: $wreq,
+                   boringsslCheckout: $boringssl,
+                   pyDarkpandaCheckout: $py_darkpanda,
                   resolve: $resolve,
                   contractTests: $contracts
                 },
@@ -309,8 +338,9 @@ jobs:
                     browserCheckout: $browser,
                     canvasCheckout: $canvas,
                     html5everCheckout: $html5ever,
-                    wreqCheckout: $wreq,
-                    boringsslCheckout: $boringssl,
+                     wreqCheckout: $wreq,
+                     boringsslCheckout: $boringssl,
+                     pyDarkpandaCheckout: $py_darkpanda,
                     resolve: $resolve,
                     contractTests: $contracts
                   }
@@ -346,6 +376,7 @@ jobs:
             echo "- HTML5ever: \`${{ steps.resolve.outputs.html5ever_revision }}\`"
             echo "- wreq: \`${{ steps.resolve.outputs.wreq_revision }}\`"
             echo "- BoringSSL: \`${{ steps.resolve.outputs.boringssl_revision }}\`"
+            echo "- py-darkpanda: \`${{ steps.resolve.outputs.py_darkpanda_revision }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   toolchain:
@@ -1142,7 +1173,7 @@ jobs:
             --arg v8 "$V8_VERSION" \
             --arg v8_revision "$V8_REVISION" \
             --arg zig_v8 "$ZIG_V8_SOURCE_REVISION" \
-            '.schema == "darkpanda-resolved-inputs/v4" and
+            '.schema == "darkpanda-resolved-inputs/v5" and
              .darkpanda.revision == $darkpanda and
              .browserProfile.profileSha256 == $profile and
              .buildDependencies.zig.version == $zig and
@@ -1749,12 +1780,167 @@ jobs:
           jq -e '.status == "passed"' \
             "reports/darkpanda-${{ matrix.id }}.json" >/dev/null
 
+  python:
+    name: python/${{ matrix.id }}
+    needs:
+      - prepare
+      - toolchain
+      - darkpanda
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x86_64
+            runner: windows-2022
+            python_cmd: python
+            jobs: 4
+          - id: linux-x86_64
+            runner: ubuntu-22.04
+            python_cmd: python3
+            jobs: 2
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out the exact browser build authority
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: browser
+          persist-credentials: false
+
+      - name: Check out the resolved PyO3 binding source
+        uses: actions/checkout@v4
+        with:
+          repository: AeroidesLab/py-darkpanda
+          ref: ${{ needs.prepare.outputs.py_darkpanda_revision }}
+          token: ${{ secrets.SOURCE_READ_TOKEN || secrets.CANVAS_READ_TOKEN }}
+          fetch-depth: 1
+          path: py-darkpanda
+          persist-credentials: false
+
+      - name: Download the shared Chromium bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: chromium-toolchain-${{ matrix.id }}
+          path: toolchain-archive
+
+      - name: Download the matching native runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: darkpanda-result-${{ matrix.id }}
+          path: runtime-result
+
+      - name: Verify and unpack the Chromium bundle
+        env:
+          MSYS: winsymlinks:nativestrict
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="chromium-toolchain-${{ matrix.id }}.tar.gz"
+          (
+            cd toolchain-archive
+            sha256sum --check "$archive.sha256"
+          )
+          mkdir -p toolchain
+          tar -xzf "toolchain-archive/$archive" \
+            -C toolchain \
+            --strip-components=1
+
+      - name: Enter the Visual Studio SDK environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Create the isolated Python build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          '${{ matrix.python_cmd }}' -m venv python-venv
+          if [[ '${{ runner.os }}' == Windows ]]; then
+            python_venv="$GITHUB_WORKSPACE/python-venv/Scripts/python.exe"
+          else
+            python_venv="$GITHUB_WORKSPACE/python-venv/bin/python"
+          fi
+          "$python_venv" -m pip install \
+            --disable-pip-version-check \
+            "maturin==$MATURIN_VERSION" \
+            "pytest==$PYTEST_VERSION"
+          echo "PYTHON_VENV=$python_venv" >> "$GITHUB_ENV"
+
+      - name: Build and test the PyO3 wheel with the Chromium toolchain
+        id: build_python
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$PYTHON_VENV" browser/tools/ci/build_python_wheel.py \
+            --source py-darkpanda \
+            --source-revision '${{ needs.prepare.outputs.py_darkpanda_revision }}' \
+            --browser-revision "$GITHUB_SHA" \
+            --runtime-results runtime-result \
+            --toolchain-dir toolchain \
+            --profile-sha256 '${{ needs.prepare.outputs.profile_sha256 }}' \
+            --target '${{ matrix.id }}' \
+            --python "$PYTHON_VENV" \
+            --jobs '${{ matrix.jobs }}' \
+            --output-dir "python-output/${{ matrix.id }}" \
+            --report "python-reports/py-darkpanda-${{ matrix.id }}.json"
+
+      - name: Preserve a machine-readable Python failure
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="python-reports/py-darkpanda-${{ matrix.id }}.json"
+          if [[ ! -f $report ]] || ! jq -e . "$report" >/dev/null 2>&1; then
+            mkdir -p python-reports
+            jq -n \
+              --arg target '${{ matrix.id }}' \
+              --arg source '${{ needs.prepare.outputs.py_darkpanda_revision }}' \
+              --arg browser "$GITHUB_SHA" \
+              '{
+                schema: "darkpanda-python-wheel/v1",
+                status: "failed",
+                target: $target,
+                sourceRevision: $source,
+                browserRevision: $browser,
+                error: "Python wheel builder did not produce valid JSON"
+              }' > "$report"
+          fi
+          {
+            echo "## py-darkpanda / ${{ matrix.id }}"
+            echo
+            echo "- Result: \`$(jq -r .status "$report")\`"
+            echo "- Wheel: \`$(jq -r '.wheel.name // ""' "$report")\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the Python wheel result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-result-${{ matrix.id }}
+          path: |
+            python-output/${{ matrix.id }}
+            python-reports
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Enforce the Python wheel gate
+        if: always()
+        shell: bash
+        run: |
+          jq -e '.status == "passed"' \
+            "python-reports/py-darkpanda-${{ matrix.id }}.json" >/dev/null
+
   aggregate:
     name: package
     needs:
       - prepare
       - native-summary
       - darkpanda
+      - python
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -1765,6 +1951,14 @@ jobs:
         with:
           pattern: darkpanda-result-*
           path: platform-results
+
+      - name: Download both Python wheel results
+        id: download_python
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: python-result-*
+          path: python-results
 
       - name: Download the resolved source graph
         id: download_inputs
@@ -1783,7 +1977,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate reports, package contents, and every checksum
-        id: validate
+        id: validate_native
         continue-on-error: true
         shell: bash
         run: |
@@ -1795,6 +1989,19 @@ jobs:
             --markdown aggregate/summary.md \
             --release-dir release
 
+      - name: Validate and add both PyO3 wheels
+        id: validate_python
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 browser/tools/ci/aggregate_python_wheels.py \
+            --results python-results \
+            --resolved-inputs resolved-inputs/resolved-inputs.json \
+            --release-dir release \
+            --output aggregate/python-summary.json \
+            --markdown aggregate/python-summary.md
+
       - name: Ensure the aggregate failure is machine-readable
         if: always()
         shell: bash
@@ -1804,7 +2011,7 @@ jobs:
             jq -n \
               --arg platforms '${{ steps.download_platforms.outcome }}' \
               --arg inputs '${{ steps.download_inputs.outcome }}' \
-              --arg validator '${{ steps.validate.outcome }}' \
+              --arg validator '${{ steps.validate_native.outcome }}' \
               '{
                 schema: "darkpanda-prebuilt-aggregate/v1",
                 status: "failed",
@@ -1825,6 +2032,29 @@ jobs:
               '- The aggregate validator could not run.' \
               > aggregate/summary.md
           fi
+          if [[ ! -f aggregate/python-summary.json ]]; then
+            jq -n \
+              --arg download '${{ steps.download_python.outcome }}' \
+              --arg validator '${{ steps.validate_python.outcome }}' \
+              '{
+                schema: "darkpanda-python-aggregate/v1",
+                status: "failed",
+                platforms: {},
+                errors: [
+                  "Python aggregate validator could not run",
+                  ("Python result download: " + $download),
+                  ("Python validator: " + $validator)
+                ]
+              }' > aggregate/python-summary.json
+          fi
+          if [[ ! -f aggregate/python-summary.md ]]; then
+            printf '%s\n' \
+              '## py-darkpanda wheels' \
+              '' \
+              '- Status: `failed`' \
+              '- The Python aggregate validator could not run.' \
+              > aggregate/python-summary.md
+          fi
 
       - name: Publish the final build summary
         if: always()
@@ -1839,6 +2069,9 @@ jobs:
               'The aggregate validator did not produce a report.' \
               >> "$GITHUB_STEP_SUMMARY"
           fi
+          if [[ -f aggregate/python-summary.md ]]; then
+            cat aggregate/python-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload the aggregate report
         if: always()
@@ -1850,7 +2083,7 @@ jobs:
           retention-days: 30
 
       - name: Upload the complete verified prebuilt set
-        if: steps.validate.outcome == 'success'
+        if: steps.validate_native.outcome == 'success' && steps.validate_python.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: darkpanda-prebuilt-all
@@ -1866,9 +2099,12 @@ jobs:
           test '${{ needs.prepare.result }}' = success
           test '${{ needs.native-summary.result }}' = success
           test '${{ needs.darkpanda.result }}' = success
+          test '${{ needs.python.result }}' = success
           test '${{ steps.download_platforms.outcome }}' = success
+          test '${{ steps.download_python.outcome }}' = success
           test '${{ steps.download_inputs.outcome }}' = success
-          test '${{ steps.validate.outcome }}' = success
+          test '${{ steps.validate_native.outcome }}' = success
+          test '${{ steps.validate_python.outcome }}' = success
 
   release:
     name: release
@@ -1893,7 +2129,7 @@ jobs:
           set -euo pipefail
           tag="v1.0.0-ci.${GITHUB_RUN_NUMBER}"
           mapfile -t assets < <(find release -maxdepth 1 -type f -print | sort)
-          test "${#assets[@]}" -ge 5
+          test "${#assets[@]}" -ge 9
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" \
               --repo "$GITHUB_REPOSITORY" \
@@ -1904,7 +2140,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "DarkPanda CI ${GITHUB_RUN_NUMBER}" \
-              --notes "Verified Windows/Linux prebuilt runtime for commit $GITHUB_SHA." \
+              --notes "Verified Windows/Linux native runtimes and PyO3 wheels for commit $GITHUB_SHA." \
               --prerelease \
               "${assets[@]}"
           fi

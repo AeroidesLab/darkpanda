@@ -268,10 +268,16 @@ def main() -> int:
         top_errors.append(f"invalid resolved-inputs.json: {exc}")
     components = resolved.get("components")
     browser_profile = resolved.get("browserProfile")
+    python_binding = resolved.get("pythonBinding")
     if (
-        resolved.get("schema") != "darkpanda-resolved-inputs/v4"
+        resolved.get("schema") != "darkpanda-resolved-inputs/v5"
         or not isinstance(components, dict)
         or not isinstance(browser_profile, dict)
+        or not isinstance(python_binding, dict)
+        or python_binding.get("repository") != "AeroidesLab/py-darkpanda"
+        or not re.fullmatch(
+            r"[0-9a-f]{40}", str(python_binding.get("revision", ""))
+        )
     ):
         top_errors.append("resolved inputs have no component/profile graph")
         components = {}

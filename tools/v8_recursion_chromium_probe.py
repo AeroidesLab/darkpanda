@@ -334,7 +334,7 @@ def darkpanda_probe(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     with Runtime(
         library_path=library,
-        wreq_transport_path=wreq,
+        wreq_library_path=wreq,
         locale=locale,
         timezone=timezone,
         profile=ClientProfile.CHROME149,
