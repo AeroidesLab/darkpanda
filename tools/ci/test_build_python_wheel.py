@@ -186,6 +186,23 @@ class BuildPythonWheelTests(unittest.TestCase):
             self.assertEqual(resolved.name, "ld.lld")
             self.assertEqual(resolved.resolve(), target)
 
+    def test_executable_path_preserves_a_virtual_environment_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            target = root / "python3.10"
+            target.write_bytes(b"python")
+            alias = root / "venv" / "bin" / "python"
+            alias.parent.mkdir(parents=True)
+            try:
+                alias.symlink_to(target)
+            except OSError as error:
+                self.skipTest(f"file symlinks unavailable: {error}")
+
+            executable = subject.executable_path(alias)
+
+            self.assertEqual(executable, alias)
+            self.assertEqual(executable.resolve(), target)
+
 
 if __name__ == "__main__":
     unittest.main()

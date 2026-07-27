@@ -63,6 +63,15 @@ def load_json(path: Path) -> dict[str, object]:
     return value
 
 
+def executable_path(path: Path) -> Path:
+    """Validate an executable without replacing a venv or tool alias symlink."""
+    candidate = Path(os.path.abspath(os.fspath(path)))
+    resolved = candidate.resolve(strict=True)
+    if not resolved.is_file():
+        raise ValueError(f"executable is not a file: {candidate}")
+    return candidate
+
+
 def safe_archive_name(name: str) -> PurePosixPath:
     if not name or "\x00" in name or "\\" in name:
         raise ValueError(f"unsafe archive member: {name!r}")
@@ -410,7 +419,7 @@ def build(args: argparse.Namespace) -> int:
             environment = build_environment(
                 tools, args.target, temporary_root / "cargo-target", args.jobs
             )
-            python = str(args.python.resolve(strict=True))
+            python = str(executable_path(args.python))
             rust_target = str(target["rust_target"])
             run_step(
                 "rustTest",
