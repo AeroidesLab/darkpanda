@@ -45,6 +45,9 @@ Linux/macOS/iOS 预编译静态库，没有 Windows 资产。Linux 构建改为�
 下载后逐项校验摘要；预编译策略由 `chromium-profile.json` 的
 `darkpanda_build.v8.zig_v8_prebuilt` 声明。Windows 继续从
 `AeroidesLab/zig-v8-fork` 固定 revision 源码构建 V8。
+注意两个平台都必须 checkout `AeroidesLab/zig-v8-fork`：它是 darkpanda
+`build.zig.zon` 的 Zig 绑定依赖包，预编译只是替换了 V8 静态库本身，并不替代
+zig 绑定源码。
 
 ## 3. 统一组件契约
 

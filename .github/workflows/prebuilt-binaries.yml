@@ -1173,7 +1173,6 @@ jobs:
 
       - name: Check out the fixed zig-v8 source
         id: checkout_zig_v8
-        if: runner.os == 'Windows'
         uses: actions/checkout@v4
         with:
           repository: AeroidesLab/zig-v8-fork
@@ -1204,23 +1203,21 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git -C browser rev-parse HEAD)" = "$GITHUB_SHA"
-          if [[ '${{ matrix.platform }}' == windows ]]; then
-            # No upstream prebuilt V8 exists for Windows; the source contract
-            # only applies where V8 is still compiled from the fixed fork.
-            test "$(git -C zig-v8-fork rev-parse HEAD)" = "$ZIG_V8_SOURCE_REVISION"
-            grep -Eq \
-              "const V8_VERSION[^=]*=[[:space:]]*\"$V8_VERSION\"" \
-              zig-v8-fork/build.zig
-            grep -Eq \
-              "const V8_REVISION[^=]*=[[:space:]]*\"$V8_REVISION\"" \
-              zig-v8-fork/build.zig
-            test ! -d zig-v8-fork/.github/workflows
-            jq -e '
-              .build_owner == "AeroidesLab/darkpanda" and
-              .selection_policy == "fixed-by-darkpanda-profile" and
-              .artifacts == "source-only"
-            ' zig-v8-fork/source-policy.json >/dev/null
-          fi
+          # The fork is the Zig binding package on every platform, even where
+          # the V8 archive itself comes from the upstream prebuilt release.
+          test "$(git -C zig-v8-fork rev-parse HEAD)" = "$ZIG_V8_SOURCE_REVISION"
+          grep -Eq \
+            "const V8_VERSION[^=]*=[[:space:]]*\"$V8_VERSION\"" \
+            zig-v8-fork/build.zig
+          grep -Eq \
+            "const V8_REVISION[^=]*=[[:space:]]*\"$V8_REVISION\"" \
+            zig-v8-fork/build.zig
+          test ! -d zig-v8-fork/.github/workflows
+          jq -e '
+            .build_owner == "AeroidesLab/darkpanda" and
+            .selection_policy == "fixed-by-darkpanda-profile" and
+            .artifacts == "source-only"
+          ' zig-v8-fork/source-policy.json >/dev/null
           resolved=resolved-inputs/resolved-inputs.json
           jq -e \
             --arg darkpanda "$GITHUB_SHA" \
