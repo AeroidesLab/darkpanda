@@ -38,6 +38,14 @@ BoringSSL M149 上游 CMake 的 `crypto` 已包含 `fipsmodule` object，不再�
 `CANVAS_READ_TOKEN`，但 token 本身必须对四个组件仓库及固定 V8 绑定仓库
 `AeroidesLab/zig-v8-fork`（共五个仓库）具有 Contents: Read 权限。
 
+V8 的获取按平台分化：上游 `lightpanda-io/zig-v8-fork` 的 release 只发布
+Linux/macOS/iOS 预编译静态库，没有 Windows 资产。Linux 构建改为消费上游预编译产物：
+`prepare` 在运行开始时解析 `releases/latest`，把 release tag 与
+`libc_v8_<v8-version>_linux_x86_64.a` 的 SHA-256 固化进 `resolved-inputs.json`，
+下载后逐项校验摘要；预编译策略由 `chromium-profile.json` 的
+`darkpanda_build.v8.zig_v8_prebuilt` 声明。Windows 继续从
+`AeroidesLab/zig-v8-fork` 固定 revision 源码构建 V8。
+
 ## 3. 统一组件契约
 
 四个仓库提供相同入口：

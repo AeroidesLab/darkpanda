@@ -102,6 +102,15 @@ def build_dependency_values(resolved: dict[str, object]) -> dict[str, str]:
     zig_v8 = v8.get("zigV8")
     if not isinstance(zig_sha, dict) or not isinstance(zig_v8, dict):
         raise ValueError("resolved Zig archive or zig-v8 record is incomplete")
+    prebuilt = zig_v8.get("prebuilt")
+    if not isinstance(prebuilt, dict):
+        raise ValueError("resolved zig-v8 record has no prebuilt entry")
+    prebuilt_assets = prebuilt.get("assets")
+    if not isinstance(prebuilt_assets, dict):
+        raise ValueError("resolved zig-v8 prebuilt record has no assets")
+    prebuilt_linux = prebuilt_assets.get("linux-x86_64")
+    if not isinstance(prebuilt_linux, dict):
+        raise ValueError("resolved zig-v8 prebuilt record has no Linux asset")
     result = {
         "zigVersion": zig.get("version"),
         "zigWindowsSha256": zig_sha.get("windows-x86_64"),
@@ -110,12 +119,23 @@ def build_dependency_values(resolved: dict[str, object]) -> dict[str, str]:
         "v8Revision": v8.get("revision"),
         "zigV8Repository": zig_v8.get("repository"),
         "zigV8Revision": zig_v8.get("revision"),
+        "zigV8PrebuiltRepository": prebuilt.get("repository"),
+        "zigV8PrebuiltRelease": prebuilt.get("release"),
+        "zigV8PrebuiltLinuxAsset": prebuilt_linux.get("name"),
+        "zigV8PrebuiltLinuxSha256": prebuilt_linux.get("sha256"),
     }
     if (
         any(not isinstance(value, str) or not value for value in result.values())
         or result["zigV8Repository"] != "AeroidesLab/zig-v8-fork"
+        or result["zigV8PrebuiltRepository"] != "lightpanda-io/zig-v8-fork"
         or not re.fullmatch(r"[0-9a-f]{40}", result["v8Revision"])
         or not re.fullmatch(r"[0-9a-f]{40}", result["zigV8Revision"])
+        or not re.fullmatch(
+            r"v[0-9]+\.[0-9]+\.[0-9]+", result["zigV8PrebuiltRelease"]
+        )
+        or result["zigV8PrebuiltLinuxAsset"]
+        != f"libc_v8_{result['v8Version']}_linux_x86_64.a"
+        or not re.fullmatch(r"[0-9a-f]{64}", result["zigV8PrebuiltLinuxSha256"])
         or not re.fullmatch(r"[0-9a-f]{64}", result["zigWindowsSha256"])
         or not re.fullmatch(r"[0-9a-f]{64}", result["zigLinuxSha256"])
     ):
@@ -538,6 +558,11 @@ def validate_package(
             != resolved["components"]["boringssl"]["revision"]  # type: ignore[index]
         ):
             raise ValueError("BUILD-INFO.json does not match the resolved runtime inputs")
+        if target["platform"] == "linux" and (
+            dependencies.get("v8ArchiveSha256")
+            != fixed["zigV8PrebuiltLinuxSha256"]
+        ):
+            raise ValueError("BUILD-INFO.json does not match the resolved runtime inputs")
         if tuple(build_info.get("runtimeClosure", ())) != target["runtime"]:
             raise ValueError("BUILD-INFO.json runtime closure is incomplete or out of order")
         packaged_components = dependencies.get("components")
@@ -629,6 +654,18 @@ def validate_platform(
         or report.get("zigV8SourceRevision") != fixed["zigV8Revision"]
     ):
         raise ValueError(f"platform V8 provenance is not fixed: {report_path}")
+
+    prebuilt = report.get("zigV8Prebuilt")
+    if target["platform"] == "linux":
+        if not isinstance(prebuilt, dict) or prebuilt != {
+            "release": fixed["zigV8PrebuiltRelease"],
+            "archiveSha256": fixed["zigV8PrebuiltLinuxSha256"],
+        }:
+            raise ValueError(
+                f"platform V8 prebuilt provenance mismatch: {report_path}"
+            )
+    elif prebuilt is not None:
+        raise ValueError(f"unexpected V8 prebuilt provenance: {report_path}")
 
     steps = report.get("steps")
     if not isinstance(steps, dict):

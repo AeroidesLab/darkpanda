@@ -48,6 +48,9 @@ jobs:
       v8_version: ${{ steps.resolve.outputs.v8_version }}
       v8_revision: ${{ steps.resolve.outputs.v8_revision }}
       zig_v8_revision: ${{ steps.resolve.outputs.zig_v8_revision }}
+      zig_v8_prebuilt_release: ${{ steps.resolve.outputs.zig_v8_prebuilt_release }}
+      zig_v8_prebuilt_linux_asset: ${{ steps.resolve.outputs.zig_v8_prebuilt_linux_asset }}
+      zig_v8_prebuilt_linux_sha256: ${{ steps.resolve.outputs.zig_v8_prebuilt_linux_sha256 }}
     steps:
       - name: Check out the browser build authority
         id: checkout_browser_authority
@@ -115,6 +118,8 @@ jobs:
       - name: Resolve the immutable inputs for this run
         id: resolve
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           profile=browser/tools/ci/chromium-profile.json
@@ -122,7 +127,9 @@ jobs:
             .schema == "darkpanda-chromium-profile/v1" and
             .policy.browser == "fixed" and
             .policy.components == "latest-main-at-build-start" and
-            .darkpanda_build.v8.zig_v8_repository == "AeroidesLab/zig-v8-fork"
+            .darkpanda_build.v8.zig_v8_repository == "AeroidesLab/zig-v8-fork" and
+            .darkpanda_build.v8.zig_v8_prebuilt.repository == "lightpanda-io/zig-v8-fork" and
+            .darkpanda_build.v8.zig_v8_prebuilt.release == "latest"
           ' "$profile" >/dev/null
 
           canvas_revision=$(git -C components/canvas rev-parse HEAD)
@@ -139,6 +146,30 @@ jobs:
           v8_version=$(jq -r .darkpanda_build.v8.version "$profile")
           v8_revision=$(jq -r .darkpanda_build.v8.revision "$profile")
           zig_v8_revision=$(jq -r .darkpanda_build.v8.zig_v8_revision "$profile")
+          # Upstream zig-v8 ships no Windows asset; only the Linux x86_64
+          # prebuilt archive is resolved here, Windows keeps the source build.
+          zig_v8_prebuilt_linux_asset="libc_v8_${v8_version}_linux_x86_64.a"
+          release_json=$(
+            curl -fsSL --retry 3 --retry-all-errors \
+              -H 'Accept: application/vnd.github+json' \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              https://api.github.com/repos/lightpanda-io/zig-v8-fork/releases/latest
+          )
+          zig_v8_prebuilt_release=$(jq -r .tag_name <<<"$release_json")
+          [[ $zig_v8_prebuilt_release =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::Invalid zig-v8 release tag: $zig_v8_prebuilt_release"
+            exit 1
+          }
+          zig_v8_prebuilt_linux_sha256=$(
+            jq -er --arg name "$zig_v8_prebuilt_linux_asset" '
+              .assets[] | select(.name == $name) | .digest
+            ' <<<"$release_json"
+          )
+          [[ $zig_v8_prebuilt_linux_sha256 =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "::error::Invalid prebuilt V8 digest: $zig_v8_prebuilt_linux_sha256"
+            exit 1
+          }
+          zig_v8_prebuilt_linux_sha256=${zig_v8_prebuilt_linux_sha256#sha256:}
           profile_sha256=$(sha256sum "$profile" | cut -d' ' -f1)
 
           for revision in \
@@ -186,6 +217,9 @@ jobs:
             echo "v8_version=$v8_version"
             echo "v8_revision=$v8_revision"
             echo "zig_v8_revision=$zig_v8_revision"
+            echo "zig_v8_prebuilt_release=$zig_v8_prebuilt_release"
+            echo "zig_v8_prebuilt_linux_asset=$zig_v8_prebuilt_linux_asset"
+            echo "zig_v8_prebuilt_linux_sha256=$zig_v8_prebuilt_linux_sha256"
           } >> "$GITHUB_OUTPUT"
 
           jq -n \
@@ -206,6 +240,9 @@ jobs:
             --arg v8_version "$v8_version" \
             --arg v8_revision "$v8_revision" \
             --arg zig_v8_revision "$zig_v8_revision" \
+            --arg zig_v8_prebuilt_release "$zig_v8_prebuilt_release" \
+            --arg zig_v8_prebuilt_linux_asset "$zig_v8_prebuilt_linux_asset" \
+            --arg zig_v8_prebuilt_linux_sha256 "$zig_v8_prebuilt_linux_sha256" \
             '{
               schema: "darkpanda-resolved-inputs/v5",
               buildId: $build_id,
@@ -241,7 +278,17 @@ jobs:
                   revision: $v8_revision,
                   zigV8: {
                     repository: "AeroidesLab/zig-v8-fork",
-                    revision: $zig_v8_revision
+                    revision: $zig_v8_revision,
+                    prebuilt: {
+                      repository: "lightpanda-io/zig-v8-fork",
+                      release: $zig_v8_prebuilt_release,
+                      assets: {
+                        "linux-x86_64": {
+                          name: $zig_v8_prebuilt_linux_asset,
+                          sha256: $zig_v8_prebuilt_linux_sha256
+                        }
+                      }
+                    }
                   }
                 }
               },
@@ -372,6 +419,7 @@ jobs:
             echo "- Zig: \`${{ steps.resolve.outputs.zig_version }}\`"
             echo "- V8: \`${{ steps.resolve.outputs.v8_version }}\` (\`${{ steps.resolve.outputs.v8_revision }}\`)"
             echo "- zig-v8: \`${{ steps.resolve.outputs.zig_v8_revision }}\`"
+            echo "- zig-v8 prebuilt: \`${{ steps.resolve.outputs.zig_v8_prebuilt_release }}\` (\`${{ steps.resolve.outputs.zig_v8_prebuilt_linux_asset }}\`)"
             echo "- Canvas: \`${{ steps.resolve.outputs.canvas_revision }}\`"
             echo "- HTML5ever: \`${{ steps.resolve.outputs.html5ever_revision }}\`"
             echo "- wreq: \`${{ steps.resolve.outputs.wreq_revision }}\`"
@@ -1087,6 +1135,9 @@ jobs:
       V8_VERSION: ${{ needs.prepare.outputs.v8_version }}
       V8_REVISION: ${{ needs.prepare.outputs.v8_revision }}
       ZIG_V8_SOURCE_REVISION: ${{ needs.prepare.outputs.zig_v8_revision }}
+      ZIG_V8_PREBUILT_RELEASE: ${{ needs.prepare.outputs.zig_v8_prebuilt_release }}
+      ZIG_V8_PREBUILT_LINUX_ASSET: ${{ needs.prepare.outputs.zig_v8_prebuilt_linux_asset }}
+      ZIG_V8_PREBUILT_LINUX_SHA256: ${{ needs.prepare.outputs.zig_v8_prebuilt_linux_sha256 }}
     strategy:
       fail-fast: false
       matrix:
@@ -1122,6 +1173,7 @@ jobs:
 
       - name: Check out the fixed zig-v8 source
         id: checkout_zig_v8
+        if: runner.os == 'Windows'
         uses: actions/checkout@v4
         with:
           repository: AeroidesLab/zig-v8-fork
@@ -1152,19 +1204,23 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git -C browser rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git -C zig-v8-fork rev-parse HEAD)" = "$ZIG_V8_SOURCE_REVISION"
-          grep -Eq \
-            "const V8_VERSION[^=]*=[[:space:]]*\"$V8_VERSION\"" \
-            zig-v8-fork/build.zig
-          grep -Eq \
-            "const V8_REVISION[^=]*=[[:space:]]*\"$V8_REVISION\"" \
-            zig-v8-fork/build.zig
-          test ! -d zig-v8-fork/.github/workflows
-          jq -e '
-            .build_owner == "AeroidesLab/darkpanda" and
-            .selection_policy == "fixed-by-darkpanda-profile" and
-            .artifacts == "source-only"
-          ' zig-v8-fork/source-policy.json >/dev/null
+          if [[ '${{ matrix.platform }}' == windows ]]; then
+            # No upstream prebuilt V8 exists for Windows; the source contract
+            # only applies where V8 is still compiled from the fixed fork.
+            test "$(git -C zig-v8-fork rev-parse HEAD)" = "$ZIG_V8_SOURCE_REVISION"
+            grep -Eq \
+              "const V8_VERSION[^=]*=[[:space:]]*\"$V8_VERSION\"" \
+              zig-v8-fork/build.zig
+            grep -Eq \
+              "const V8_REVISION[^=]*=[[:space:]]*\"$V8_REVISION\"" \
+              zig-v8-fork/build.zig
+            test ! -d zig-v8-fork/.github/workflows
+            jq -e '
+              .build_owner == "AeroidesLab/darkpanda" and
+              .selection_policy == "fixed-by-darkpanda-profile" and
+              .artifacts == "source-only"
+            ' zig-v8-fork/source-policy.json >/dev/null
+          fi
           resolved=resolved-inputs/resolved-inputs.json
           jq -e \
             --arg darkpanda "$GITHUB_SHA" \
@@ -1173,6 +1229,9 @@ jobs:
             --arg v8 "$V8_VERSION" \
             --arg v8_revision "$V8_REVISION" \
             --arg zig_v8 "$ZIG_V8_SOURCE_REVISION" \
+            --arg zig_v8_prebuilt "$ZIG_V8_PREBUILT_RELEASE" \
+            --arg zig_v8_prebuilt_asset "$ZIG_V8_PREBUILT_LINUX_ASSET" \
+            --arg zig_v8_prebuilt_sha256 "$ZIG_V8_PREBUILT_LINUX_SHA256" \
             '.schema == "darkpanda-resolved-inputs/v5" and
              .darkpanda.revision == $darkpanda and
              .browserProfile.profileSha256 == $profile and
@@ -1180,7 +1239,12 @@ jobs:
              .buildDependencies.v8.version == $v8 and
              .buildDependencies.v8.revision == $v8_revision and
              .buildDependencies.v8.zigV8.repository == "AeroidesLab/zig-v8-fork" and
-             .buildDependencies.v8.zigV8.revision == $zig_v8' \
+             .buildDependencies.v8.zigV8.revision == $zig_v8 and
+             .buildDependencies.v8.zigV8.prebuilt.repository == "lightpanda-io/zig-v8-fork" and
+             .buildDependencies.v8.zigV8.prebuilt.release == $zig_v8_prebuilt and
+             .buildDependencies.v8.zigV8.prebuilt.assets["linux-x86_64"].name == $zig_v8_prebuilt_asset and
+             .buildDependencies.v8.zigV8.prebuilt.assets["linux-x86_64"].name == ("libc_v8_" + $v8 + "_linux_x86_64.a") and
+             .buildDependencies.v8.zigV8.prebuilt.assets["linux-x86_64"].sha256 == $zig_v8_prebuilt_sha256' \
             "$resolved" >/dev/null
 
           declare -A revisions=(
@@ -1316,7 +1380,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dependency-cache/${{ matrix.id }}/v8
-          key: darkpanda-v8-${{ matrix.id }}-zig-${{ env.ZIG_VERSION }}-v8-${{ env.V8_VERSION }}-${{ env.ZIG_V8_SOURCE_REVISION }}-target-${{ matrix.zig_target }}-deployment-na-${{ env.CACHE_GENERATION }}
+          key: darkpanda-v8-${{ matrix.id }}-zig-${{ env.ZIG_VERSION }}-v8-${{ env.V8_VERSION }}-${{ env.ZIG_V8_SOURCE_REVISION }}${{ matrix.platform == 'linux' && format('-prebuilt-{0}', env.ZIG_V8_PREBUILT_RELEASE) || '' }}-target-${{ matrix.zig_target }}-deployment-na-${{ env.CACHE_GENERATION }}
           enableCrossOsArchive: false
 
       - name: Build the fixed V8 dependency bundle on Windows
@@ -1369,39 +1433,29 @@ jobs:
             --zig-v8-source-revision $env:ZIG_V8_SOURCE_REVISION `
             --zig-version $env:ZIG_VERSION
 
-      - name: Build the fixed V8 dependency bundle on Linux
+      - name: Download the prebuilt V8 dependency bundle on Linux
         if: runner.os == 'Linux' && steps.v8_cache.outputs.cache-hit != 'true'
-        id: v8_build_linux
+        id: v8_download_linux
         continue-on-error: true
         shell: bash
         run: |
-          set -o pipefail
-          source_root="$RUNNER_TEMP/darkpanda-v8-source"
-          local_cache="$RUNNER_TEMP/darkpanda-v8-zig-cache"
-          global_cache="$RUNNER_TEMP/darkpanda-v8-zig-global-cache"
+          set -euo pipefail
           bundle_root="$GITHUB_WORKSPACE/dependency-cache/${{ matrix.id }}/v8"
-          rm -rf -- "$source_root" "$local_cache" "$global_cache" "$bundle_root"
-          mkdir -p -- "$source_root" "$local_cache" "$global_cache" "$bundle_root"
-          (
-            cd zig-v8-fork
-            zig build build-v8 \
-              '-j${{ matrix.jobs }}' \
-              -Dtarget='${{ matrix.zig_target }}' \
-              -Doptimize=ReleaseFast \
-              -Dsymbol_level=0 \
-              -Dcache_root="$source_root" \
-              --cache-dir "$local_cache" \
-              --global-cache-dir "$global_cache" \
-              --summary all
-          ) 2>&1 | tee "logs/v8-build-${{ matrix.id }}.log"
-          mapfile -t candidates < <(
-            find "$source_root" -type f -name '${{ matrix.v8_archive }}'
-          )
-          test "${#candidates[@]}" -eq 1
-          archive="$bundle_root/${{ matrix.v8_archive }}"
-          cp -- "${candidates[0]}" "$archive"
+          rm -rf -- "$bundle_root"
+          mkdir -p -- "$bundle_root"
+          # The resolved upstream release asset replaces the Linux source
+          # build; the digest resolved by prepare pins the exact bytes.
+          test "$ZIG_V8_PREBUILT_LINUX_ASSET" = "libc_v8_${V8_VERSION}_linux_x86_64.a"
+          url=https://github.com/lightpanda-io/zig-v8-fork/releases/download
+          curl -fsSL --retry 3 --retry-all-errors \
+            -o "$bundle_root/${{ matrix.v8_archive }}" \
+            "$url/$ZIG_V8_PREBUILT_RELEASE/$ZIG_V8_PREBUILT_LINUX_ASSET"
+          printf '%s  %s\n' \
+            "$ZIG_V8_PREBUILT_LINUX_SHA256" \
+            "$bundle_root/${{ matrix.v8_archive }}" |
+            sha256sum --check -
           python3 browser/tools/ci/v8_bundle.py create \
-            --archive "$archive" \
+            --archive "$bundle_root/${{ matrix.v8_archive }}" \
             --manifest "$bundle_root/manifest.json" \
             --platform '${{ matrix.id }}' \
             --target '${{ matrix.zig_target }}' \
@@ -1632,7 +1686,7 @@ jobs:
             install='${{ steps.install_linux.outcome }}'
             package='${{ steps.package_linux.outcome }}'
             vc_runtime=success
-            v8_build='${{ steps.v8_build_linux.outcome }}'
+            v8_build='${{ steps.v8_download_linux.outcome }}'
           fi
           if [[ '${{ steps.v8_cache.outputs.cache-hit }}' == true ]]; then
             v8_build=success
@@ -1689,6 +1743,15 @@ jobs:
             status=failed
           fi
 
+          if [[ '${{ matrix.platform }}' == linux ]]; then
+            zig_v8_prebuilt=$(jq -n \
+              --arg release "$ZIG_V8_PREBUILT_RELEASE" \
+              --arg sha "$V8_ARCHIVE_SHA256" \
+              '{release: $release, archiveSha256: $sha}')
+          else
+            zig_v8_prebuilt=null
+          fi
+
           jq -n \
             --arg target '${{ matrix.id }}' \
             --arg platform '${{ matrix.platform }}' \
@@ -1703,6 +1766,7 @@ jobs:
             --arg v8_version "$V8_VERSION" \
             --arg v8_revision "$V8_REVISION" \
             --arg zig_v8 "$ZIG_V8_SOURCE_REVISION" \
+            --argjson zig_v8_prebuilt "$zig_v8_prebuilt" \
             --arg source_contract '${{ steps.source_contract.outcome }}' \
             --arg install_zig "$install_zig" \
             --arg v8_build "$v8_build" \
@@ -1730,6 +1794,7 @@ jobs:
               v8Version: $v8_version,
               v8Revision: $v8_revision,
               zigV8SourceRevision: $zig_v8,
+              zigV8Prebuilt: $zig_v8_prebuilt,
               steps: {
                 sourceContract: $source_contract,
                 installZig: $install_zig,
