@@ -144,6 +144,13 @@ pub fn build(b: *Build) !void {
         mod.addImport("darkpanda", mod); // allow circular "darkpanda" import
         mod.addImport("build_config", opts.createModule());
 
+        // PFFFT (real-to-complex FFT) — used by WebAudio PeriodicWave.
+        // Compiled with Chromium 149's clang-cl (LLVM 23, from gclient sync)
+        // to match Brave 149's exact floating-point behavior.
+        const pffft_lib = buildPffft(b);
+        mod.addObjectFile(pffft_lib);
+        mod.addIncludePath(b.path("src/browser/webapi/audio/pffft"));
+
         // Format check
         const fmt_step = b.step("fmt", "Check code formatting");
         const fmt = b.addFmt(.{
@@ -727,4 +734,41 @@ fn runGit(b: *std.Build, args: []const []const u8) ![]const u8 {
     try command.appendSlice(b.allocator, &.{ "git", "-C", dir });
     try command.appendSlice(b.allocator, args);
     return b.runAllowFail(command.items, &code, .Ignore);
+}
+
+/// Build PFFFT with Chromium 149's clang-cl (LLVM 23) from the gclient-synced
+/// toolchain in `.lp-cache/v8-14.9.207.35/third_party/llvm-build`. Using the
+/// exact same Clang version as Brave 149 ensures bit-identical floating-point
+/// results for the WebAudio PeriodicWave IFFT.
+fn buildPffft(b: *Build) Build.LazyPath {
+    const pffft_src = b.path("src/browser/webapi/audio/pffft/pffft.c");
+
+    // Locate the gclient-synced Chromium 149 LLVM toolchain.
+    const v8_dir = b.fmt("{s}/.lp-cache/v8-14.9.207.35", .{b.pathFromRoot(".")});
+    const clang_cl = b.fmt("{s}/third_party/llvm-build/Release+Asserts/bin/clang-cl.exe", .{v8_dir});
+    const lld_link = b.fmt("{s}/third_party/llvm-build/Release+Asserts/bin/lld-link.exe", .{v8_dir});
+
+    // Compile pffft.c → pffft.obj
+    // Flags match Chromium 149's default Windows config:
+    //   /O2 (release optimize), -msse3 (Chrome x64 baseline),
+    //   /clang:-ffp-contract=off (disable FMA contraction, like Chromium).
+    const compile = b.addSystemCommand(&.{
+        clang_cl,
+        "/nologo",
+        "/c",
+        "/O2",
+        "-msse3",
+        "/D_USE_MATH_DEFINES",
+        "/clang:-ffp-contract=off",
+        b.fmt("-I{s}", .{b.pathFromRoot("src/browser/webapi/audio/pffft")}),
+    });
+    compile.addFileArg(pffft_src);
+    const obj = compile.addPrefixedOutputFileArg("/Fo", "pffft.obj");
+
+    // Archive pffft.obj → pffft.lib
+    const archive = b.addSystemCommand(&.{ lld_link, "/lib", "/nologo" });
+    archive.addFileArg(obj);
+    const lib = archive.addPrefixedOutputFileArg("/out:", "pffft.lib");
+
+    return lib;
 }
