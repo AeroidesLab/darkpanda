@@ -51,7 +51,9 @@ TARGETS = {
         "executables": {
             "cc": "llvm/bin/clang",
             "cxx": "llvm/bin/clang++",
+            "linker": "llvm/bin/ld64.lld",
             "archiver": "llvm/bin/llvm-ar",
+            "ranlib": "llvm/bin/llvm-ranlib",
             "objdump": "llvm/bin/llvm-objdump",
             "rustc": "rust/bin/rustc",
             "cargo": "rust/bin/cargo",
@@ -65,7 +67,9 @@ TARGETS = {
         "executables": {
             "cc": "llvm/bin/clang",
             "cxx": "llvm/bin/clang++",
+            "linker": "llvm/bin/ld64.lld",
             "archiver": "llvm/bin/llvm-ar",
+            "ranlib": "llvm/bin/llvm-ranlib",
             "objdump": "llvm/bin/llvm-objdump",
             "rustc": "rust/bin/rustc",
             "cargo": "rust/bin/cargo",

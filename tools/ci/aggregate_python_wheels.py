@@ -30,6 +30,18 @@ TARGETS = {
         "libcanvas.so",
         "libhtml5ever.so",
     ),
+    "macos-x86_64": (
+        "libdarkpanda.dylib",
+        "libwreq.dylib",
+        "libcanvas.dylib",
+        "libhtml5ever.dylib",
+    ),
+    "macos-aarch64": (
+        "libdarkpanda.dylib",
+        "libwreq.dylib",
+        "libcanvas.dylib",
+        "libhtml5ever.dylib",
+    ),
 }
 REQUIRED_STEPS = ("rustTest", "wheelBuild", "wheelInstall", "pythonTest")
 

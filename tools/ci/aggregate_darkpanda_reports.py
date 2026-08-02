@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the two DarkPanda runtime builds and assemble the final archive set."""
+"""Validate all DarkPanda runtime builds and assemble the final archive set."""
 
 from __future__ import annotations
 
@@ -55,6 +55,30 @@ TARGETS = {
             "libwreq.so",
             "libcanvas.so",
             "libhtml5ever.so",
+        ),
+    },
+    "macos-x86_64": {
+        "platform": "macos",
+        "zig_target": "x86_64-macos.12.0",
+        "suffix": ".tar.gz",
+        "runtime": (
+            "darkpanda",
+            "libdarkpanda.dylib",
+            "libwreq.dylib",
+            "libcanvas.dylib",
+            "libhtml5ever.dylib",
+        ),
+    },
+    "macos-aarch64": {
+        "platform": "macos",
+        "zig_target": "aarch64-macos.12.0",
+        "suffix": ".tar.gz",
+        "runtime": (
+            "darkpanda",
+            "libdarkpanda.dylib",
+            "libwreq.dylib",
+            "libcanvas.dylib",
+            "libhtml5ever.dylib",
         ),
     },
 }
@@ -115,6 +139,8 @@ def build_dependency_values(resolved: dict[str, object]) -> dict[str, str]:
         "zigVersion": zig.get("version"),
         "zigWindowsSha256": zig_sha.get("windows-x86_64"),
         "zigLinuxSha256": zig_sha.get("linux-x86_64"),
+        "zigMacosX8664Sha256": zig_sha.get("macos-x86_64"),
+        "zigMacosAarch64Sha256": zig_sha.get("macos-aarch64"),
         "v8Version": v8.get("version"),
         "v8Revision": v8.get("revision"),
         "zigV8Repository": zig_v8.get("repository"),
@@ -138,6 +164,8 @@ def build_dependency_values(resolved: dict[str, object]) -> dict[str, str]:
         or not re.fullmatch(r"[0-9a-f]{64}", result["zigV8PrebuiltLinuxSha256"])
         or not re.fullmatch(r"[0-9a-f]{64}", result["zigWindowsSha256"])
         or not re.fullmatch(r"[0-9a-f]{64}", result["zigLinuxSha256"])
+        or not re.fullmatch(r"[0-9a-f]{64}", result["zigMacosX8664Sha256"])
+        or not re.fullmatch(r"[0-9a-f]{64}", result["zigMacosAarch64Sha256"])
     ):
         raise ValueError("resolved Zig/V8 dependency values are invalid")
     return result  # type: ignore[return-value]
@@ -441,6 +469,56 @@ def validate_dependency_manifest(
                 )
             ):
                 raise ValueError(f"Windows dependency closure is invalid: {binary_name}")
+    else:
+        if (
+            policy.get("installNamePolicy") != "@rpath-bundled-plus-system"
+            or policy.get("runtimePathPolicy") != "@loader_path"
+            or policy.get("systemLibraryRoots")
+            != ["/System/Library", "/usr/lib"]
+        ):
+            raise ValueError("macOS dependency manifest policy is not strict")
+        bundled = {name for name in runtime if name.endswith(".dylib")}
+        expected_architecture = {
+            "x86_64-macos.12.0": "x86_64",
+            "aarch64-macos.12.0": "arm64",
+        }[str(target["zig_target"])]
+        for binary_name, value in binaries.items():
+            if (
+                not isinstance(value, dict)
+                or set(value)
+                != {
+                    "architectures",
+                    "installName",
+                    "runtimePaths",
+                    "otoolLibraries",
+                    "otoolLoadCommands",
+                }
+                or value.get("architectures") != [expected_architecture]
+                or value.get("installName")
+                != (f"@rpath/{binary_name}" if binary_name.endswith(".dylib") else None)
+                or not isinstance(value.get("runtimePaths"), list)
+                or not isinstance(value.get("otoolLibraries"), list)
+                or not isinstance(value.get("otoolLoadCommands"), list)
+            ):
+                raise ValueError(f"invalid Mach-O dependency record: {binary_name}")
+            if binary_name in {"darkpanda", "libdarkpanda.dylib"} and (
+                "@loader_path" not in value["runtimePaths"]
+            ):
+                raise ValueError(f"missing Mach-O runtime path: {binary_name}")
+            dependencies = value["otoolLibraries"][1:]
+            if not all(isinstance(line, str) for line in dependencies):
+                raise ValueError(f"invalid Mach-O dependency record: {binary_name}")
+            for line in dependencies:
+                install_name = line.strip().split(" (", 1)[0]
+                if install_name.startswith("@rpath/"):
+                    if install_name.removeprefix("@rpath/") not in bundled:
+                        raise ValueError(
+                            f"unknown bundled Mach-O dependency: {install_name}"
+                        )
+                elif not install_name.startswith(("/System/Library/", "/usr/lib/")):
+                    raise ValueError(
+                        f"non-portable Mach-O dependency: {install_name}"
+                    )
 
 
 def validate_packaged_runtime_attestation(
@@ -464,6 +542,12 @@ def validate_packaged_runtime_attestation(
             "canvas": "bin/libcanvas.so",
             "html5ever": "bin/libhtml5ever.so",
         },
+        "macos": {
+            "ffi": "bin/libdarkpanda.dylib",
+            "wreq": "bin/libwreq.dylib",
+            "canvas": "bin/libcanvas.dylib",
+            "html5ever": "bin/libhtml5ever.dylib",
+        },
     }[str(target["platform"])]
     loaded_libraries = {
         "windows": [
@@ -478,13 +562,19 @@ def validate_packaged_runtime_attestation(
             "bin/libcanvas.so",
             "bin/libhtml5ever.so",
         ],
+        "macos": [
+            "bin/libdarkpanda.dylib",
+            "bin/libwreq.dylib",
+            "bin/libcanvas.dylib",
+            "bin/libhtml5ever.dylib",
+        ],
     }[str(target["platform"])]
     runtime = report.get("runtime")
-    expected_policy = (
-        "archive-bin-plus-windows-system"
-        if target["platform"] == "windows"
-        else "elf-origin-plus-system"
-    )
+    expected_policy = {
+        "windows": "archive-bin-plus-windows-system",
+        "linux": "elf-origin-plus-system",
+        "macos": "macho-rpath-plus-system",
+    }[str(target["platform"])]
     if (
         report.get("schema") != "darkpanda-packaged-runtime-attestation/v1"
         or report.get("status") != "PASS"
@@ -756,7 +846,7 @@ def write_outputs(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     lines = [
-        "## DarkPanda Windows/Linux aggregate",
+        "## DarkPanda cross-platform aggregate",
         "",
         f"- Status: `{status}`",
         f"- Resolved inputs: `{resolved_sha}`",

@@ -9,7 +9,7 @@ on:
         default: v1
         type: string
       publish_release:
-        description: Publish the verified Windows/Linux archives as a prerelease
+        description: Publish the verified Windows/Linux/macOS archives as a prerelease
         required: true
         default: false
         type: boolean
@@ -45,6 +45,8 @@ jobs:
       zig_version: ${{ steps.resolve.outputs.zig_version }}
       zig_windows_sha256: ${{ steps.resolve.outputs.zig_windows_sha256 }}
       zig_linux_sha256: ${{ steps.resolve.outputs.zig_linux_sha256 }}
+      zig_macos_x86_64_sha256: ${{ steps.resolve.outputs.zig_macos_x86_64_sha256 }}
+      zig_macos_aarch64_sha256: ${{ steps.resolve.outputs.zig_macos_aarch64_sha256 }}
       v8_version: ${{ steps.resolve.outputs.v8_version }}
       v8_revision: ${{ steps.resolve.outputs.v8_revision }}
       zig_v8_revision: ${{ steps.resolve.outputs.zig_v8_revision }}
@@ -143,6 +145,8 @@ jobs:
           zig_version=$(jq -r .darkpanda_build.zig.version "$profile")
           zig_windows_sha256=$(jq -r '.darkpanda_build.zig.sha256["windows-x86_64"]' "$profile")
           zig_linux_sha256=$(jq -r '.darkpanda_build.zig.sha256["linux-x86_64"]' "$profile")
+          zig_macos_x86_64_sha256=$(jq -r '.darkpanda_build.zig.sha256["macos-x86_64"]' "$profile")
+          zig_macos_aarch64_sha256=$(jq -r '.darkpanda_build.zig.sha256["macos-aarch64"]' "$profile")
           v8_version=$(jq -r .darkpanda_build.v8.version "$profile")
           v8_revision=$(jq -r .darkpanda_build.v8.revision "$profile")
           zig_v8_revision=$(jq -r .darkpanda_build.v8.zig_v8_revision "$profile")
@@ -194,7 +198,11 @@ jobs:
               browser/build.zig.zon
           )
           test "$zon_zig_version" = "$zig_version"
-          for digest in "$zig_windows_sha256" "$zig_linux_sha256"; do
+          for digest in \
+            "$zig_windows_sha256" \
+            "$zig_linux_sha256" \
+            "$zig_macos_x86_64_sha256" \
+            "$zig_macos_aarch64_sha256"; do
             [[ $digest =~ ^[0-9a-f]{64}$ ]] || {
               echo "::error::Invalid Zig archive SHA-256: $digest"
               exit 1
@@ -214,6 +222,8 @@ jobs:
             echo "zig_version=$zig_version"
             echo "zig_windows_sha256=$zig_windows_sha256"
             echo "zig_linux_sha256=$zig_linux_sha256"
+            echo "zig_macos_x86_64_sha256=$zig_macos_x86_64_sha256"
+            echo "zig_macos_aarch64_sha256=$zig_macos_aarch64_sha256"
             echo "v8_version=$v8_version"
             echo "v8_revision=$v8_revision"
             echo "zig_v8_revision=$zig_v8_revision"
@@ -237,6 +247,8 @@ jobs:
             --arg zig_version "$zig_version" \
             --arg zig_windows_sha256 "$zig_windows_sha256" \
             --arg zig_linux_sha256 "$zig_linux_sha256" \
+            --arg zig_macos_x86_64_sha256 "$zig_macos_x86_64_sha256" \
+            --arg zig_macos_aarch64_sha256 "$zig_macos_aarch64_sha256" \
             --arg v8_version "$v8_version" \
             --arg v8_revision "$v8_revision" \
             --arg zig_v8_revision "$zig_v8_revision" \
@@ -270,7 +282,9 @@ jobs:
                   version: $zig_version,
                   sha256: {
                     "windows-x86_64": $zig_windows_sha256,
-                    "linux-x86_64": $zig_linux_sha256
+                    "linux-x86_64": $zig_linux_sha256,
+                    "macos-x86_64": $zig_macos_x86_64_sha256,
+                    "macos-aarch64": $zig_macos_aarch64_sha256
                   }
                 },
                 v8: {
@@ -441,6 +455,12 @@ jobs:
           - id: linux-x86_64
             runner: ubuntu-24.04
             python: python3
+          - id: macos-x86_64
+            runner: macos-15-intel
+            python: python3
+          - id: macos-aarch64
+            runner: macos-15
+            python: python3
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out the exact browser commit as the gclient solution
@@ -459,6 +479,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
             ca-certificates git python3 xz-utils
+
+      - name: Install macOS CI shell prerequisites
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install bash coreutils
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
 
       - name: Synchronize the profile with gclient on Windows
         if: runner.os == 'Windows'
@@ -485,8 +513,8 @@ jobs:
             Pop-Location
           }
 
-      - name: Synchronize the profile with gclient on Linux
-        if: runner.os == 'Linux'
+      - name: Synchronize the profile with gclient on Unix
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -515,7 +543,7 @@ jobs:
             --output gclient/browser/chromium-toolchain/metadata/skia-chromium-subtrees.json
 
       - name: Complete Chromium tool aliases
-        if: runner.os == 'Linux'
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -525,6 +553,40 @@ jobs:
             ln -s llvm-ar "$llvm_bin/llvm-ranlib"
           fi
           test -x "$llvm_bin/llvm-ranlib"
+
+      - name: Compile and link C and Rust probes with the macOS SDK
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$GITHUB_WORKSPACE/gclient/browser/chromium-toolchain"
+          probe="$RUNNER_TEMP/darkpanda-toolchain-probe-${{ matrix.id }}"
+          mkdir -p "$probe"
+          printf '%s\n' 'int main(void) { return 0; }' > "$probe/main.c"
+          printf '%s\n' 'fn main() {}' > "$probe/main.rs"
+          sdk=$(xcrun --sdk macosx --show-sdk-path)
+          clang="$bundle/llvm/bin/clang"
+          rustc="$bundle/rust/bin/rustc"
+          case '${{ matrix.id }}' in
+            macos-x86_64)
+              clang_target=x86_64-apple-macos12
+              rust_target=x86_64-apple-darwin
+              ;;
+            macos-aarch64)
+              clang_target=arm64-apple-macos12
+              rust_target=aarch64-apple-darwin
+              ;;
+            *) exit 1 ;;
+          esac
+          "$clang" --target="$clang_target" -isysroot "$sdk" \
+            -mmacosx-version-min=12.0 -fuse-ld=lld \
+            "$probe/main.c" -o "$probe/c-smoke"
+          "$probe/c-smoke"
+          "$rustc" --target "$rust_target" -C "linker=$clang" \
+            -C link-arg=-fuse-ld=lld -C link-arg=-isysroot \
+            -C "link-arg=$sdk" -C link-arg=-mmacosx-version-min=12.0 \
+            "$probe/main.rs" -o "$probe/rust-smoke"
+          "$probe/rust-smoke"
 
       - name: Prove the minimal graph against official Chromium DEPS
         shell: bash
@@ -706,6 +768,20 @@ jobs:
           - component: canvas
             repository: AeroidesLab/canvas
             revision: ${{ needs.prepare.outputs.canvas_revision }}
+            id: macos-x86_64
+            runner: macos-15-intel
+            python: python3
+            jobs: 2
+          - component: canvas
+            repository: AeroidesLab/canvas
+            revision: ${{ needs.prepare.outputs.canvas_revision }}
+            id: macos-aarch64
+            runner: macos-15
+            python: python3
+            jobs: 2
+          - component: canvas
+            repository: AeroidesLab/canvas
+            revision: ${{ needs.prepare.outputs.canvas_revision }}
             id: linux-x86_64
             runner: ubuntu-24.04
             python: python3
@@ -717,6 +793,20 @@ jobs:
             runner: windows-2022
             python: python
             jobs: 4
+          - component: html5ever
+            repository: AeroidesLab/html5ever
+            revision: ${{ needs.prepare.outputs.html5ever_revision }}
+            id: macos-x86_64
+            runner: macos-15-intel
+            python: python3
+            jobs: 2
+          - component: html5ever
+            repository: AeroidesLab/html5ever
+            revision: ${{ needs.prepare.outputs.html5ever_revision }}
+            id: macos-aarch64
+            runner: macos-15
+            python: python3
+            jobs: 2
           - component: html5ever
             repository: AeroidesLab/html5ever
             revision: ${{ needs.prepare.outputs.html5ever_revision }}
@@ -731,6 +821,20 @@ jobs:
             runner: windows-2022
             python: python
             jobs: 4
+          - component: wreq
+            repository: AeroidesLab/wreq
+            revision: ${{ needs.prepare.outputs.wreq_revision }}
+            id: macos-x86_64
+            runner: macos-15-intel
+            python: python3
+            jobs: 2
+          - component: wreq
+            repository: AeroidesLab/wreq
+            revision: ${{ needs.prepare.outputs.wreq_revision }}
+            id: macos-aarch64
+            runner: macos-15
+            python: python3
+            jobs: 2
           - component: wreq
             repository: AeroidesLab/wreq
             revision: ${{ needs.prepare.outputs.wreq_revision }}
@@ -745,6 +849,20 @@ jobs:
             runner: windows-2022
             python: python
             jobs: 4
+          - component: boringssl
+            repository: AeroidesLab/boringssl
+            revision: ${{ needs.prepare.outputs.boringssl_revision }}
+            id: macos-x86_64
+            runner: macos-15-intel
+            python: python3
+            jobs: 2
+          - component: boringssl
+            repository: AeroidesLab/boringssl
+            revision: ${{ needs.prepare.outputs.boringssl_revision }}
+            id: macos-aarch64
+            runner: macos-15
+            python: python3
+            jobs: 2
           - component: boringssl
             repository: AeroidesLab/boringssl
             revision: ${{ needs.prepare.outputs.boringssl_revision }}
@@ -815,6 +933,14 @@ jobs:
         with:
           name: chromium-toolchain-${{ matrix.id }}
           path: toolchain-archive
+
+      - name: Install macOS CI shell prerequisites
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install bash coreutils
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
 
       - name: Verify and unpack the shared Chromium bundle
         env:
@@ -930,6 +1056,18 @@ jobs:
             printf '%s\n' "$broken"
             exit 1
           }
+
+      - name: Install macOS build utilities
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install cmake nasm pkg-config
+          chmod +x toolchain/llvm/bin/* toolchain/rust/bin/* toolchain/buildtools/*
+          test -x toolchain/llvm/bin/clang
+          test -x toolchain/llvm/bin/ld64.lld
+          test -x toolchain/rust/bin/cargo
+          test -x toolchain/buildtools/ninja
 
       - name: Build, test, and stage the component
         id: build
@@ -1059,7 +1197,7 @@ jobs:
             .schema == "darkpanda-native-summary/v2" and
             (.status == "passed" or .status == "failed") and
             (.passed | type == "number") and
-            .total == 8 and
+            .total == 16 and
             (.errors | type == "array") and
             (.results | type == "array")
           ' reports/summary.json >/dev/null 2>&1; then
@@ -1072,7 +1210,7 @@ jobs:
                 schema: "darkpanda-native-summary/v2",
                 status: "failed",
                 passed: 0,
-                total: 8,
+                total: 16,
                 errors: [
                   "native component validator could not produce a valid report",
                   ("component download: " + $components),
@@ -1151,6 +1289,7 @@ jobs:
             v8_archive: c_v8_standalone.lib
             python_cmd: python
             jobs: 4
+            deployment: na
           - id: linux-x86_64
             runner: ubuntu-22.04
             platform: linux
@@ -1160,6 +1299,27 @@ jobs:
             v8_archive: libc_v8_standalone.a
             python_cmd: python3
             jobs: 2
+            deployment: na
+          - id: macos-x86_64
+            runner: macos-15-intel
+            platform: macos
+            zig_arch: x86_64
+            zig_target: x86_64-macos.12.0
+            zig_sha256: ${{ needs.prepare.outputs.zig_macos_x86_64_sha256 }}
+            v8_archive: libc_v8_standalone.a
+            python_cmd: python3
+            jobs: 2
+            deployment: "12.0"
+          - id: macos-aarch64
+            runner: macos-15
+            platform: macos
+            zig_arch: aarch64
+            zig_target: aarch64-macos.12.0
+            zig_sha256: ${{ needs.prepare.outputs.zig_macos_aarch64_sha256 }}
+            v8_archive: libc_v8_standalone.a
+            python_cmd: python3
+            jobs: 2
+            deployment: "12.0"
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out the exact DarkPanda source
@@ -1196,6 +1356,14 @@ jobs:
         with:
           name: resolved-inputs
           path: resolved-inputs
+
+      - name: Install macOS CI shell prerequisites
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install bash coreutils
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
 
       - name: Verify source identities and component provenance
         id: source_contract
@@ -1319,8 +1487,8 @@ jobs:
           }
           New-Item -ItemType Directory -Force logs,reports | Out-Null
 
-      - name: Configure Linux build paths
-        if: runner.os == 'Linux'
+      - name: Configure Unix build paths
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -1344,6 +1512,13 @@ jobs:
           sudo apt-get install --yes --no-install-recommends \
             ca-certificates git python3 xz-utils
 
+      - name: Install macOS V8 build prerequisites
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install cmake ninja pkg-config
+
       - name: Enter the Visual Studio SDK environment
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
@@ -1361,8 +1536,8 @@ jobs:
             -Sha256 '${{ matrix.zig_sha256 }}' `
             -InstallRoot "$env:RUNNER_TOOL_CACHE/darkpanda-zig/$env:ZIG_VERSION/${{ matrix.zig_arch }}"
 
-      - name: Install the fixed Zig compiler on Linux
-        if: runner.os == 'Linux'
+      - name: Install the fixed Zig compiler on Unix
+        if: runner.os != 'Windows'
         id: install_zig_linux
         shell: bash
         run: |
@@ -1377,7 +1552,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dependency-cache/${{ matrix.id }}/v8
-          key: darkpanda-v8-${{ matrix.id }}-zig-${{ env.ZIG_VERSION }}-v8-${{ env.V8_VERSION }}-${{ env.ZIG_V8_SOURCE_REVISION }}${{ matrix.platform == 'linux' && format('-prebuilt-{0}', env.ZIG_V8_PREBUILT_RELEASE) || '' }}-target-${{ matrix.zig_target }}-deployment-na-${{ env.CACHE_GENERATION }}
+          key: darkpanda-v8-${{ matrix.id }}-zig-${{ env.ZIG_VERSION }}-v8-${{ env.V8_VERSION }}-${{ env.ZIG_V8_SOURCE_REVISION }}${{ matrix.platform == 'linux' && format('-prebuilt-{0}', env.ZIG_V8_PREBUILT_RELEASE) || '' }}-target-${{ matrix.zig_target }}-deployment-${{ matrix.deployment }}-${{ env.CACHE_GENERATION }}
           enableCrossOsArchive: false
 
       - name: Build the fixed V8 dependency bundle on Windows
@@ -1461,6 +1636,47 @@ jobs:
             --zig-v8-source-revision "$ZIG_V8_SOURCE_REVISION" \
             --zig-version "$ZIG_VERSION"
 
+      - name: Build the fixed V8 dependency bundle on macOS
+        if: runner.os == 'macOS' && steps.v8_cache.outputs.cache-hit != 'true'
+        id: v8_build_macos
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_root="$RUNNER_TEMP/darkpanda-v8-source-${{ matrix.id }}"
+          local_cache="$RUNNER_TEMP/darkpanda-v8-zig-cache-${{ matrix.id }}"
+          global_cache="$RUNNER_TEMP/darkpanda-v8-zig-global-${{ matrix.id }}"
+          bundle_root="$GITHUB_WORKSPACE/dependency-cache/${{ matrix.id }}/v8"
+          rm -rf -- "$source_root" "$local_cache" "$global_cache" "$bundle_root"
+          mkdir -p "$source_root" "$local_cache" "$global_cache" "$bundle_root"
+          (
+            cd zig-v8-fork
+            zig build build-v8 \
+              '-j${{ matrix.jobs }}' \
+              -Dtarget='${{ matrix.zig_target }}' \
+              -Doptimize=ReleaseFast \
+              -Dsymbol_level=0 \
+              -Dcache_root="$source_root" \
+              --cache-dir "$local_cache" \
+              --global-cache-dir "$global_cache" \
+              --summary all
+          ) 2>&1 | tee "logs/v8-build-${{ matrix.id }}.log"
+          mapfile -t candidates < <(
+            find "$source_root" "$local_cache" -type f \
+              -name '${{ matrix.v8_archive }}' -print | sort
+          )
+          test "${#candidates[@]}" -eq 1
+          cp "${candidates[0]}" "$bundle_root/${{ matrix.v8_archive }}"
+          python3 browser/tools/ci/v8_bundle.py create \
+            --archive "$bundle_root/${{ matrix.v8_archive }}" \
+            --manifest "$bundle_root/manifest.json" \
+            --platform '${{ matrix.id }}' \
+            --target '${{ matrix.zig_target }}' \
+            --v8-version "$V8_VERSION" \
+            --v8-revision "$V8_REVISION" \
+            --zig-v8-source-revision "$ZIG_V8_SOURCE_REVISION" \
+            --zig-version "$ZIG_VERSION"
+
       - name: Verify the V8 cache contract
         id: v8_verify
         continue-on-error: true
@@ -1476,6 +1692,19 @@ jobs:
             --zig-v8-source-revision "$ZIG_V8_SOURCE_REVISION" \
             --zig-version "$ZIG_VERSION")
           [[ $archive == *'${{ matrix.v8_archive }}' ]]
+          if [[ '${{ matrix.platform }}' == macos ]]; then
+            nm -g "$archive" > "logs/v8-symbols-${{ matrix.id }}.txt"
+            for symbol in \
+              v8__V8__Initialize \
+              v8__Isolate__New \
+              v8__Context__New; do
+              grep -Eq "[[:space:]]_?${symbol}$" \
+                "logs/v8-symbols-${{ matrix.id }}.txt" || {
+                  echo "::error::V8 wrapper symbol is missing: $symbol"
+                  exit 1
+                }
+            done
+          fi
           v8_sha=$('${{ matrix.python_cmd }}' -c \
             'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["archive"]["sha256"])' \
             "dependency-cache/${{ matrix.id }}/v8/manifest.json")
@@ -1516,8 +1745,8 @@ jobs:
             Pop-Location
           }
 
-      - name: Install the ReleaseFast runtime on Linux
-        if: runner.os == 'Linux'
+      - name: Install the ReleaseFast runtime on Unix
+        if: runner.os != 'Windows'
         id: install_linux
         continue-on-error: true
         shell: bash
@@ -1628,8 +1857,8 @@ jobs:
           Get-ChildItem -LiteralPath $output -Directory -Filter 'darkpanda-*' |
             Remove-Item -Recurse -Force
 
-      - name: Package the deterministic Linux runtime
-        if: runner.os == 'Linux'
+      - name: Package the deterministic Unix runtime
+        if: runner.os != 'Windows'
         id: package_linux
         continue-on-error: true
         shell: bash
@@ -1683,7 +1912,11 @@ jobs:
             install='${{ steps.install_linux.outcome }}'
             package='${{ steps.package_linux.outcome }}'
             vc_runtime=success
-            v8_build='${{ steps.v8_download_linux.outcome }}'
+            if [[ '${{ matrix.platform }}' == linux ]]; then
+              v8_build='${{ steps.v8_download_linux.outcome }}'
+            else
+              v8_build='${{ steps.v8_build_macos.outcome }}'
+            fi
           fi
           if [[ '${{ steps.v8_cache.outputs.cache-hit }}' == true ]]; then
             v8_build=success
@@ -1727,8 +1960,10 @@ jobs:
           if [[ -d $package_dir ]]; then
             mapfile -t archives < <(
               find "$package_dir" -maxdepth 1 -type f \
-                \( -name '*.zip' -o -name '*.tar.gz' \) -printf '%f\n' |
-                sort
+                \( -name '*.zip' -o -name '*.tar.gz' \) -print |
+                while IFS= read -r archive; do
+                  printf '%s\n' "${archive##*/}"
+                done | sort
             )
             if [[ ${#archives[@]} -eq 1 ]]; then
               archive_name=${archives[0]}
@@ -1860,6 +2095,14 @@ jobs:
             runner: ubuntu-22.04
             python_cmd: python3
             jobs: 2
+          - id: macos-x86_64
+            runner: macos-15-intel
+            python_cmd: python3
+            jobs: 2
+          - id: macos-aarch64
+            runner: macos-15
+            python_cmd: python3
+            jobs: 2
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out the exact browser build authority
@@ -1891,6 +2134,14 @@ jobs:
         with:
           name: darkpanda-result-${{ matrix.id }}
           path: runtime-result
+
+      - name: Install macOS CI shell prerequisites
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install bash coreutils
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
 
       - name: Verify and unpack the Chromium bundle
         env:
@@ -2014,7 +2265,7 @@ jobs:
           pattern: darkpanda-result-*
           path: platform-results
 
-      - name: Download both Python wheel results
+      - name: Download every Python wheel result
         id: download_python
         continue-on-error: true
         uses: actions/download-artifact@v4
@@ -2051,7 +2302,7 @@ jobs:
             --markdown aggregate/summary.md \
             --release-dir release
 
-      - name: Validate and add both PyO3 wheels
+      - name: Validate and add every PyO3 wheel
         id: validate_python
         continue-on-error: true
         shell: bash
@@ -2088,7 +2339,7 @@ jobs:
           fi
           if [[ ! -f aggregate/summary.md ]]; then
             printf '%s\n' \
-              '## DarkPanda Windows/Linux aggregate' \
+              '## DarkPanda cross-platform aggregate' \
               '' \
               '- Status: `failed`' \
               '- The aggregate validator could not run.' \
@@ -2126,7 +2377,7 @@ jobs:
             cat aggregate/summary.md >> "$GITHUB_STEP_SUMMARY"
           else
             printf '%s\n' \
-              '## DarkPanda Windows/Linux aggregate' \
+              '## DarkPanda cross-platform aggregate' \
               '' \
               'The aggregate validator did not produce a report.' \
               >> "$GITHUB_STEP_SUMMARY"
@@ -2154,7 +2405,7 @@ jobs:
           compression-level: 0
           retention-days: 90
 
-      - name: Enforce the final Windows/Linux gate
+      - name: Enforce the final cross-platform gate
         if: always()
         shell: bash
         run: |
@@ -2191,7 +2442,7 @@ jobs:
           set -euo pipefail
           tag="v1.0.0-ci.${GITHUB_RUN_NUMBER}"
           mapfile -t assets < <(find release -maxdepth 1 -type f -print | sort)
-          test "${#assets[@]}" -ge 9
+          test "${#assets[@]}" -ge 17
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" \
               --repo "$GITHUB_REPOSITORY" \
@@ -2202,7 +2453,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "DarkPanda CI ${GITHUB_RUN_NUMBER}" \
-              --notes "Verified Windows/Linux native runtimes and PyO3 wheels for commit $GITHUB_SHA." \
+              --notes "Verified Windows/Linux/macOS native runtimes and PyO3 wheels for commit $GITHUB_SHA." \
               --prerelease \
               "${assets[@]}"
           fi
