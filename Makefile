@@ -1,4 +1,4 @@
-SHELL := /usr/bin/bash
+SHELL := /bin/bash
 
 ZIG ?= zig
 PYTHON ?= python3
@@ -17,11 +17,12 @@ BUILD_ARGS = \
 	$(if $(TARGET),-Dtarget="$(TARGET)") \
 	$(if $(V8_ARCHIVE),-Dprebuilt_v8_path="$(V8_ARCHIVE)")
 
-.PHONY: help native-inputs fmt check test install test-runner-report
+.PHONY: help native-inputs fmt pffft check test install test-runner-report
 
 help:
 	@echo "DarkPanda developer entry points"
 	@echo "  make fmt                 Check Zig formatting"
+	@echo "  make pffft               Build the portable WebAudio FFT dependency"
 	@echo "  make check               Compile-check with four component dist roots"
 	@echo "  make test F=substring    Run browser tests with an optional filter"
 	@echo "  make install             Install the complete adjacent runtime"
@@ -42,6 +43,9 @@ native-inputs:
 
 fmt:
 	$(ZIG) build fmt
+
+pffft:
+	$(ZIG) build pffft
 
 check: native-inputs
 	$(ZIG) build check $(BUILD_ARGS)

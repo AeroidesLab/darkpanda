@@ -31,8 +31,8 @@ than a claim of full Blink, GPU, process-isolation, or WPT parity.
 
 ## 核心特性 / Features
 
-- Windows x64、Linux x64、macOS x64 与 macOS arm64 原生预构建；Windows
-  构建不经过 WSL。
+- Windows x64 与 Linux x64 原生预构建；macOS x64/arm64 的运行时
+  布局已定义，但完整预构建仍在接入中。Windows 构建不经过 WSL。
 - V8 `14.9.207.35`，对应项目的 Chrome 149 兼容性配置。
 - 标准 CDP 服务与不启动子进程的进程内 Python API。
 - `wreq` 是唯一 HTTP/TLS 后端；运行时不包含 libcurl。

@@ -1589,7 +1589,6 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             .timestamp = timestamp(.monotonic),
         });
 
-
         session.notification.dispatch(.frame_navigated, &.{
             .req_id = req_id,
             .frame_id = self._frame_id,

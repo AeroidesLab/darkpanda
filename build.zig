@@ -145,9 +145,10 @@ pub fn build(b: *Build) !void {
         mod.addImport("build_config", opts.createModule());
 
         // PFFFT (real-to-complex FFT) — used by WebAudio PeriodicWave.
-        // Compiled with Chromium 149's clang-cl (LLVM 23, from gclient sync)
-        // to match Brave 149's exact floating-point behavior.
-        const pffft_lib = buildPffft(b);
+        // Windows keeps Chromium 149's clang-cl for fingerprint parity. Other
+        // targets use Zig's bundled Clang so native macOS and Linux builds do
+        // not depend on a Windows executable in the V8 source cache.
+        const pffft_lib = buildPffft(b, target);
         mod.addObjectFile(pffft_lib);
         mod.addIncludePath(b.path("src/browser/webapi/audio/pffft"));
 
@@ -224,6 +225,7 @@ pub fn build(b: *Build) !void {
                 },
             }),
         });
+        if (component_dist_gate) |gate| exe.step.dependOn(gate);
         switch (target.result.os.tag) {
             .linux => {
                 // The html parser is installed beside the executable. Make
@@ -327,6 +329,7 @@ pub fn build(b: *Build) !void {
             .use_llvm = true,
             .root_module = ffi_module,
         });
+        if (component_dist_gate) |gate| ffi_lib.step.dependOn(gate);
         // Keep the browser, embedding ABI, wreq and Canvas runtime libraries
         // in one module-adjacent directory on every platform. Unix's default
         // would put a dynamic library in lib/, breaking deterministic dlopen
@@ -376,6 +379,7 @@ pub fn build(b: *Build) !void {
                 },
             }),
         });
+        if (component_dist_gate) |gate| exe.step.dependOn(gate);
         const extras_install = b.addInstallArtifact(exe, .{});
         extras_step.dependOn(&extras_install.step);
         if (component_dist_gate) |gate| extras_install.step.dependOn(gate);
@@ -740,7 +744,9 @@ fn runGit(b: *std.Build, args: []const []const u8) ![]const u8 {
 /// toolchain in `.lp-cache/v8-14.9.207.35/third_party/llvm-build`. Using the
 /// exact same Clang version as Brave 149 ensures bit-identical floating-point
 /// results for the WebAudio PeriodicWave IFFT.
-fn buildPffft(b: *Build) Build.LazyPath {
+fn buildPffft(b: *Build, target: Build.ResolvedTarget) Build.LazyPath {
+    if (target.result.os.tag != .windows) return buildPffftNative(b, target);
+
     const pffft_src = b.path("src/browser/webapi/audio/pffft/pffft.c");
 
     // Locate the gclient-synced Chromium 149 LLVM toolchain.
@@ -770,5 +776,34 @@ fn buildPffft(b: *Build) Build.LazyPath {
     archive.addFileArg(obj);
     const lib = archive.addPrefixedOutputFileArg("/out:", "pffft.lib");
 
+    const pffft_step = b.step("pffft", "Build the PFFFT dependency");
+    pffft_step.dependOn(&archive.step);
+
     return lib;
+}
+
+/// Build PFFFT with Zig's bundled Clang on POSIX targets. PFFFT selects SSE
+/// on Intel and NEON on ARM at compile time, so no architecture-specific flag
+/// is needed here. Disabling FP contraction preserves the Windows build's
+/// deterministic multiply/add behavior.
+fn buildPffftNative(b: *Build, target: Build.ResolvedTarget) Build.LazyPath {
+    const pffft_module = b.createModule(.{
+        .target = target,
+        .optimize = .ReleaseFast,
+        .link_libc = true,
+    });
+    pffft_module.addCSourceFile(.{
+        .file = b.path("src/browser/webapi/audio/pffft/pffft.c"),
+        .flags = &.{"-ffp-contract=off"},
+    });
+    pffft_module.addIncludePath(b.path("src/browser/webapi/audio/pffft"));
+
+    const pffft_lib = b.addLibrary(.{
+        .name = "pffft",
+        .linkage = .static,
+        .root_module = pffft_module,
+    });
+    const pffft_step = b.step("pffft", "Build the PFFFT dependency");
+    pffft_step.dependOn(&pffft_lib.step);
+    return pffft_lib.getEmittedBin();
 }
