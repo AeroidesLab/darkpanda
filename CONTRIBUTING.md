@@ -19,9 +19,9 @@ prebuilt archive to avoid compiling V8 from source.
 
 On macOS, install the Xcode command-line tools and use `macos-aarch64` component
 distributions on Apple silicon or `macos-x86_64` distributions on Intel. The
-browser build graph and PFFFT dependency support both architectures, but the
-complete runtime remains blocked until the Canvas component publishes the same
-macOS distribution contract as the other native components.
+browser build graph and PFFFT dependency support both architectures. Component
+dylibs must publish `@rpath` install names; DarkPanda installs them beside the
+executable and targets macOS 12.0 or newer by default.
 
 ## Before opening a PR
 

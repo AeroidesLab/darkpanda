@@ -46,6 +46,12 @@ pub fn build(b: *Build) !void {
             .os_tag = .windows,
             .abi = .msvc,
         }
+    else if (builtin.target.os.tag == .macos)
+        .{
+            .cpu_arch = builtin.target.cpu.arch,
+            .os_tag = .macos,
+            .os_version_min = .{ .semver = .{ .major = 12, .minor = 0, .patch = 0 } },
+        }
     else
         .{};
     const target = b.standardTargetOptions(.{ .default_target = default_target });
