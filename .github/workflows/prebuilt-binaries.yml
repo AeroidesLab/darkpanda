@@ -292,6 +292,7 @@ jobs:
             tools.ci.test_aggregate_darkpanda_reports \
             tools.ci.test_aggregate_python_wheels \
             tools.ci.test_build_python_wheel \
+            tools.ci.test_materialize_skia_cpu_deps \
             tools.ci.test_package_prebuilt \
             tools.ci.test_verify_chromium_toolchain \
             tools.ci.test_v8_bundle
