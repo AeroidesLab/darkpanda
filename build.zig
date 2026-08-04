@@ -62,6 +62,11 @@ pub fn build(b: *Build) !void {
         "prebuilt_v8_path",
         "Path to prebuilt libc_v8.a or complete Windows c_v8_standalone.lib",
     );
+    const pffft_toolchain_dir = b.option(
+        []const u8,
+        "pffft_toolchain_dir",
+        "Windows LLVM bin directory containing clang-cl.exe and lld-link.exe",
+    );
     const canvas_dist = componentDistOption(
         b,
         "canvas_dist",
@@ -154,7 +159,7 @@ pub fn build(b: *Build) !void {
         // Windows keeps Chromium 149's clang-cl for fingerprint parity. Other
         // targets use Zig's bundled Clang so native macOS and Linux builds do
         // not depend on a Windows executable in the V8 source cache.
-        const pffft_lib = buildPffft(b, target);
+        const pffft_lib = buildPffft(b, target, pffft_toolchain_dir);
         mod.addObjectFile(pffft_lib);
         mod.addIncludePath(b.path("src/browser/webapi/audio/pffft"));
 
@@ -746,19 +751,28 @@ fn runGit(b: *std.Build, args: []const []const u8) ![]const u8 {
     return b.runAllowFail(command.items, &code, .Ignore);
 }
 
-/// Build PFFFT with Chromium 149's clang-cl (LLVM 23) from the gclient-synced
-/// toolchain in `.lp-cache/v8-14.9.207.35/third_party/llvm-build`. Using the
-/// exact same Clang version as Brave 149 ensures bit-identical floating-point
-/// results for the WebAudio PeriodicWave IFFT.
-fn buildPffft(b: *Build, target: Build.ResolvedTarget) Build.LazyPath {
+/// Build PFFFT with Chromium 149's clang-cl (LLVM 23) from an explicitly
+/// supplied verified bundle or the developer gclient cache. Using the exact
+/// same Clang version as Brave 149 ensures bit-identical floating-point results
+/// for the WebAudio PeriodicWave IFFT.
+fn buildPffft(
+    b: *Build,
+    target: Build.ResolvedTarget,
+    toolchain_dir: ?[]const u8,
+) Build.LazyPath {
     if (target.result.os.tag != .windows) return buildPffftNative(b, target);
 
     const pffft_src = b.path("src/browser/webapi/audio/pffft/pffft.c");
 
-    // Locate the gclient-synced Chromium 149 LLVM toolchain.
-    const v8_dir = b.fmt("{s}/.lp-cache/v8-14.9.207.35", .{b.pathFromRoot(".")});
-    const clang_cl = b.fmt("{s}/third_party/llvm-build/Release+Asserts/bin/clang-cl.exe", .{v8_dir});
-    const lld_link = b.fmt("{s}/third_party/llvm-build/Release+Asserts/bin/lld-link.exe", .{v8_dir});
+    // CI passes the verified Chromium toolchain explicitly because a cached
+    // standalone V8 archive does not retain its source checkout. Developer
+    // builds keep the gclient-synced cache as the default.
+    const llvm_bin = toolchain_dir orelse blk: {
+        const v8_dir = b.fmt("{s}/.lp-cache/v8-14.9.207.35", .{b.pathFromRoot(".")});
+        break :blk b.fmt("{s}/third_party/llvm-build/Release+Asserts/bin", .{v8_dir});
+    };
+    const clang_cl = b.fmt("{s}/clang-cl.exe", .{llvm_bin});
+    const lld_link = b.fmt("{s}/lld-link.exe", .{llvm_bin});
 
     // Compile pffft.c → pffft.obj
     // Flags match Chromium 149's default Windows config:

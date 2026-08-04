@@ -26,10 +26,7 @@
       "revision": "933ce636c562cd54d68e7f7c93ab5cdffd685fca",
       "zig_v8_repository": "AeroidesLab/zig-v8-fork",
       "zig_v8_revision": "e557a31b1083bc70f913f411e73a32f8efae7c18",
-      "zig_v8_prebuilt": {
-        "repository": "lightpanda-io/zig-v8-fork",
-        "release": "latest"
-      }
+      "build_mode": "source"
     }
   },
   "skia_git_dependencies": {

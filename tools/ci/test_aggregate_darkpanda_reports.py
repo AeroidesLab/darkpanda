@@ -27,8 +27,6 @@ TOOLCHAIN_MANIFEST_SHA = "b" * 64
 V8_VERSION = "14.9.207.35"
 V8_REVISION = "933ce636c562cd54d68e7f7c93ab5cdffd685fca"
 ZIG_V8_REVISION = "a844a6300b048743cc3f82fd3e609e3d568a73c0"
-ZIG_V8_PREBUILT_RELEASE = "v0.5.2"
-ZIG_V8_PREBUILT_LINUX_SHA256 = "f" * 64
 ZIG_VERSION = "0.15.2"
 TARGETS = aggregate_darkpanda_reports.TARGETS
 STEPS = (
@@ -72,7 +70,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
         write_json(
             self.resolved,
             {
-                "schema": "darkpanda-resolved-inputs/v5",
+                "schema": "darkpanda-resolved-inputs/v6",
                 "darkpanda": {"revision": self.darkpanda_revision},
                 "pythonBinding": {
                     "repository": "AeroidesLab/py-darkpanda",
@@ -95,18 +93,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                         "zigV8": {
                             "repository": "AeroidesLab/zig-v8-fork",
                             "revision": ZIG_V8_REVISION,
-                            "prebuilt": {
-                                "repository": "lightpanda-io/zig-v8-fork",
-                                "release": ZIG_V8_PREBUILT_RELEASE,
-                                "assets": {
-                                    "linux-x86_64": {
-                                        "name": (
-                                            f"libc_v8_{V8_VERSION}_linux_x86_64.a"
-                                        ),
-                                        "sha256": ZIG_V8_PREBUILT_LINUX_SHA256,
-                                    }
-                                },
-                            },
+                            "buildMode": "source",
                         },
                     },
                 },
@@ -202,14 +189,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                 "v8Version": V8_VERSION,
                 "v8Revision": V8_REVISION,
                 "zigV8SourceRevision": ZIG_V8_REVISION,
-                "zigV8Prebuilt": (
-                    {
-                        "release": ZIG_V8_PREBUILT_RELEASE,
-                        "archiveSha256": ZIG_V8_PREBUILT_LINUX_SHA256,
-                    }
-                    if target["platform"] == "linux"
-                    else None
-                ),
+                "zigV8Prebuilt": None,
                 "steps": step_results,
                 "reports": {
                     "packageRuntimeAttestationSha256": file_digest(
@@ -353,11 +333,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                 "dependencies": {
                     "v8Version": V8_VERSION,
                     "v8Revision": V8_REVISION,
-                    "v8ArchiveSha256": (
-                        ZIG_V8_PREBUILT_LINUX_SHA256
-                        if target["platform"] == "linux"
-                        else "0" * 64
-                    ),
+                    "v8ArchiveSha256": "0" * 64,
                     "zigV8SourceRevision": ZIG_V8_REVISION,
                     "boringSslSourceRevision": self.revisions["boringssl"],
                     "components": component_records,

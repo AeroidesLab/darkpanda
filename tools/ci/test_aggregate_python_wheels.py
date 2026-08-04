@@ -30,7 +30,7 @@ class AggregatePythonWheelsTests(unittest.TestCase):
         write_json(
             self.resolved,
             {
-                "schema": "darkpanda-resolved-inputs/v5",
+                "schema": "darkpanda-resolved-inputs/v6",
                 "pythonBinding": {
                     "repository": "AeroidesLab/py-darkpanda",
                     "revision": self.python_revision,

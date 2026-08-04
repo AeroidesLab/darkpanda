@@ -291,7 +291,7 @@ def main() -> int:
     browser_profile = resolved.get("browserProfile")
     python_binding = resolved.get("pythonBinding")
     if (
-        resolved.get("schema") != "darkpanda-resolved-inputs/v5"
+        resolved.get("schema") != "darkpanda-resolved-inputs/v6"
         or not isinstance(components, dict)
         or not isinstance(browser_profile, dict)
         or not isinstance(python_binding, dict)

@@ -38,16 +38,16 @@ BoringSSL M149 上游 CMake 的 `crypto` 已包含 `fipsmodule` object，不再�
 `CANVAS_READ_TOKEN`，但 token 本身必须对四个组件仓库及固定 V8 绑定仓库
 `AeroidesLab/zig-v8-fork`（共五个仓库）具有 Contents: Read 权限。
 
-V8 的获取按平台分化：上游 `lightpanda-io/zig-v8-fork` 的 release 只发布
-Linux/macOS/iOS 预编译静态库，没有 Windows 资产。Linux 构建改为消费上游预编译产物：
-`prepare` 在运行开始时解析 `releases/latest`，把 release tag 与
-`libc_v8_<v8-version>_linux_x86_64.a` 的 SHA-256 固化进 `resolved-inputs.json`，
-下载后逐项校验摘要；预编译策略由 `chromium-profile.json` 的
-`darkpanda_build.v8.zig_v8_prebuilt` 声明。Windows 继续从
-`AeroidesLab/zig-v8-fork` 固定 revision 源码构建 V8。
-注意两个平台都必须 checkout `AeroidesLab/zig-v8-fork`：它是 darkpanda
-`build.zig.zon` 的 Zig 绑定依赖包，预编译只是替换了 V8 静态库本身，并不替代
-zig 绑定源码。
+V8 在 Windows、Linux 和两个 macOS 架构上都从
+`AeroidesLab/zig-v8-fork` 的固定 revision 构建。缓存只保存由该源码构建产生的
+平台静态库和带 `buildMode: source` 的完整性 manifest；不能用上游 release archive
+替换，因为 Linux 的 `libdarkpanda.so` 要求 V8 使用 shared-library TLS/PIC 配置，
+DarkPanda 还依赖 fork 提供的完整 C wrapper 符号。Linux 缓存验收会拒绝
+`R_X86_64_TPOFF32` local-exec TLS relocation，Unix 平台还会验证关键 wrapper 符号。
+
+Windows 的 V8 archive 与 WebAudio PFFFT 编译器是两个独立输入。PFFFT 必须显式使用
+本次已验证的 Chromium LLVM `clang-cl.exe`/`lld-link.exe` 目录；不得根据 V8 archive
+反推一个可能已被缓存清除的 `.lp-cache` 源码路径。
 
 ## 3. 统一组件契约
 
