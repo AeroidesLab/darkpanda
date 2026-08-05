@@ -45,6 +45,28 @@ TARGETS = {
             "libhtml5ever.so",
         ),
     },
+    "macos-x86_64": {
+        "platform": "macos",
+        "rust_target": "x86_64-apple-darwin",
+        "archive_suffix": ".tar.gz",
+        "libraries": (
+            "libdarkpanda.dylib",
+            "libwreq.dylib",
+            "libcanvas.dylib",
+            "libhtml5ever.dylib",
+        ),
+    },
+    "macos-aarch64": {
+        "platform": "macos",
+        "rust_target": "aarch64-apple-darwin",
+        "archive_suffix": ".tar.gz",
+        "libraries": (
+            "libdarkpanda.dylib",
+            "libwreq.dylib",
+            "libcanvas.dylib",
+            "libhtml5ever.dylib",
+        ),
+    },
 }
 
 
@@ -272,13 +294,33 @@ def build_environment(
     )
     if target_id.startswith("windows-"):
         environment[f"CARGO_TARGET_{key}_LINKER"] = str(tools["linker"])
-    else:
+    elif target_id.startswith("linux-"):
         environment[f"CARGO_TARGET_{key}_LINKER"] = str(tools["cc"])
         environment[f"CARGO_TARGET_{key}_RUSTFLAGS"] = " ".join(
             (
                 "-Clink-arg=-fuse-ld=lld",
                 f"-Clink-arg=--ld-path={tools['linker']}",
                 f"-Clink-arg=--sysroot={tools['sysroot']}",
+            )
+        )
+    else:
+        sdk = subprocess.run(
+            ["xcrun", "--sdk", "macosx", "--show-sdk-path"],
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        ).stdout.strip()
+        environment["SDKROOT"] = sdk
+        environment["MACOSX_DEPLOYMENT_TARGET"] = "12.0"
+        environment[f"CARGO_TARGET_{key}_LINKER"] = str(tools["cc"])
+        environment[f"CARGO_TARGET_{key}_RUSTFLAGS"] = " ".join(
+            (
+                "-Clink-arg=-fuse-ld=lld",
+                f"-Clink-arg=--ld-path={tools['linker']}",
+                "-Clink-arg=-isysroot",
+                f"-Clink-arg={sdk}",
+                "-Clink-arg=-mmacosx-version-min=12.0",
             )
         )
     return environment

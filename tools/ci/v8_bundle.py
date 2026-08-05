@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and verify the cache contract for a prebuilt V8 archive."""
+"""Create and verify the cache contract for a source-built V8 archive."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA = "darkpanda-ci-v8-bundle/v1"
+SCHEMA = "darkpanda-ci-v8-bundle/v2"
 
 
 def sha256(path: Path) -> str:
@@ -25,6 +25,7 @@ def sha256(path: Path) -> str:
 def expected_fields(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "schema": SCHEMA,
+        "buildMode": args.build_mode,
         "platform": args.platform,
         "target": args.target,
         "v8Version": args.v8_version,
@@ -96,6 +97,7 @@ def parser() -> argparse.ArgumentParser:
     for name in ("create", "verify"):
         command = subparsers.add_parser(name)
         command.add_argument("--manifest", type=Path, required=True)
+        command.add_argument("--build-mode", choices=("source",), required=True)
         if name == "create":
             command.add_argument("--archive", type=Path, required=True)
         command.add_argument("--platform", required=True)

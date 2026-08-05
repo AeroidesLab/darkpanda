@@ -5,6 +5,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 from tools.ci import build_python_wheel as subject
@@ -52,6 +53,28 @@ class BuildPythonWheelTests(unittest.TestCase):
 
             copied = subject.copy_runtime_libraries(
                 archive, "linux-x86_64", output
+            )
+
+            self.assertEqual(copied, libraries)
+            self.assertEqual(
+                sorted(path.name for path in output.iterdir()), sorted(libraries)
+            )
+
+    def test_copies_the_exact_macos_runtime_closure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "runtime.tar.gz"
+            libraries = subject.TARGETS["macos-aarch64"]["libraries"]
+            with tarfile.open(archive, "w:gz") as bundle:
+                for name in libraries:
+                    payload = name.encode()
+                    info = tarfile.TarInfo(f"darkpanda/bin/{name}")
+                    info.size = len(payload)
+                    bundle.addfile(info, io.BytesIO(payload))
+            output = root / "native"
+
+            copied = subject.copy_runtime_libraries(
+                archive, "macos-aarch64", output
             )
 
             self.assertEqual(copied, libraries)
@@ -125,6 +148,34 @@ class BuildPythonWheelTests(unittest.TestCase):
         flags = environment["CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS"]
         self.assertIn(f"--ld-path={tools['linker']}", flags)
         self.assertIn(f"--sysroot={tools['sysroot']}", flags)
+
+    @mock.patch("tools.ci.build_python_wheel.subprocess.run")
+    def test_macos_rust_build_pins_sdk_lld_and_deployment_target(
+        self, run: mock.Mock
+    ) -> None:
+        run.return_value.stdout = "/Applications/Xcode.app/SDKs/MacOSX.sdk\n"
+        root = Path("/chromium-toolchain")
+        tools = {
+            "cargo": root / "rust/bin/cargo",
+            "rustc": root / "rust/bin/rustc",
+            "cc": root / "llvm/bin/clang",
+            "cxx": root / "llvm/bin/clang++",
+            "linker": root / "llvm/bin/ld64.lld",
+        }
+
+        environment = subject.build_environment(
+            tools, "macos-aarch64", Path("/cargo-target"), 2
+        )
+
+        self.assertEqual(environment["MACOSX_DEPLOYMENT_TARGET"], "12.0")
+        self.assertEqual(
+            environment["CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER"],
+            str(tools["cc"]),
+        )
+        flags = environment["CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS"]
+        self.assertIn(f"--ld-path={tools['linker']}", flags)
+        self.assertIn("MacOSX.sdk", flags)
+        self.assertIn("-mmacosx-version-min=12.0", flags)
 
     def test_linux_rust_unit_test_uses_host_python_with_chromium_linker(
         self,

@@ -31,8 +31,8 @@ than a claim of full Blink, GPU, process-isolation, or WPT parity.
 
 ## 核心特性 / Features
 
-- Windows x64、Linux x64、macOS x64 与 macOS arm64 原生预构建；Windows
-  构建不经过 WSL。
+- Windows x64、Linux x64、macOS Intel 与 macOS Apple Silicon 原生预构建。
+  Windows 构建不经过 WSL。
 - V8 `14.9.207.35`，对应项目的 Chrome 149 兼容性配置。
 - 标准 CDP 服务与不启动子进程的进程内 Python API。
 - `wreq` 是唯一 HTTP/TLS 后端；运行时不包含 libcurl。
@@ -60,13 +60,15 @@ than a claim of full Blink, GPU, process-isolation, or WPT parity.
 ## GitHub Actions 预构建 / Prebuilt releases
 
 [`prebuilt-binaries.yml`](.github/workflows/prebuilt-binaries.yml) 是主仓库当前的
-Windows/Linux 验收入口。阶段 1–4 在两个原生 runner 上构建可移植运行时：
+Windows/Linux/macOS 验收入口。阶段 1–4 在四个原生 runner 上构建可移植运行时：
 
 - `windows-2022`：`x86_64-windows-msvc`
 - `ubuntu-22.04`：`x86_64-linux-gnu`（降低 Rust/系统库所需的最低 glibc 版本）
+- `macos-15-intel`：`x86_64-macos.12.0`
+- `macos-15`：`aarch64-macos.12.0`
 
-macOS x64/arm64 和正式稳定版仍是后续验收阶段。手动运行默认只上传临时 artifact；
-显式设置 `publish_release=true` 时，Windows/Linux 聚合门通过后会创建或更新对应
+正式稳定版仍是后续验收阶段。手动运行默认只上传临时 artifact；
+显式设置 `publish_release=true` 时，四平台聚合门通过后会创建或更新对应
 `v1.0.0-ci.<run-number>` 预发行版。
 
 每次运行开始时，工作流固定 `canvas`、`html5ever`、`wreq` 和 `boringssl` 的
@@ -81,7 +83,7 @@ Actions 在组装浏览器前验证每个 dist 的 `metadata/build-info.json`、
 的 PyO3 wheel 提供，不再发布主仓库的 ctypes 包装层。
 发布硬门会启动 CLI，并在安装目录和重新解压后的干净环境中加载
 `darkpanda`、`wreq`、Canvas ABI v5 和 HTML5ever 四个动态库。完整 Canvas 像素与
-software fallback 测试仍会运行并保留报告，但暂不阻断 Windows/Linux 预发行版。
+software fallback 测试仍会运行并保留报告，但暂不阻断四平台预发行版。
 
 ## Python API
 

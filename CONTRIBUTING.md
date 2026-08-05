@@ -6,15 +6,22 @@ Lightpanda accepts pull requests through GitHub.
 
 - Run the tests: `make test`
 - Check formatting: `zig fmt --check ./*.zig ./**/*.zig`
+- Smoke-test the native C toolchain: `make pffft`
 
 See [AGENTS.md](AGENTS.md) for the full set of test, formatting, and code conventions (test filters, the leak-detection invariant, `@import` alias case, struct-init inference).
 
-### Skip the V8 source build
+### Native build inputs
 
-By default the build compiles V8 from source, which takes several minutes. Run
-`make download-v8` once to fetch the matching prebuilt archive from the
-[`zig-v8-fork`](https://github.com/lightpanda-io/zig-v8-fork/releases) releases
-instead; later `make build` / `make test` pick it up automatically.
+Native checks, tests, and installs require absolute `CANVAS_DIST`,
+`HTML5EVER_DIST`, `WREQ_DIST`, and `BORINGSSL_DIST` paths. The `v8` Zig package
+must be checked out at `../zig-v8-fork`; set `V8_ARCHIVE` to a compatible
+prebuilt archive to avoid compiling V8 from source.
+
+On macOS, install the Xcode command-line tools and use `macos-aarch64` component
+distributions on Apple silicon or `macos-x86_64` distributions on Intel. The
+browser build graph and PFFFT dependency support both architectures. Component
+dylibs must publish `@rpath` install names; DarkPanda installs them beside the
+executable and targets macOS 12.0 or newer by default.
 
 ## Before opening a PR
 

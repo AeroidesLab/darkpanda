@@ -59,6 +59,10 @@ PACKAGE_TARGETS = {
     "linux": {
         "x86_64-linux-gnu": "linux-x86_64",
     },
+    "macos": {
+        "x86_64-macos.12.0": "macos-x86_64",
+        "aarch64-macos.12.0": "macos-aarch64",
+    },
 }
 LINUX_OS_NEEDED = frozenset(
     {
@@ -360,7 +364,9 @@ def validate_elf_dependency_contract(
     }
 
 
-def dependency_report(platform: str, binaries: Iterable[Path]) -> dict[str, Any]:
+def dependency_report(
+    platform: str, binaries: Iterable[Path], target: str
+) -> dict[str, Any]:
     result: dict[str, Any] = {}
     binary_list = list(binaries)
     bundled_names = {path.name.lower() for path in binary_list}
@@ -390,11 +396,39 @@ def dependency_report(platform: str, binaries: Iterable[Path]) -> dict[str, Any]
         else:
             linked = run(["otool", "-L", str(binary)])
             loads = run(["otool", "-l", str(binary)])
+            architectures = run(["lipo", "-archs", str(binary)]).strip().split()
+            expected_architecture = {
+                "x86_64-macos.12.0": "x86_64",
+                "aarch64-macos.12.0": "arm64",
+            }.get(target)
+            if architectures != [expected_architecture]:
+                raise SystemExit(
+                    f"unexpected Mach-O architecture in {binary}: {architectures}"
+                )
             forbidden = ("/Users/runner/", "/private/var/", "/opt/hostedtoolcache/")
             linked_lines = linked.splitlines()
             if any(marker in line for marker in forbidden for line in linked_lines[1:]):
                 raise SystemExit(f"non-portable Mach-O dependency in {binary}:\n{linked}")
+            install_name = None
+            if binary.suffix == ".dylib":
+                identifiers = run(["otool", "-D", str(binary)]).splitlines()[1:]
+                if identifiers != [f"@rpath/{binary.name}"]:
+                    raise SystemExit(
+                        f"non-portable Mach-O install name in {binary}: {identifiers}"
+                    )
+                install_name = identifiers[0]
+            runtime_paths = re.findall(
+                r"cmd LC_RPATH\s+cmdsize \d+\s+path ([^ ]+) \(offset \d+\)",
+                loads,
+            )
+            if binary.name in {"darkpanda", "libdarkpanda.dylib"} and (
+                "@loader_path" not in runtime_paths
+            ):
+                raise SystemExit(f"missing @loader_path LC_RPATH in {binary}")
             result[binary.name] = {
+                "architectures": architectures,
+                "installName": install_name,
+                "runtimePaths": runtime_paths,
                 "otoolLibraries": linked_lines,
                 "otoolLoadCommands": loads.splitlines(),
             }
@@ -422,6 +456,14 @@ def dependency_report(platform: str, binaries: Iterable[Path]) -> dict[str, Any]
         ]
         policy["operatingSystemImportPolicy"] = (
             "api-set-or-existing-system32-file"
+        )
+    else:
+        policy.update(
+            {
+                "installNamePolicy": "@rpath-bundled-plus-system",
+                "runtimePathPolicy": "@loader_path",
+                "systemLibraryRoots": ["/System/Library", "/usr/lib"],
+            }
         )
     return {
         "schema": "darkpanda-runtime-dependencies/v2",
@@ -1046,7 +1088,7 @@ def package(args: argparse.Namespace) -> None:
             staging / "metadata" / "components" / component,
         )
     staged_runtime = [staging / "bin" / path.name for path in runtime]
-    dependencies = dependency_report(args.platform, staged_runtime)
+    dependencies = dependency_report(args.platform, staged_runtime, args.target)
     (staging / "metadata" / "runtime-dependencies.json").write_text(
         json.dumps(dependencies, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

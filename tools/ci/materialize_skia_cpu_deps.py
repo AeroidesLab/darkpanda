@@ -13,9 +13,61 @@ import shutil
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from typing import Any
+
+RETRYABLE_HTTP_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+
+def open_url_with_retry(
+    request: urllib.request.Request,
+    *,
+    timeout_seconds: float = 120,
+    max_attempts: int = 6,
+    initial_backoff_seconds: float = 2,
+    max_backoff_seconds: float = 30,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Any:
+    """Open a URL with bounded retries for transient transport failures."""
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be positive")
+    if initial_backoff_seconds < 0 or max_backoff_seconds < 0:
+        raise ValueError("retry backoff must be non-negative")
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return urllib.request.urlopen(request, timeout=timeout_seconds)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in RETRYABLE_HTTP_STATUS or attempt == max_attempts:
+                raise
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            try:
+                retry_after_seconds = float(retry_after) if retry_after else 0
+            except ValueError:
+                retry_after_seconds = 0
+            backoff = initial_backoff_seconds * (2 ** (attempt - 1))
+            delay = min(max(backoff, retry_after_seconds), max_backoff_seconds)
+            reason = f"HTTP {exc.code}"
+            exc.close()
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if attempt == max_attempts:
+                raise
+            backoff = initial_backoff_seconds * (2 ** (attempt - 1))
+            delay = min(backoff, max_backoff_seconds)
+            reason = type(exc).__name__
+
+        print(
+            f"warning: {reason} while fetching {request.full_url}; "
+            f"retrying in {delay:g}s ({attempt}/{max_attempts})",
+            file=sys.stderr,
+        )
+        sleep(delay)
+
+    raise AssertionError("unreachable retry loop")
 
 
 def sha256_file(path: pathlib.Path) -> str:
@@ -144,7 +196,7 @@ def main() -> int:
             metadata_url,
             headers={"User-Agent": "DarkPanda fixed Chromium profile materializer"},
         )
-        with urllib.request.urlopen(metadata_request, timeout=120) as response:
+        with open_url_with_retry(metadata_request) as response:
             metadata_bytes = response.read()
         xssi_prefix = b")]}'\n"
         if not metadata_bytes.startswith(xssi_prefix):
@@ -168,9 +220,11 @@ def main() -> int:
                 url,
                 headers={"User-Agent": "DarkPanda fixed Chromium profile materializer"},
             )
-            with urllib.request.urlopen(request, timeout=120) as response:
-                with archive_path.open("wb") as stream:
-                    shutil.copyfileobj(response, stream)
+            with (
+                open_url_with_retry(request) as response,
+                archive_path.open("wb") as stream,
+            ):
+                shutil.copyfileobj(response, stream)
             observed_archive = sha256_file(archive_path)
             extracted = temporary / "extracted"
             extracted.mkdir()

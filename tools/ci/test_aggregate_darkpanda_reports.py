@@ -27,38 +27,8 @@ TOOLCHAIN_MANIFEST_SHA = "b" * 64
 V8_VERSION = "14.9.207.35"
 V8_REVISION = "933ce636c562cd54d68e7f7c93ab5cdffd685fca"
 ZIG_V8_REVISION = "a844a6300b048743cc3f82fd3e609e3d568a73c0"
-ZIG_V8_PREBUILT_RELEASE = "v0.5.2"
-ZIG_V8_PREBUILT_LINUX_SHA256 = "f" * 64
 ZIG_VERSION = "0.15.2"
-TARGETS = {
-    "windows-x86_64": {
-        "platform": "windows",
-        "zig_target": "x86_64-windows-msvc",
-        "suffix": ".zip",
-        "runtime": (
-            "darkpanda.exe",
-            "darkpanda.dll",
-            "wreq.dll",
-            "canvas.dll",
-            "html5ever.dll",
-            "msvcp140.dll",
-            "vcruntime140.dll",
-            "vcruntime140_1.dll",
-        ),
-    },
-    "linux-x86_64": {
-        "platform": "linux",
-        "zig_target": "x86_64-linux-gnu",
-        "suffix": ".tar.gz",
-        "runtime": (
-            "darkpanda",
-            "libdarkpanda.so",
-            "libwreq.so",
-            "libcanvas.so",
-            "libhtml5ever.so",
-        ),
-    },
-}
+TARGETS = aggregate_darkpanda_reports.TARGETS
 STEPS = (
     "sourceContract",
     "installZig",
@@ -100,7 +70,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
         write_json(
             self.resolved,
             {
-                "schema": "darkpanda-resolved-inputs/v5",
+                "schema": "darkpanda-resolved-inputs/v6",
                 "darkpanda": {"revision": self.darkpanda_revision},
                 "pythonBinding": {
                     "repository": "AeroidesLab/py-darkpanda",
@@ -113,6 +83,8 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                         "sha256": {
                             "windows-x86_64": "c" * 64,
                             "linux-x86_64": "e" * 64,
+                            "macos-x86_64": "1" * 64,
+                            "macos-aarch64": "2" * 64,
                         },
                     },
                     "v8": {
@@ -121,18 +93,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                         "zigV8": {
                             "repository": "AeroidesLab/zig-v8-fork",
                             "revision": ZIG_V8_REVISION,
-                            "prebuilt": {
-                                "repository": "lightpanda-io/zig-v8-fork",
-                                "release": ZIG_V8_PREBUILT_RELEASE,
-                                "assets": {
-                                    "linux-x86_64": {
-                                        "name": (
-                                            f"libc_v8_{V8_VERSION}_linux_x86_64.a"
-                                        ),
-                                        "sha256": ZIG_V8_PREBUILT_LINUX_SHA256,
-                                    }
-                                },
-                            },
+                            "buildMode": "source",
                         },
                     },
                 },
@@ -178,7 +139,14 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                 "canvas": "bin/libcanvas.so",
                 "html5ever": "bin/libhtml5ever.so",
             },
+            "macos": {
+                "ffi": "bin/libdarkpanda.dylib",
+                "wreq": "bin/libwreq.dylib",
+                "canvas": "bin/libcanvas.dylib",
+                "html5ever": "bin/libhtml5ever.dylib",
+            },
         }[str(target["platform"])]
+        loaded_libraries = list(packaged_paths.values())
         write_json(
             package_attestation_path,
             {
@@ -188,32 +156,18 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                 "archiveSha256": package_sha,
                 "extractedRoot": archive_name[: -len(str(target["suffix"]))],
                 "cleanEnvironment": True,
-                "loaderPolicy": (
-                    "archive-bin-plus-windows-system"
-                    if target["platform"] == "windows"
-                    else "elf-origin-plus-system"
-                ),
+                "loaderPolicy": {
+                    "windows": "archive-bin-plus-windows-system",
+                    "linux": "elf-origin-plus-system",
+                    "macos": "macho-rpath-plus-system",
+                }[str(target["platform"])],
                 "cliVersionOutput": "DarkPanda 1.0.0",
-                "loadedLibraries": (
-                    [
-                        "bin/darkpanda.dll",
-                        "bin/wreq.dll",
-                        "bin/canvas.dll",
-                        "bin/html5ever.dll",
-                    ]
-                    if target["platform"] == "windows"
-                    else [
-                        "bin/libdarkpanda.so",
-                        "bin/libwreq.so",
-                        "bin/libcanvas.so",
-                        "bin/libhtml5ever.so",
-                    ]
-                ),
+                "loadedLibraries": loaded_libraries,
                 "runtime": {
                     "schema": "darkpanda-runtime-load-attestation/v1",
                     "status": "PASS",
                     "canvasAbiVersion": 5,
-                    "loadedLibraries": list(packaged_paths.values()),
+                    "loadedLibraries": loaded_libraries,
                     "paths": packaged_paths,
                 },
             },
@@ -235,14 +189,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                 "v8Version": V8_VERSION,
                 "v8Revision": V8_REVISION,
                 "zigV8SourceRevision": ZIG_V8_REVISION,
-                "zigV8Prebuilt": (
-                    {
-                        "release": ZIG_V8_PREBUILT_RELEASE,
-                        "archiveSha256": ZIG_V8_PREBUILT_LINUX_SHA256,
-                    }
-                    if target["platform"] == "linux"
-                    else None
-                ),
+                "zigV8Prebuilt": None,
                 "steps": step_results,
                 "reports": {
                     "packageRuntimeAttestationSha256": file_digest(
@@ -269,12 +216,28 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                     "apiSetImports": [],
                     "system32Imports": [],
                 }
-            else:
+            elif target["platform"] == "linux":
                 dependency_records[name] = {
                     "needed": [],
                     "bundledNeeded": [],
                     "operatingSystemNeeded": [],
                     "runtimePaths": [],
+                }
+            else:
+                dependency_records[name] = {
+                    "architectures": [
+                        "x86_64" if target_id == "macos-x86_64" else "arm64"
+                    ],
+                    "installName": (
+                        f"@rpath/{name}" if name.endswith(".dylib") else None
+                    ),
+                    "runtimePaths": (
+                        ["@loader_path"]
+                        if name in {"darkpanda", "libdarkpanda.dylib"}
+                        else []
+                    ),
+                    "otoolLibraries": [f"{name}:"],
+                    "otoolLoadCommands": [],
                 }
         dependency_policy: dict[str, object] = {
             "archiveRuntimeNames": list(target["runtime"]),
@@ -288,7 +251,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
             dependency_policy["operatingSystemImportPolicy"] = (
                 "api-set-or-existing-system32-file"
             )
-        else:
+        elif target["platform"] == "linux":
             dependency_policy.update(
                 {
                     "neededAllowlist": sorted(
@@ -315,6 +278,14 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                         "/usr/lib",
                         "/usr/lib64",
                     ],
+                }
+            )
+        else:
+            dependency_policy.update(
+                {
+                    "installNamePolicy": "@rpath-bundled-plus-system",
+                    "runtimePathPolicy": "@loader_path",
+                    "systemLibraryRoots": ["/System/Library", "/usr/lib"],
                 }
             )
         files["metadata/runtime-dependencies.json"] = encode_json(
@@ -362,11 +333,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                 "dependencies": {
                     "v8Version": V8_VERSION,
                     "v8Revision": V8_REVISION,
-                    "v8ArchiveSha256": (
-                        ZIG_V8_PREBUILT_LINUX_SHA256
-                        if target["platform"] == "linux"
-                        else "0" * 64
-                    ),
+                    "v8ArchiveSha256": "0" * 64,
                     "zigV8SourceRevision": ZIG_V8_REVISION,
                     "boringSslSourceRevision": self.revisions["boringssl"],
                     "components": component_records,
@@ -418,7 +385,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
             stderr=subprocess.PIPE,
         )
 
-    def test_two_complete_platforms_pass(self) -> None:
+    def test_all_complete_platforms_pass(self) -> None:
         completed = self.run_validator()
         self.assertEqual(completed.returncode, 0, completed.stderr)
         summary = json.loads((self.root / "summary.json").read_text())
@@ -427,7 +394,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
         self.assertTrue((self.release / "SHA256SUMS").is_file())
         self.assertEqual(
             len(list(self.release.glob("*.sha256"))),
-            2,
+            4,
         )
 
     def test_bad_package_checksum_still_writes_failure_summary(self) -> None:

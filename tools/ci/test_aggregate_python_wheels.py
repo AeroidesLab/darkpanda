@@ -30,7 +30,7 @@ class AggregatePythonWheelsTests(unittest.TestCase):
         write_json(
             self.resolved,
             {
-                "schema": "darkpanda-resolved-inputs/v5",
+                "schema": "darkpanda-resolved-inputs/v6",
                 "pythonBinding": {
                     "repository": "AeroidesLab/py-darkpanda",
                     "revision": self.python_revision,
@@ -49,7 +49,12 @@ class AggregatePythonWheelsTests(unittest.TestCase):
         root = self.results / f"python-result-{target_id}"
         wheel_dir = root / "python-output" / target_id
         wheel_dir.mkdir(parents=True)
-        suffix = "win_amd64" if target_id.startswith("windows-") else "manylinux_x86_64"
+        suffix = {
+            "windows-x86_64": "win_amd64",
+            "linux-x86_64": "manylinux_x86_64",
+            "macos-x86_64": "macosx_12_0_x86_64",
+            "macos-aarch64": "macosx_12_0_arm64",
+        }[target_id]
         wheel = wheel_dir / f"py_darkpanda-0.1.0-cp310-abi3-{suffix}.whl"
         extension = (
             "darkpanda/_native.cp310-win_amd64.pyd"
@@ -96,7 +101,7 @@ class AggregatePythonWheelsTests(unittest.TestCase):
             },
         )
 
-    def test_aggregate_copies_both_wheels_and_rewrites_release_checksums(self) -> None:
+    def test_aggregate_copies_all_wheels_and_rewrites_release_checksums(self) -> None:
         output = self.root / "summary.json"
         markdown = self.root / "summary.md"
         result = subject.aggregate(
@@ -112,7 +117,7 @@ class AggregatePythonWheelsTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(load_json(output)["status"], "passed")
         wheels = sorted(self.release.glob("*.whl"))
-        self.assertEqual(len(wheels), 2)
+        self.assertEqual(len(wheels), 4)
         checksums = (self.release / "SHA256SUMS").read_text(encoding="utf-8")
         self.assertIn("native.zip", checksums)
         for wheel in wheels:

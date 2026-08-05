@@ -13,7 +13,12 @@ from typing import Any
 
 
 COMPONENTS = ("canvas", "html5ever", "wreq", "boringssl")
-TARGETS = ("windows-x86_64", "linux-x86_64")
+TARGETS = (
+    "windows-x86_64",
+    "linux-x86_64",
+    "macos-x86_64",
+    "macos-aarch64",
+)
 REQUIRED_TEST_FRAGMENTS = {
     "canvas": ("cargo", "abi", "fma", "ninja"),
     "html5ever": ("cargo", "abi"),
@@ -23,22 +28,38 @@ REQUIRED_TEST_FRAGMENTS = {
 REQUIRED_LIBRARIES = {
     ("canvas", "windows-x86_64"): "bin/canvas.dll",
     ("canvas", "linux-x86_64"): "bin/libcanvas.so",
+    ("canvas", "macos-x86_64"): "bin/libcanvas.dylib",
+    ("canvas", "macos-aarch64"): "bin/libcanvas.dylib",
     ("html5ever", "windows-x86_64"): "bin/html5ever.dll",
     ("html5ever", "linux-x86_64"): "bin/libhtml5ever.so",
+    ("html5ever", "macos-x86_64"): "bin/libhtml5ever.dylib",
+    ("html5ever", "macos-aarch64"): "bin/libhtml5ever.dylib",
     ("wreq", "windows-x86_64"): "bin/wreq.dll",
     ("wreq", "linux-x86_64"): "bin/libwreq.so",
+    ("wreq", "macos-x86_64"): "bin/libwreq.dylib",
+    ("wreq", "macos-aarch64"): "bin/libwreq.dylib",
     ("boringssl", "windows-x86_64"): "lib/crypto.lib",
     ("boringssl", "linux-x86_64"): "lib/libcrypto.a",
+    ("boringssl", "macos-x86_64"): "lib/libcrypto.a",
+    ("boringssl", "macos-aarch64"): "lib/libcrypto.a",
 }
 REQUIRED_CONSUMER_FILES = {
     ("canvas", "windows-x86_64"): ("include/canvas.h", "lib/canvas.lib"),
     ("canvas", "linux-x86_64"): ("include/canvas.h",),
+    ("canvas", "macos-x86_64"): ("include/canvas.h",),
+    ("canvas", "macos-aarch64"): ("include/canvas.h",),
     ("html5ever", "windows-x86_64"): ("lib/html5ever.dll.lib",),
     ("html5ever", "linux-x86_64"): (),
+    ("html5ever", "macos-x86_64"): (),
+    ("html5ever", "macos-aarch64"): (),
     ("wreq", "windows-x86_64"): (),
     ("wreq", "linux-x86_64"): (),
+    ("wreq", "macos-x86_64"): (),
+    ("wreq", "macos-aarch64"): (),
     ("boringssl", "windows-x86_64"): ("include/openssl/sha.h",),
     ("boringssl", "linux-x86_64"): ("include/openssl/sha.h",),
+    ("boringssl", "macos-x86_64"): ("include/openssl/sha.h",),
+    ("boringssl", "macos-aarch64"): ("include/openssl/sha.h",),
 }
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -270,7 +291,7 @@ def main() -> int:
     browser_profile = resolved.get("browserProfile")
     python_binding = resolved.get("pythonBinding")
     if (
-        resolved.get("schema") != "darkpanda-resolved-inputs/v5"
+        resolved.get("schema") != "darkpanda-resolved-inputs/v6"
         or not isinstance(components, dict)
         or not isinstance(browser_profile, dict)
         or not isinstance(python_binding, dict)
@@ -331,11 +352,12 @@ def main() -> int:
             top_errors.append("unexpected component artifacts: " + ", ".join(unexpected))
 
     passed = sum(record["status"] == "passed" for record in records)
+    total = len(COMPONENTS) * len(TARGETS)
     summary = {
         "schema": "darkpanda-native-summary/v2",
-        "status": "passed" if passed == 8 and not top_errors else "failed",
+        "status": "passed" if passed == total and not top_errors else "failed",
         "passed": passed,
-        "total": 8,
+        "total": total,
         "errors": top_errors,
         "results": records,
     }

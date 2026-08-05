@@ -46,6 +46,12 @@ pub fn build(b: *Build) !void {
             .os_tag = .windows,
             .abi = .msvc,
         }
+    else if (builtin.target.os.tag == .macos)
+        .{
+            .cpu_arch = builtin.target.cpu.arch,
+            .os_tag = .macos,
+            .os_version_min = .{ .semver = .{ .major = 12, .minor = 0, .patch = 0 } },
+        }
     else
         .{};
     const target = b.standardTargetOptions(.{ .default_target = default_target });
@@ -55,6 +61,11 @@ pub fn build(b: *Build) !void {
         []const u8,
         "prebuilt_v8_path",
         "Path to prebuilt libc_v8.a or complete Windows c_v8_standalone.lib",
+    );
+    const pffft_toolchain_dir = b.option(
+        []const u8,
+        "pffft_toolchain_dir",
+        "Windows LLVM bin directory containing clang-cl.exe and lld-link.exe",
     );
     const canvas_dist = componentDistOption(
         b,
@@ -145,9 +156,10 @@ pub fn build(b: *Build) !void {
         mod.addImport("build_config", opts.createModule());
 
         // PFFFT (real-to-complex FFT) — used by WebAudio PeriodicWave.
-        // Compiled with Chromium 149's clang-cl (LLVM 23, from gclient sync)
-        // to match Brave 149's exact floating-point behavior.
-        const pffft_lib = buildPffft(b);
+        // Windows keeps Chromium 149's clang-cl for fingerprint parity. Other
+        // targets use Zig's bundled Clang so native macOS and Linux builds do
+        // not depend on a Windows executable in the V8 source cache.
+        const pffft_lib = buildPffft(b, target, pffft_toolchain_dir);
         mod.addObjectFile(pffft_lib);
         mod.addIncludePath(b.path("src/browser/webapi/audio/pffft"));
 
@@ -224,6 +236,7 @@ pub fn build(b: *Build) !void {
                 },
             }),
         });
+        if (component_dist_gate) |gate| exe.step.dependOn(gate);
         switch (target.result.os.tag) {
             .linux => {
                 // The html parser is installed beside the executable. Make
@@ -327,6 +340,7 @@ pub fn build(b: *Build) !void {
             .use_llvm = true,
             .root_module = ffi_module,
         });
+        if (component_dist_gate) |gate| ffi_lib.step.dependOn(gate);
         // Keep the browser, embedding ABI, wreq and Canvas runtime libraries
         // in one module-adjacent directory on every platform. Unix's default
         // would put a dynamic library in lib/, breaking deterministic dlopen
@@ -376,6 +390,7 @@ pub fn build(b: *Build) !void {
                 },
             }),
         });
+        if (component_dist_gate) |gate| exe.step.dependOn(gate);
         const extras_install = b.addInstallArtifact(exe, .{});
         extras_step.dependOn(&extras_install.step);
         if (component_dist_gate) |gate| extras_install.step.dependOn(gate);
@@ -736,17 +751,28 @@ fn runGit(b: *std.Build, args: []const []const u8) ![]const u8 {
     return b.runAllowFail(command.items, &code, .Ignore);
 }
 
-/// Build PFFFT with Chromium 149's clang-cl (LLVM 23) from the gclient-synced
-/// toolchain in `.lp-cache/v8-14.9.207.35/third_party/llvm-build`. Using the
-/// exact same Clang version as Brave 149 ensures bit-identical floating-point
-/// results for the WebAudio PeriodicWave IFFT.
-fn buildPffft(b: *Build) Build.LazyPath {
+/// Build PFFFT with Chromium 149's clang-cl (LLVM 23) from an explicitly
+/// supplied verified bundle or the developer gclient cache. Using the exact
+/// same Clang version as Brave 149 ensures bit-identical floating-point results
+/// for the WebAudio PeriodicWave IFFT.
+fn buildPffft(
+    b: *Build,
+    target: Build.ResolvedTarget,
+    toolchain_dir: ?[]const u8,
+) Build.LazyPath {
+    if (target.result.os.tag != .windows) return buildPffftNative(b, target);
+
     const pffft_src = b.path("src/browser/webapi/audio/pffft/pffft.c");
 
-    // Locate the gclient-synced Chromium 149 LLVM toolchain.
-    const v8_dir = b.fmt("{s}/.lp-cache/v8-14.9.207.35", .{b.pathFromRoot(".")});
-    const clang_cl = b.fmt("{s}/third_party/llvm-build/Release+Asserts/bin/clang-cl.exe", .{v8_dir});
-    const lld_link = b.fmt("{s}/third_party/llvm-build/Release+Asserts/bin/lld-link.exe", .{v8_dir});
+    // CI passes the verified Chromium toolchain explicitly because a cached
+    // standalone V8 archive does not retain its source checkout. Developer
+    // builds keep the gclient-synced cache as the default.
+    const llvm_bin = toolchain_dir orelse blk: {
+        const v8_dir = b.fmt("{s}/.lp-cache/v8-14.9.207.35", .{b.pathFromRoot(".")});
+        break :blk b.fmt("{s}/third_party/llvm-build/Release+Asserts/bin", .{v8_dir});
+    };
+    const clang_cl = b.fmt("{s}/clang-cl.exe", .{llvm_bin});
+    const lld_link = b.fmt("{s}/lld-link.exe", .{llvm_bin});
 
     // Compile pffft.c → pffft.obj
     // Flags match Chromium 149's default Windows config:
@@ -770,5 +796,34 @@ fn buildPffft(b: *Build) Build.LazyPath {
     archive.addFileArg(obj);
     const lib = archive.addPrefixedOutputFileArg("/out:", "pffft.lib");
 
+    const pffft_step = b.step("pffft", "Build the PFFFT dependency");
+    pffft_step.dependOn(&archive.step);
+
     return lib;
+}
+
+/// Build PFFFT with Zig's bundled Clang on POSIX targets. PFFFT selects SSE
+/// on Intel and NEON on ARM at compile time, so no architecture-specific flag
+/// is needed here. Disabling FP contraction preserves the Windows build's
+/// deterministic multiply/add behavior.
+fn buildPffftNative(b: *Build, target: Build.ResolvedTarget) Build.LazyPath {
+    const pffft_module = b.createModule(.{
+        .target = target,
+        .optimize = .ReleaseFast,
+        .link_libc = true,
+    });
+    pffft_module.addCSourceFile(.{
+        .file = b.path("src/browser/webapi/audio/pffft/pffft.c"),
+        .flags = &.{"-ffp-contract=off"},
+    });
+    pffft_module.addIncludePath(b.path("src/browser/webapi/audio/pffft"));
+
+    const pffft_lib = b.addLibrary(.{
+        .name = "pffft",
+        .linkage = .static,
+        .root_module = pffft_module,
+    });
+    const pffft_step = b.step("pffft", "Build the PFFFT dependency");
+    pffft_step.dependOn(&pffft_lib.step);
+    return pffft_lib.getEmittedBin();
 }
