@@ -27,7 +27,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 
-ABI_VERSION = 4
+ABI_VERSION = 5
 TRANSPORT_OK = 0
 TRANSPORT_EMPTY = 1
 INSECURE_SKIP_TLS_VERIFY = 1 << 0
@@ -58,8 +58,6 @@ class WreqTransportOptions(ctypes.Structure):
         ("event_capacity", ctypes.c_uint32),
         ("profile_id", ctypes.c_uint32),
         ("reserved32", ctypes.c_uint32),
-        ("ip_filter_context", ctypes.c_void_p),
-        ("ip_filter_fn", ctypes.c_void_p),
         ("dns_nameservers", WreqSlice),
     ]
 
@@ -101,7 +99,10 @@ def empty_slice() -> WreqSlice:
 
 def byte_slice(value: bytes) -> tuple[WreqSlice, Any]:
     storage = (ctypes.c_uint8 * len(value)).from_buffer_copy(value)
-    return WreqSlice(ctypes.cast(storage, ctypes.POINTER(ctypes.c_uint8)), len(value)), storage
+    view = WreqSlice(
+        ctypes.cast(storage, ctypes.POINTER(ctypes.c_uint8)), len(value)
+    )
+    return view, storage
 
 
 def configure_library(path: Path) -> ctypes.CDLL:
@@ -145,7 +146,9 @@ def make_certificate(directory: Path) -> tuple[Path, Path]:
         .not_valid_before(now - dt.timedelta(minutes=1))
         .not_valid_after(now + dt.timedelta(days=1))
         .add_extension(
-            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+            x509.SubjectAlternativeName(
+                [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
+            ),
             critical=False,
         )
         .sign(key, hashes.SHA256())
@@ -173,7 +176,9 @@ def peek_tls_record(sock: socket.socket) -> bytes:
             if len(data) >= expected:
                 return data[:expected]
         time.sleep(0.005)
-    raise TimeoutError(f"incomplete ClientHello: received={len(data)} expected={expected}")
+    raise TimeoutError(
+        f"incomplete ClientHello: received={len(data)} expected={expected}"
+    )
 
 
 def read_http_request(sock: ssl.SSLSocket) -> None:
@@ -192,12 +197,17 @@ def serve_two_connections(
     reused: list[bool],
     errors: list[BaseException],
 ) -> None:
+    # pip may globally inject truststore and wrap ssl.SSLContext. Its wrapper
+    # verifies peer certificates even for server-side sockets on macOS. The
+    # local fixture needs the configured stdlib context, which truststore keeps
+    # in _ctx; ordinary Python environments use the context unchanged.
+    server_context = getattr(context, "_ctx", context)
     try:
         for _ in range(2):
             raw, _ = listener.accept()
             raw.settimeout(5.0)
             client_hellos.append(peek_tls_record(raw))
-            with context.wrap_socket(raw, server_side=True) as secured:
+            with server_context.wrap_socket(raw, server_side=True) as secured:
                 reused.append(secured.session_reused)
                 read_http_request(secured)
                 secured.sendall(
@@ -213,7 +223,7 @@ def serve_two_connections(
         listener.close()
 
 
-def parse_client_hello_extensions(record: bytes) -> dict[int, bytes]:
+def parse_client_hello_extensions(record: bytes) -> list[tuple[int, bytes]]:
     assert record[0] == 22, record[:5].hex()
     payload = record[5 : 5 + int.from_bytes(record[3:5], "big")]
     assert payload[0] == 1, payload[:4].hex()
@@ -228,15 +238,34 @@ def parse_client_hello_extensions(record: bytes) -> dict[int, bytes]:
     extensions_length = int.from_bytes(hello[offset : offset + 2], "big")
     offset += 2
     end = offset + extensions_length
-    extensions: dict[int, bytes] = {}
+    extensions: list[tuple[int, bytes]] = []
     while offset < end:
         extension_type = int.from_bytes(hello[offset : offset + 2], "big")
         extension_length = int.from_bytes(hello[offset + 2 : offset + 4], "big")
         offset += 4
-        extensions[extension_type] = hello[offset : offset + extension_length]
+        extensions.append(
+            (extension_type, hello[offset : offset + extension_length])
+        )
         offset += extension_length
     assert offset == end
     return extensions
+
+
+def extension_payload(
+    extensions: list[tuple[int, bytes]], extension_type: int
+) -> bytes | None:
+    """Return the first payload for an extension type."""
+
+    return next(
+        (payload for number, payload in extensions if number == extension_type),
+        None,
+    )
+
+
+def ordered_extension_types(extensions: list[tuple[int, bytes]]) -> list[int | str]:
+    """Preserve extension positions while normalizing GREASE values."""
+
+    return ["GREASE" if is_grease(number) else number for number, _ in extensions]
 
 
 def is_grease(value: int) -> bool:
@@ -260,13 +289,17 @@ def send_request(library: ctypes.CDLL, transport: ctypes.c_void_p, url: str) -> 
         empty_slice(),
     )
     request_id = ctypes.c_uint64()
-    status = library.wreq_transport_submit(transport, ctypes.byref(request), ctypes.byref(request_id))
+    status = library.wreq_transport_submit(
+        transport, ctypes.byref(request), ctypes.byref(request_id)
+    )
     assert status == TRANSPORT_OK, status
     del method_storage, url_storage
 
     while True:
         event = ctypes.POINTER(WreqEvent)()
-        status = library.wreq_transport_poll_event(transport, 5_000, ctypes.byref(event))
+        status = library.wreq_transport_poll_event(
+            transport, 5_000, ctypes.byref(event)
+        )
         if status == TRANSPORT_EMPTY:
             continue
         assert status == TRANSPORT_OK and bool(event), status
@@ -285,7 +318,9 @@ def send_request(library: ctypes.CDLL, transport: ctypes.c_void_p, url: str) -> 
                 return
             elif kind == EVENT_ERROR:
                 data = event.contents.data
-                message = ctypes.string_at(data.ptr, data.len).decode("utf-8", "replace")
+                message = ctypes.string_at(data.ptr, data.len).decode(
+                    "utf-8", "replace"
+                )
                 raise AssertionError(f"wreq request failed: {message}")
             elif kind == EVENT_CANCELLED:
                 raise AssertionError("wreq request was cancelled")
@@ -301,7 +336,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
 
-    assert ctypes.sizeof(WreqTransportOptions) == 80
+    assert ctypes.sizeof(WreqTransportOptions) == 64
     assert ctypes.sizeof(WreqRequest) == 104
     assert ctypes.sizeof(WreqEvent) == 72
 
@@ -339,8 +374,6 @@ def main() -> None:
             32,
             PROFILE_CHROME149,
             0,
-            None,
-            None,
             empty_slice(),
         )
         transport = ctypes.c_void_p()
@@ -348,10 +381,13 @@ def main() -> None:
             ctypes.byref(options), ctypes.byref(transport)
         )
         assert status == TRANSPORT_OK and transport.value, status
+        request_error: BaseException | None = None
         try:
             url = f"https://127.0.0.1:{port}/session"
             send_request(library, transport, url)
             send_request(library, transport, url)
+        except BaseException as error:
+            request_error = error
         finally:
             library.wreq_transport_free(transport)
 
@@ -359,29 +395,33 @@ def main() -> None:
         assert not server.is_alive(), "local TLS server did not finish"
         if server_errors:
             raise server_errors[0]
+        if request_error is not None:
+            raise request_error
         assert len(client_hellos) == 2, len(client_hellos)
         assert reused == [False, True], reused
 
         cold = parse_client_hello_extensions(client_hellos[0])
         resumed = parse_client_hello_extensions(client_hellos[1])
-        assert cold.get(TRUST_ANCHORS_EXTENSION) == b"\x00\x00", cold
-        assert resumed.get(TRUST_ANCHORS_EXTENSION) == b"\x00\x00", resumed
-        assert PRE_SHARED_KEY_EXTENSION not in cold, cold
-        assert PRE_SHARED_KEY_EXTENSION in resumed, resumed
+        cold_trust_anchors = extension_payload(cold, TRUST_ANCHORS_EXTENSION)
+        resumed_trust_anchors = extension_payload(resumed, TRUST_ANCHORS_EXTENSION)
+        cold_types = ordered_extension_types(cold)
+        resumed_types = ordered_extension_types(resumed)
+        assert cold_trust_anchors == b"\x00\x00", cold
+        assert resumed_trust_anchors == b"\x00\x00", resumed
+        assert PRE_SHARED_KEY_EXTENSION not in cold_types, cold_types
+        assert PRE_SHARED_KEY_EXTENSION in resumed_types, resumed_types
 
         evidence = {
             "serverSessionReused": reused,
             "cold": {
-                "nonGreaseExtensions": sorted(value for value in cold if not is_grease(value)),
-                "trustAnchorsData": cold[TRUST_ANCHORS_EXTENSION].hex(),
-                "preSharedKey": PRE_SHARED_KEY_EXTENSION in cold,
+                "orderedExtensions": cold_types,
+                "trustAnchorsData": cold_trust_anchors.hex(),
+                "preSharedKey": PRE_SHARED_KEY_EXTENSION in cold_types,
             },
             "resumed": {
-                "nonGreaseExtensions": sorted(
-                    value for value in resumed if not is_grease(value)
-                ),
-                "trustAnchorsData": resumed[TRUST_ANCHORS_EXTENSION].hex(),
-                "preSharedKey": PRE_SHARED_KEY_EXTENSION in resumed,
+                "orderedExtensions": resumed_types,
+                "trustAnchorsData": resumed_trust_anchors.hex(),
+                "preSharedKey": PRE_SHARED_KEY_EXTENSION in resumed_types,
             },
         }
         if args.out is not None:

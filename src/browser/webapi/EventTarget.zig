@@ -62,6 +62,9 @@ pub const Type = union(enum) {
     hid: *@import("NavigatorCapabilities.zig").HID,
     serial: *@import("NavigatorCapabilities.zig").Serial,
     usb: *@import("NavigatorCapabilities.zig").USB,
+    base_audio_context: *@import("audio/BaseAudioContext.zig"),
+    audio_node: *@import("audio/AudioNode.zig"),
+    speech_synthesis: *@import("speech/SpeechSynthesis.zig"),
 };
 
 pub fn init(page: *Page) !*EventTarget {
@@ -185,6 +188,9 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .hid => writer.writeAll("<HID>"),
         .serial => writer.writeAll("<Serial>"),
         .usb => writer.writeAll("<USB>"),
+        .base_audio_context => writer.writeAll("<BaseAudioContext>"),
+        .audio_node => writer.writeAll("<AudioNode>"),
+        .speech_synthesis => writer.writeAll("<SpeechSynthesis>"),
     };
 }
 
@@ -220,6 +226,9 @@ pub fn toString(self: *EventTarget) []const u8 {
         .hid => return "[object HID]",
         .serial => return "[object Serial]",
         .usb => return "[object USB]",
+        .base_audio_context => return "[object BaseAudioContext]",
+        .audio_node => return "[object AudioNode]",
+        .speech_synthesis => return "[object SpeechSynthesis]",
     };
 }
 

@@ -1,0 +1,18 @@
+<!doctype html>
+<script src="../testing.js"></script>
+
+<script id="basic" type="module">
+  let calls = 0;
+  const transition = document.startViewTransition(() => calls++);
+  testing.expectTrue(transition instanceof ViewTransition);
+  testing.expectEqual(1, calls);
+  testing.expectEqual(transition.ready, transition.ready);
+  testing.expectEqual(transition.finished, transition.finished);
+  testing.expectEqual(transition.updateCallbackDone, transition.updateCallbackDone);
+  await Promise.all([
+    transition.ready,
+    transition.finished,
+    transition.updateCallbackDone,
+  ]);
+  transition.skipTransition();
+</script>

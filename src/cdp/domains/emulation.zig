@@ -291,9 +291,9 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     _ = try bc.session.createPage();
     const page = bc.mainPage().?;
 
-    // Defaults to the compile-time viewport before any override.
-    try testing.expectEqual(1920, page.getViewport().width);
-    try testing.expectEqual(1080, page.getViewport().height);
+    const baseline = page.getViewport();
+    try testing.expectEqual(1280, baseline.width);
+    try testing.expectEqual(720, baseline.height);
 
     try ctx.processMessage(.{
         .id = 8,
@@ -316,6 +316,6 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     });
 
     try ctx.expectSentResult(null, .{ .id = 9 });
-    try testing.expectEqual(1920, page.getViewport().width);
-    try testing.expectEqual(1080, page.getViewport().height);
+    try testing.expectEqual(baseline.width, page.getViewport().width);
+    try testing.expectEqual(baseline.height, page.getViewport().height);
 }

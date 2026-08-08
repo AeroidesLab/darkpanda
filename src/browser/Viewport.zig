@@ -20,6 +20,9 @@ const Viewport = @This();
 
 width: u32,
 height: u32,
+device_width: ?u32 = null,
+device_height: ?u32 = null,
+resolution_dppx: f64 = 1,
 
 pub const default = Viewport{
     .width = 1920,

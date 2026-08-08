@@ -36,7 +36,7 @@
       errorThrown = true;
       testing.expectEqual('RangeError', e.name);
       testing.expectEqual(
-        "The encoding label provided ('x-invalid-encoding') is invalid.",
+        "Failed to construct 'TextDecoderStream': The encoding label provided ('x-invalid-encoding') is invalid.",
         e.message,
       );
     }

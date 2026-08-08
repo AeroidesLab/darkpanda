@@ -1080,11 +1080,38 @@ fn illegalConstructorCallback(raw_info: ?*const v8.FunctionCallbackInfo) callcon
     }
     log.info(.js, "Illegal constructor call", .{ .name = name });
 
-    // V8's exception propagation callback decorates this compact reason using
-    // the constructor template metadata while retaining the short stack line.
     const reason = "Illegal constructor";
     const message = v8.v8__String__NewFromUtf8(isolate, reason.ptr, v8.kNormal, @intCast(reason.len)).?;
     const js_exception = v8.v8__Exception__TypeError(message).?;
+
+    if (v8.v8__FunctionCallbackInfo__IsConstructCall(raw_info)) {
+        const context = v8.v8__Isolate__GetCurrentContext(isolate).?;
+        const stack_key = v8.v8__String__NewFromUtf8(isolate, "stack", v8.kNormal, 5).?;
+        _ = v8.v8__Object__Get(@ptrCast(js_exception), context, stack_key);
+
+        var message_buf: [256]u8 = undefined;
+        const full_message = std.fmt.bufPrint(
+            &message_buf,
+            "Failed to construct '{s}': Illegal constructor",
+            .{name},
+        ) catch unreachable;
+        const full_message_value = v8.v8__String__NewFromUtf8(
+            isolate,
+            full_message.ptr,
+            v8.kNormal,
+            @intCast(full_message.len),
+        ).?;
+        const message_key = v8.v8__String__NewFromUtf8(isolate, "message", v8.kNormal, 7).?;
+        var maybe_result: v8.MaybeBool = undefined;
+        v8.v8__Object__DefineOwnProperty(
+            @ptrCast(js_exception),
+            context,
+            @ptrCast(message_key),
+            @ptrCast(full_message_value),
+            v8.None,
+            &maybe_result,
+        );
+    }
 
     _ = v8.v8__Isolate__ThrowException(isolate, js_exception);
     var return_value: v8.ReturnValue = undefined;
@@ -1202,7 +1229,9 @@ pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8
     const class_name = v8.v8__String__NewFromUtf8(isolate, name_str.ptr, v8.kNormal, @intCast(name_str.len));
     v8.v8__FunctionTemplate__SetClassName(template, class_name);
     v8.v8__FunctionTemplate__SetInterfaceName(template, class_name);
-    v8.v8__FunctionTemplate__SetExceptionContext(template, v8.kExceptionContext_Constructor);
+    if (@hasDecl(JsApi, "constructor")) {
+        v8.v8__FunctionTemplate__SetExceptionContext(template, v8.kExceptionContext_Constructor);
+    }
     // Web IDL: interface object's `prototype` property is non-writable/non-configurable.
     v8.v8__FunctionTemplate__ReadOnlyPrototype(template);
     return template;

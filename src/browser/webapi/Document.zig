@@ -42,6 +42,7 @@ const Selection = @import("Selection.zig");
 const XPathResult = @import("XPathResult.zig");
 const XPathExpression = @import("XPathExpression.zig");
 const TrustedTypes = @import("TrustedTypes.zig");
+const ViewTransition = @import("ViewTransition.zig");
 
 pub const XMLDocument = @import("XMLDocument.zig");
 pub const HTMLDocument = @import("HTMLDocument.zig");
@@ -992,16 +993,8 @@ pub fn moveBefore(self: *Document, node: js.Value, child: js.Value, frame: *Fram
 }
 
 pub fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
-    // DFS in document order; topmost = last visited element whose rect contains (x, y).
-    //
-    // Faux-layout shortcut: rect.top is calculateDocumentPosition × 5, which is
-    // monotonically increasing in document order. So we maintain a running
-    // preorder counter instead of calling calculateDocumentPosition per node
-    // (which itself is O(N)). Once the counter's y passes the query y, no
-    // later element can contain the point, and we can return.
-    //
-    // We also share a single VisibilityCache across all elements so the
-    // ancestor-walk inside isHidden gets amortized.
+    // DFS in document order; topmost = last visited visible element whose
+    // exposed layout rect contains the point.
     var topmost: ?*Element = null;
 
     const root = self.asNode();
@@ -1009,27 +1002,14 @@ pub fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Eleme
     try stack.append(frame.local_arena, root);
 
     var visibility_cache: Element.VisibilityCache = .{};
-    var preorder_index: f64 = 0;
-
     while (stack.items.len > 0) {
         const node = stack.pop() orelse break;
-        const pos = preorder_index * 5.0;
-
-        if (pos > y) {
-            // Monotonic: no later element has top <= y, so none can contain (x, y).
-            return topmost;
-        }
-
-        preorder_index += 1;
         if (node.is(Element)) |element| {
             if (element.checkVisibilityCached(&visibility_cache, frame)) {
-                const dims = element.getElementDimensions(frame);
-                // x and y both come from preorder position in our faux layout.
-                const left = pos;
-                const top = pos;
-                const right = pos + dims.width;
-                const bottom = pos + dims.height;
-                if (x >= left and x <= right and y >= top and y <= bottom) {
+                const rect = element.getBoundingClientRectForVisible(frame);
+                if (x >= rect.getLeft() and x <= rect.getRight() and
+                    y >= rect.getTop() and y <= rect.getBottom())
+                {
                     topmost = element;
                 }
             }
@@ -1683,6 +1663,13 @@ pub const JsApi = struct {
     pub const querySelector = bridge.function(Document.querySelector, .{});
     pub const querySelectorAll = bridge.function(Document.querySelectorAll, .{});
     pub const replaceChildren = bridge.function(Document.replaceChildren, .{ .ce_reactions = true, .variadic = true });
+    pub const startViewTransition = bridge.function(struct {
+        fn start(_: *Document, callback: ?js.Function, exec: *js.Execution) !*ViewTransition {
+            const transition = try ViewTransition.init(exec);
+            if (callback) |cb| _ = try cb.call(js.Value, .{});
+            return transition;
+        }
+    }.start, .{});
     pub const write = bridge.function(Document.write, .{ .ce_reactions = true, .variadic = true });
     pub const writeln = bridge.function(Document.writeln, .{ .ce_reactions = true, .variadic = true });
 

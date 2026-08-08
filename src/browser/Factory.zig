@@ -35,6 +35,9 @@ const EventTarget = @import("webapi/EventTarget.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
 const Blob = @import("webapi/Blob.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
+const BaseAudioContext = @import("webapi/audio/BaseAudioContext.zig");
+const AudioNode = @import("webapi/audio/AudioNode.zig");
+const AudioScheduledSourceNode = @import("webapi/audio/AudioScheduledSourceNode.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -72,6 +75,30 @@ pub fn eventTargetWithAllocator(_: *const Factory, allocator: Allocator, child: 
     chain.setLeaf(1, child);
 
     return chain.get(1);
+}
+
+pub fn baseAudioContext(self: *Factory, sample_rate: f32, child: anytype) !*@TypeOf(child) {
+    const result = try AutoPrototypeChain(
+        &.{ EventTarget, BaseAudioContext, @TypeOf(child) },
+    ).create(self._slab.allocator(), child);
+    result._proto._sample_rate = sample_rate;
+    return result;
+}
+
+pub fn audioNode(self: *Factory, context: *BaseAudioContext, child: anytype) !*@TypeOf(child) {
+    const result = try AutoPrototypeChain(
+        &.{ EventTarget, AudioNode, @TypeOf(child) },
+    ).create(self._slab.allocator(), child);
+    result._proto._context = context;
+    return result;
+}
+
+pub fn audioScheduledSourceNode(self: *Factory, context: *BaseAudioContext, child: anytype) !*@TypeOf(child) {
+    const result = try AutoPrototypeChain(
+        &.{ EventTarget, AudioNode, AudioScheduledSourceNode, @TypeOf(child) },
+    ).create(self._slab.allocator(), child);
+    result._proto._proto._context = context;
+    return result;
 }
 
 pub fn standaloneEventTarget(self: *Factory, child: anytype) !*EventTarget {
@@ -347,6 +374,17 @@ pub fn svgGraphicsElement(self: *Factory, tag_name: []const u8, child: anytype) 
 
     try self.setSvgChainBase(chain, tag_name);
     chain.setMiddle(4, Element.Svg.Graphics.Type);
+    chain.setLeaf(5, child);
+    return chain.get(5);
+}
+
+pub fn svgTextContentElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeOf(child) {
+    const chain = try PrototypeChain(
+        &.{ EventTarget, Node, Element, Element.Svg, Element.Svg.TextContent, @TypeOf(child) },
+    ).allocate(self._slab.allocator());
+
+    try self.setSvgChainBase(chain, tag_name);
+    chain.setMiddle(4, Element.Svg.TextContent.Type);
     chain.setLeaf(5, child);
     return chain.get(5);
 }

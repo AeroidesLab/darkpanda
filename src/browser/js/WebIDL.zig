@@ -101,9 +101,6 @@ fn replaceMessage(local: *const js.Local, exception: *const js.v8.Value, message
     const key = local.isolate.initStringHandle("message");
     const value = local.isolate.initStringHandle(message);
     var maybe_result: js.v8.MaybeBool = undefined;
-    // Blink uses CreateDataProperty, not ordinary [[Set]].  Re-defining the
-    // existing Error.message property with `None` makes the contextual own
-    // property writable/enumerable/configurable, exactly like Chrome.
     js.v8.v8__Object__DefineOwnProperty(
         @ptrCast(exception),
         local.handle,
@@ -122,6 +119,25 @@ fn materializeStack(local: *const js.Local, exception: *const js.v8.Value) void 
     if (!js.v8.v8__Value__IsObject(exception)) return;
     const key = local.isolate.initStringHandle("stack");
     _ = js.v8.v8__Object__Get(@ptrCast(exception), local.handle, key);
+}
+
+fn materializeStackWithReason(local: *const js.Local, exception: *const js.v8.Value, reason: []const u8) void {
+    if (!js.v8.v8__Value__IsObject(exception)) return;
+    const key = local.isolate.initStringHandle("stack");
+    const value = js.v8.v8__Object__Get(@ptrCast(exception), local.handle, key) orelse return;
+    const string = js.v8.v8__Value__ToString(value, local.handle) orelse return;
+    const stack = (js.String{ .local = local, .handle = string }).toSlice() catch return;
+    const tail = if (std.mem.indexOfScalar(u8, stack, '\n')) |index| stack[index..] else "";
+    const replacement = std.fmt.allocPrint(local.call_arena, "TypeError: {s}{s}", .{ reason, tail }) catch return;
+    const replacement_value = local.isolate.initStringHandle(replacement);
+    var maybe_result: js.v8.MaybeBool = undefined;
+    js.v8.v8__Object__Set(
+        @ptrCast(exception),
+        local.handle,
+        key,
+        @ptrCast(replacement_value),
+        &maybe_result,
+    );
 }
 
 fn v8StringToOwned(
@@ -161,6 +177,10 @@ pub fn exceptionPropagationCallback(
     const exception = exception_or_null orelse return;
     const interface_name_value = interface_name_or_null orelse return;
     const property_name_value = property_name_or_null orelse return;
+    // DOMException is a Web API wrapper, not a Web IDL conversion Error. Its
+    // producer already owns the exact Chrome message, including cases where
+    // the SecurityError deliberately has no operation or attribute prefix.
+    if (js.v8.v8__Object__InternalFieldCount(exception) > 0) return;
     const context = js.v8.v8__Isolate__GetCurrentContext(isolate) orelse return;
     const allocator = std.heap.page_allocator;
 
@@ -168,6 +188,7 @@ pub fn exceptionPropagationCallback(
     defer allocator.free(interface_name);
     const property_name_owned = v8StringToOwned(allocator, isolate, property_name_value) orelse return;
     defer allocator.free(property_name_owned);
+    if (interface_name.len == 0 or property_name_owned.len == 0) return;
     var property_name: []const u8 = property_name_owned;
 
     if (context_kind == js.v8.kExceptionContext_AttributeGet and std.mem.startsWith(u8, property_name, "get ")) {
@@ -181,35 +202,58 @@ pub fn exceptionPropagationCallback(
     const reason_string = js.v8.v8__Value__ToString(reason_value, context) orelse return;
     const reason = v8StringToOwned(allocator, isolate, reason_string) orelse return;
     defer allocator.free(reason);
+    const ctx = js.Context.fromC(context) orelse return;
+    const reason_key: *const js.v8.Private = js.v8.v8__Global__Get(
+        &ctx.env.private_symbols.webidl_native_conversion_reason.handle,
+        isolate,
+    ) orelse return;
+    if (js.v8.v8__Object__GetPrivate(exception, context, reason_key)) |marker| {
+        if (js.v8.v8__Value__IsTrue(marker) or js.v8.v8__Value__IsString(marker)) return;
+    }
+    var marker_result: js.v8.MaybeBool = undefined;
+    js.v8.v8__Object__SetPrivate(
+        exception,
+        context,
+        reason_key,
+        @ptrCast(reason_string),
+        &marker_result,
+    );
+
+    const prefix = switch (context_kind) {
+        js.v8.kExceptionContext_Constructor => std.fmt.allocPrint(
+            allocator,
+            "Failed to construct '{s}': ",
+            .{property_name},
+        ),
+        js.v8.kExceptionContext_Operation => std.fmt.allocPrint(
+            allocator,
+            "Failed to execute '{s}' on '{s}': ",
+            .{ property_name, interface_name },
+        ),
+        js.v8.kExceptionContext_AttributeGet => std.fmt.allocPrint(
+            allocator,
+            "Failed to read the '{s}' property from '{s}': ",
+            .{ property_name, interface_name },
+        ),
+        js.v8.kExceptionContext_AttributeSet => std.fmt.allocPrint(
+            allocator,
+            "Failed to set the '{s}' property on '{s}': ",
+            .{ property_name, interface_name },
+        ),
+        else => return,
+    } catch return;
+    defer allocator.free(prefix);
+
+    // Some native callbacks intentionally construct the complete Blink
+    // message so Error.stack carries that text too. Do not qualify it twice.
+    if (std.mem.startsWith(u8, reason, prefix)) return;
 
     // Materialize Error.stack before replacing the message so its first line
     // remains the compact native conversion reason, matching Blink.
     const stack_key = js.v8.v8__String__NewFromUtf8(isolate, "stack", js.v8.kNormal, 5) orelse return;
     _ = js.v8.v8__Object__Get(exception, context, stack_key);
 
-    const full = switch (context_kind) {
-        js.v8.kExceptionContext_Constructor => std.fmt.allocPrint(
-            allocator,
-            "Failed to construct '{s}': {s}",
-            .{ property_name, reason },
-        ),
-        js.v8.kExceptionContext_Operation => std.fmt.allocPrint(
-            allocator,
-            "Failed to execute '{s}' on '{s}': {s}",
-            .{ property_name, interface_name, reason },
-        ),
-        js.v8.kExceptionContext_AttributeGet => std.fmt.allocPrint(
-            allocator,
-            "Failed to read the '{s}' property from '{s}': {s}",
-            .{ property_name, interface_name, reason },
-        ),
-        js.v8.kExceptionContext_AttributeSet => std.fmt.allocPrint(
-            allocator,
-            "Failed to set the '{s}' property on '{s}': {s}",
-            .{ property_name, interface_name, reason },
-        ),
-        else => return,
-    } catch return;
+    const full = std.mem.concat(allocator, u8, &.{ prefix, reason }) catch return;
     defer allocator.free(full);
 
     const message_value = js.v8.v8__String__NewFromUtf8(
@@ -233,9 +277,23 @@ pub fn exceptionPropagationCallback(
 /// leaves Error.message unqualified (HTMLAllCollection's callable path is one
 /// of the legacy bindings that does this).
 pub fn typeError(exec: *js.Execution, operation: ?Operation, reason: []const u8) anyerror {
-    _ = operation;
     const local = exec.js.local orelse return error.TypeError;
     const exception = local.isolate.createTypeError(reason);
+    if (operation == null) {
+        if (js.v8.v8__Global__Get(
+            &exec.js.env.private_symbols.webidl_native_conversion_reason.handle,
+            local.isolate.handle,
+        )) |reason_key| {
+            var marker_result: js.v8.MaybeBool = undefined;
+            js.v8.v8__Object__SetPrivate(
+                @ptrCast(exception),
+                local.handle,
+                reason_key,
+                local.isolate.initTrue(),
+                &marker_result,
+            );
+        }
+    }
     _ = local.isolate.throwException(exception);
     return error.TryCatchRethrow;
 }
@@ -309,6 +367,25 @@ pub fn contextualTypeError(exec: *js.Execution, context: ConversionContext, reas
         else => reason,
     };
     const exception = local.isolate.createTypeError(native_reason);
+    materializeStackWithReason(local, exception, reason);
+    replaceMessage(local, exception, try contextualMessage(exec, context, reason));
+
+    // This error already carries its explicit Web IDL owner. V8 derives the
+    // propagation interface from the active callback, which is observably
+    // wrong for aliases such as HTMLTemplateElement.innerHTML (Element).
+    if (js.v8.v8__Global__Get(
+        &exec.js.env.private_symbols.webidl_native_conversion_reason.handle,
+        local.isolate.handle,
+    )) |reason_key| {
+        var marker_result: js.v8.MaybeBool = undefined;
+        js.v8.v8__Object__SetPrivate(
+            @ptrCast(exception),
+            local.handle,
+            reason_key,
+            @ptrCast(local.isolate.initStringHandle(reason)),
+            &marker_result,
+        );
+    }
     _ = local.isolate.throwException(exception);
     return error.TryCatchRethrow;
 }
@@ -321,8 +398,35 @@ fn rethrowConversion(
     try_catch: *js.TryCatch,
     context: ?ConversionContext,
 ) anyerror {
-    _ = exec;
-    _ = context;
+    if (context) |conversion_context| {
+        if (try_catch.exceptionValue()) |exception| {
+            if (exception.isObject()) {
+                if (exec.js.local) |local| {
+                    if (js.v8.v8__Global__Get(
+                        &exec.js.env.private_symbols.webidl_native_conversion_reason.handle,
+                        local.isolate.handle,
+                    )) |reason_key| {
+                        if (js.v8.v8__Object__GetPrivate(
+                            @ptrCast(exception.handle),
+                            local.handle,
+                            reason_key,
+                        )) |reason_value| {
+                            if (js.v8.v8__Value__IsString(reason_value)) {
+                                if ((js.String{
+                                    .local = local,
+                                    .handle = @ptrCast(reason_value),
+                                }).toSlice()) |reason| {
+                                    if (contextualMessage(exec, conversion_context, reason)) |message| {
+                                        replaceMessage(local, exception.handle, message);
+                                    } else |_| {}
+                                } else |_| {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     try_catch.rethrow();
     return error.TryCatchRethrow;
 }

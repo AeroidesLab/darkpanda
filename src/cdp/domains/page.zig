@@ -1102,8 +1102,9 @@ test "cdp.frame: getLayoutMetrics" {
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
 
-    const width = 1920;
-    const height = 1080;
+    const viewport = ctx.cdp().browser.getViewport();
+    const width = viewport.width;
+    const height = viewport.height;
 
     try ctx.processMessage(.{ .id = 12, .method = "Page.getLayoutMetrics" });
     try ctx.expectSentResult(.{

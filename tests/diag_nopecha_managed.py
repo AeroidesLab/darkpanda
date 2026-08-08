@@ -207,7 +207,7 @@ def main() -> None:
         page.click(
             CHECKBOX,
             frame_id=frame.frame_id,
-            pierce=True,
+            pierce_shadow=True,
             timeout_ms=args.click_timeout_ms,
             move_delay_ms=16,
             press_delay_ms=60,

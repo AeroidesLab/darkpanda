@@ -70,13 +70,16 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
         write_json(
             self.resolved,
             {
-                "schema": "darkpanda-resolved-inputs/v6",
+                "schema": "darkpanda-resolved-inputs/v7",
                 "darkpanda": {"revision": self.darkpanda_revision},
                 "pythonBinding": {
                     "repository": "AeroidesLab/py-darkpanda",
                     "revision": "f" * 40,
                 },
-                "browserProfile": {"profileSha256": PROFILE_SHA},
+                "browserProfile": {
+                    "profileSha256": PROFILE_SHA,
+                    "googleChromeStableVersion": "149.0.7827.201",
+                },
                 "buildDependencies": {
                     "zig": {
                         "version": ZIG_VERSION,

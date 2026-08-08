@@ -371,7 +371,7 @@ def main() -> None:
                 page.click(
                     "body",
                     frame_id=viewport_child.frame_id,
-                    pierce=True,
+                    pierce_shadow=True,
                     timeout_ms=5_000,
                     move_delay_ms=16,
                     press_delay_ms=60,

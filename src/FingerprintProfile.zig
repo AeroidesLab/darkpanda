@@ -15,8 +15,8 @@ pub const max_profile_bytes: usize = 64 * 1024;
 pub const max_json_depth: usize = 16;
 pub const max_json_value_bytes: usize = 4096;
 
-pub const chrome149_catalog_id = "chrome-149.0.7827.203-windows-x64";
-pub const chrome149_full_version = "149.0.7827.203";
+pub const chrome149_catalog_id = "chrome-149.0.7827.201-windows-x64";
+pub const chrome149_full_version = "149.0.7827.201";
 pub const chrome149_v8_version = "14.9.207.35";
 pub const chrome149_transport_profile_id = "wreq-6.0.0-rc.29/chrome149/windows-x64";
 
@@ -938,10 +938,10 @@ pub const legacy_chrome149_windows_json =
     \\{
     \\  "schemaVersion": 2,
     \\  "browser": {
-    \\    "catalogId": "chrome-149.0.7827.203-windows-x64",
+    \\    "catalogId": "chrome-149.0.7827.201-windows-x64",
     \\    "family": "chrome",
     \\    "os": "windows",
-    \\    "fullVersion": "149.0.7827.203",
+    \\    "fullVersion": "149.0.7827.201",
     \\    "v8Version": "14.9.207.35",
     \\    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
     \\    "appVersion": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
@@ -951,8 +951,8 @@ pub const legacy_chrome149_windows_json =
     \\      {"brand":"Not)A;Brand","version":"24"}
     \\    ],
     \\    "fullVersionList": [
-    \\      {"brand":"Google Chrome","version":"149.0.7827.203"},
-    \\      {"brand":"Chromium","version":"149.0.7827.203"},
+    \\      {"brand":"Google Chrome","version":"149.0.7827.201"},
+    \\      {"brand":"Chromium","version":"149.0.7827.201"},
     \\      {"brand":"Not)A;Brand","version":"24.0.0.0"}
     \\    ],
     \\    "uaPlatform": "Windows",

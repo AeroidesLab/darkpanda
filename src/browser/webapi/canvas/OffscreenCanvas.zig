@@ -24,6 +24,7 @@ const EventTarget = @import("../EventTarget.zig");
 const CanvasException = @import("CanvasException.zig");
 const ContextOptions = @import("ContextOptions.zig");
 const OffscreenCanvasRenderingContext2D = @import("OffscreenCanvasRenderingContext2D.zig");
+const WebGLRenderingContext = @import("WebGLRenderingContext.zig");
 const CanvasSurface = @import("../../canvas_backend/Surface.zig");
 const CanvasBackendProvider = @import("../../canvas_backend/Provider.zig");
 
@@ -42,13 +43,38 @@ _height: u32,
 _surface_provider: ?*CanvasBackendProvider = null,
 _surface: ?*CanvasSurface = null,
 _surface_flags: u32 = 0,
-_cached: ?*OffscreenCanvasRenderingContext2D = null,
+_cached: ?DrawingContext = null,
 
 /// Since there's no base class rendering contexts inherit from,
 /// we're using tagged union.
 const DrawingContext = union(enum) {
     @"2d": *OffscreenCanvasRenderingContext2D,
+    webgl: *WebGLRenderingContext,
 };
+
+fn webglCanvasToJs(raw: *anyopaque, local: *const js.Local) !js.Value {
+    const canvas: *OffscreenCanvas = @ptrCast(@alignCast(raw));
+    return local.zigValueToJs(canvas, .{});
+}
+
+fn webglCanvasWidth(raw: *anyopaque) u32 {
+    const canvas: *OffscreenCanvas = @ptrCast(@alignCast(raw));
+    return canvas._width;
+}
+
+fn webglCanvasHeight(raw: *anyopaque) u32 {
+    const canvas: *OffscreenCanvas = @ptrCast(@alignCast(raw));
+    return canvas._height;
+}
+
+fn webglCanvasHooks(self: *OffscreenCanvas) WebGLRenderingContext.CanvasHooks {
+    return .{
+        .ptr = self,
+        .toJs = webglCanvasToJs,
+        .width = webglCanvasWidth,
+        .height = webglCanvasHeight,
+    };
+}
 
 const DimensionTarget = enum {
     constructor,
@@ -151,7 +177,10 @@ pub fn setWidth(self: *OffscreenCanvas, raw_value: js.Value, exec: *Execution) !
     const value = try canvasDimension(raw_value, .width, exec);
     self._width = value;
     if (self._surface) |backing| backing.resize(value, self._height) catch |err| backing.markFault(err);
-    if (self._cached) |ctx| ctx.onCanvasResize(value, self._height);
+    if (self._cached) |cached| switch (cached) {
+        .@"2d" => |ctx| ctx.onCanvasResize(value, self._height),
+        .webgl => {},
+    };
 }
 
 pub fn getHeight(self: *const OffscreenCanvas) u32 {
@@ -162,7 +191,10 @@ pub fn setHeight(self: *OffscreenCanvas, raw_value: js.Value, exec: *Execution) 
     const value = try canvasDimension(raw_value, .height, exec);
     self._height = value;
     if (self._surface) |backing| backing.resize(self._width, value) catch |err| backing.markFault(err);
-    if (self._cached) |ctx| ctx.onCanvasResize(self._width, value);
+    if (self._cached) |cached| switch (cached) {
+        .@"2d" => |ctx| ctx.onCanvasResize(self._width, value),
+        .webgl => {},
+    };
 }
 
 /// Resize the bitmap without notifying the context (mirrors
@@ -181,18 +213,42 @@ pub fn getContext(
     raw_options: ?js.Value,
     exec: *Execution,
 ) !?DrawingContext {
-    if (std.mem.eql(u8, context_type, "2d")) {
+    const is_2d = std.mem.eql(u8, context_type, "2d");
+    const is_webgl = std.mem.eql(u8, context_type, "webgl") or
+        std.mem.eql(u8, context_type, "experimental-webgl");
+    const is_webgl2 = std.mem.eql(u8, context_type, "webgl2") or
+        std.mem.eql(u8, context_type, "experimental-webgl2");
+
+    if (self._cached) |cached| {
+        const matches = switch (cached) {
+            .@"2d" => is_2d,
+            .webgl => is_webgl or is_webgl2,
+        };
+        return if (matches) cached else null;
+    }
+
+    if (is_2d) {
         const attributes = try ContextOptions.parse(raw_options, exec, .offscreen_canvas);
         self._surface_provider = &exec.page.canvas_backend;
-        if (self._cached) |ctx| return .{ .@"2d" = ctx };
         self._surface_flags = attributes.surfaceFlags();
         // Blink materializes OffscreenCanvas storage with its first context.
         // This differs from HTMLCanvasElement's lazy backing and makes an
         // untouched alpha:false OffscreenCanvas read as opaque black.
         _ = try self.ensureSurface();
         const ctx = try exec._factory.create(OffscreenCanvasRenderingContext2D.init(self, attributes));
-        self._cached = ctx;
-        return .{ .@"2d" = ctx };
+        const drawing_context: DrawingContext = .{ .@"2d" = ctx };
+        self._cached = drawing_context;
+        return drawing_context;
+    }
+
+    if (is_webgl or is_webgl2) {
+        const ctx = try exec._factory.create(WebGLRenderingContext.init(
+            webglCanvasHooks(self),
+            is_webgl2,
+        ));
+        const drawing_context: DrawingContext = .{ .webgl = ctx };
+        self._cached = drawing_context;
+        return drawing_context;
     }
 
     return null;

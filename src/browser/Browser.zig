@@ -250,9 +250,18 @@ pub fn getDisplay(self: *const Browser) Display {
 // The viewport every consumer should read: the runtime override if set,
 // otherwise the resolved fingerprint's inner viewport.
 pub fn getViewport(self: *const Browser) Viewport {
-    if (self.viewport_override) |viewport| return viewport;
     const display = self.getDisplay();
-    return .{ .width = display.inner_width, .height = display.inner_height };
+    const viewport = self.viewport_override orelse Viewport{
+        .width = display.inner_width,
+        .height = display.inner_height,
+    };
+    return .{
+        .width = viewport.width,
+        .height = viewport.height,
+        .device_width = display.screen_width,
+        .device_height = display.screen_height,
+        .resolution_dppx = display.device_pixel_ratio,
+    };
 }
 
 pub fn newSession(self: *Browser, notification: *Notification) !*Session {

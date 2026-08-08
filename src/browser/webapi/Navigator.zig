@@ -33,6 +33,7 @@ const FingerprintView = @import("../FingerprintView.zig");
 const Navigator = @This();
 _pad: bool = false,
 _plugins: PluginArray = .{},
+_mime_types: PluginArray.MimeTypeArray = .{},
 _permissions: Permissions = .{},
 _storage: StorageManager = .{},
 _ua_data: NavigatorUAData = .{},
@@ -128,8 +129,20 @@ pub fn sendBeacon(_: *const Navigator, url: js.Value, data: ?js.Value) bool {
     return true;
 }
 
+pub fn canShare(_: *const Navigator, _: ?js.Value) bool {
+    return true;
+}
+
+pub fn share(_: *const Navigator, _: ?js.Value, exec: *const Execution) !js.Promise {
+    return exec.js.local.?.resolvePromise(null);
+}
+
 pub fn getPlugins(self: *Navigator) *PluginArray {
     return &self._plugins;
+}
+
+pub fn getMimeTypes(self: *Navigator) *PluginArray.MimeTypeArray {
+    return &self._mime_types;
 }
 
 pub fn getPermissions(self: *Navigator) *Permissions {
@@ -248,9 +261,12 @@ pub const JsApi = struct {
     pub const languages = bridge.accessor(Navigator.getLanguages, null, .{});
     pub const onLine = bridge.accessor(Navigator.getOnLine, null, .{});
     pub const webdriver = bridge.accessor(Navigator.getWebdriver, null, .{});
+    pub const mimeTypes = bridge.accessor(Navigator.getMimeTypes, null, .{ .exposed = .window });
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{ .exposed = .window });
     pub const javaEnabled = bridge.function(Navigator.javaEnabled, .{});
     pub const sendBeacon = bridge.function(Navigator.sendBeacon, .{ .exposed = .window, .noop = true });
+    pub const canShare = bridge.function(Navigator.canShare, .{ .exposed = .window });
+    pub const share = bridge.function(Navigator.share, .{ .exposed = .window });
     pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });
     pub const deviceMemory = bridge.accessor(Navigator.getDeviceMemory, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});

@@ -78,12 +78,15 @@ class AggregateComponentReportsTest(unittest.TestCase):
         write_json(
             self.resolved,
             {
-                "schema": "darkpanda-resolved-inputs/v6",
+                "schema": "darkpanda-resolved-inputs/v7",
                 "pythonBinding": {
                     "repository": "AeroidesLab/py-darkpanda",
                     "revision": "f" * 40,
                 },
-                "browserProfile": {"profileSha256": self.profile},
+                "browserProfile": {
+                    "profileSha256": self.profile,
+                    "googleChromeStableVersion": "149.0.7827.201",
+                },
                 "components": {
                     name: {"revision": revision}
                     for name, revision in self.revisions.items()

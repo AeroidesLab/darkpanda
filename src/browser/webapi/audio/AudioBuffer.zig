@@ -18,8 +18,6 @@
 
 const std = @import("std");
 const js = @import("../../js/js.zig");
-const render_pipeline = @import("render_pipeline.zig");
-const brave_farbling = @import("brave_farbling.zig");
 
 const Execution = js.Execution;
 
@@ -35,8 +33,6 @@ _sample_rate: f32,
 _samples: []f32,
 /// 缓存的 JS Float32Array(每通道一个),lazy 创建
 _cached_arrays: []?js.ArrayBufferRef(.float32).Global,
-/// Brave farbling helper(BALANCED 模式,默认启用)
-_farbling: ?brave_farbling.BraveAudioFarblingHelper = null,
 
 pub fn init(
     allocator: std.mem.Allocator,
@@ -57,25 +53,15 @@ pub fn init(
     };
 }
 
-/// 从已有的渲染结果创建(单通道)。
-/// 默认启用 Brave BALANCED farbling,每次用随机 token 使结果不可复现。
 pub fn fromRendered(allocator: std.mem.Allocator, samples: []f32, sample_rate: f32) !AudioBuffer {
     const cached = try allocator.alloc(?js.ArrayBufferRef(.float32).Global, 1);
     cached[0] = null;
-    var token_high: u64 = 0;
-    var token_low: u64 = 0;
-    token_high = std.crypto.random.int(u64);
-    token_low = std.crypto.random.int(u64);
     return .{
         ._number_of_channels = 1,
         ._length = @intCast(samples.len),
         ._sample_rate = sample_rate,
         ._samples = samples,
         ._cached_arrays = cached,
-        ._farbling = brave_farbling.BraveAudioFarblingHelper.from_token(
-            .{ .high = token_high, .low = token_low },
-            .balanced,
-        ),
     };
 }
 
@@ -111,17 +97,32 @@ pub fn getChannelData(self: *AudioBuffer, channel: u32, exec: *Execution) !js.Ob
     const slice = arr.slice();
     const offset = @as(usize, channel) * len;
 
-    // Brave farbling: 在 getChannelData 返回前对样本应用 fudge_factor
-    // (对应 Brave 在 AudioBuffer::getChannelData 处的注入)。
-    if (self._farbling) |helper| {
-        helper.farble_audio_channel(self._samples[offset .. offset + len]);
-    }
-
     @memcpy(slice, self._samples[offset .. offset + len]);
 
     // 持久化缓存
     self._cached_arrays[channel] = try arr.persist();
     return .{ .local = local, .handle = @ptrCast(arr.handle) };
+}
+
+pub fn copyFromChannel(
+    self: *AudioBuffer,
+    destination: js.TypedArray(f32),
+    channel: u32,
+    start_in_channel: ?u32,
+    exec: *Execution,
+) !void {
+    if (channel >= self._number_of_channels) return error.IndexSizeError;
+    const start: usize = start_in_channel orelse 0;
+    if (start >= self._length) return;
+    const source = if (self._cached_arrays[channel]) |global|
+        global.local(exec.js.local orelse return error.InvalidStateError).slice()
+    else blk: {
+        const offset = @as(usize, channel) * self._length;
+        break :blk self._samples[offset .. offset + self._length];
+    };
+    const values = @constCast(destination.values);
+    const count = @min(values.len, source.len - start);
+    @memcpy(values[0..count], source[start .. start + count]);
 }
 
 pub const JsApi = struct {
@@ -137,4 +138,5 @@ pub const JsApi = struct {
     pub const length = bridge.accessor(AudioBuffer.getLength, null, .{});
     pub const numberOfChannels = bridge.accessor(AudioBuffer.getNumberOfChannels, null, .{});
     pub const getChannelData = bridge.function(AudioBuffer.getChannelData, .{});
+    pub const copyFromChannel = bridge.function(AudioBuffer.copyFromChannel, .{ .required_args = 2 });
 };

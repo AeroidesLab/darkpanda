@@ -194,11 +194,17 @@ def aggregate(args: argparse.Namespace) -> int:
     errors: list[str] = []
     platforms: dict[str, dict[str, object]] = {}
     binding = resolved.get("pythonBinding")
+    browser_profile = resolved.get("browserProfile")
     if (
-        resolved.get("schema") != "darkpanda-resolved-inputs/v6"
+        resolved.get("schema") != "darkpanda-resolved-inputs/v7"
         or not isinstance(binding, dict)
         or binding.get("repository") != "AeroidesLab/py-darkpanda"
         or not re.fullmatch(r"[0-9a-f]{40}", str(binding.get("revision", "")))
+        or not isinstance(browser_profile, dict)
+        or not re.fullmatch(
+            r"[0-9]+(?:\.[0-9]+){3}",
+            str(browser_profile.get("googleChromeStableVersion", "")),
+        )
     ):
         errors.append("resolved inputs have no valid py-darkpanda source")
     expected = {f"python-result-{target}" for target in TARGETS}

@@ -19,6 +19,8 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
 const AudioParam = @import("AudioParam.zig");
+const BaseAudioContext = @import("BaseAudioContext.zig");
+const AudioNode = @import("AudioNode.zig");
 
 const Execution = js.Execution;
 
@@ -26,19 +28,20 @@ const Execution = js.Execution;
 /// 实际渲染在 OfflineAudioContext.startRendering 中统一进行。
 pub const DynamicsCompressorNode = @This();
 
+_proto: *AudioNode,
 _threshold: ?*AudioParam.AudioParam = null,
 _knee: ?*AudioParam.AudioParam = null,
 _ratio: ?*AudioParam.AudioParam = null,
 _attack: ?*AudioParam.AudioParam = null,
 _release: ?*AudioParam.AudioParam = null,
 
-pub fn init(exec: *const Execution) !*DynamicsCompressorNode {
-    const comp = try exec._factory.create(DynamicsCompressorNode{});
-    comp._threshold = try AudioParam.init(exec, -24.0);
-    comp._knee = try AudioParam.init(exec, 30.0);
-    comp._ratio = try AudioParam.init(exec, 12.0);
-    comp._attack = try AudioParam.init(exec, 0.003);
-    comp._release = try AudioParam.init(exec, 0.250);
+pub fn init(context: *BaseAudioContext, exec: *const Execution) !*DynamicsCompressorNode {
+    const comp = try exec._factory.audioNode(context, DynamicsCompressorNode{ ._proto = undefined });
+    comp._threshold = try AudioParam.init(exec, -24, -100, 0);
+    comp._knee = try AudioParam.init(exec, 30, 0, 40);
+    comp._ratio = try AudioParam.init(exec, 12, 1, 20);
+    comp._attack = try AudioParam.init(exec, 0.003, 0, 1);
+    comp._release = try AudioParam.init(exec, 0.250, 0, 1);
     return comp;
 }
 
@@ -62,8 +65,9 @@ pub fn getRelease(self: *DynamicsCompressorNode) ?*AudioParam.AudioParam {
     return self._release;
 }
 
-/// connect — no-op,图在 startRendering 时从已创建节点重建。
-pub fn connect(_: *DynamicsCompressorNode) void {}
+pub fn getReduction(_: *DynamicsCompressorNode) f32 {
+    return 0;
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(DynamicsCompressorNode);
@@ -79,5 +83,5 @@ pub const JsApi = struct {
     pub const ratio = bridge.accessor(DynamicsCompressorNode.getRatio, null, .{});
     pub const attack = bridge.accessor(DynamicsCompressorNode.getAttack, null, .{});
     pub const release = bridge.accessor(DynamicsCompressorNode.getRelease, null, .{});
-    pub const connect = bridge.function(DynamicsCompressorNode.connect, .{});
+    pub const reduction = bridge.accessor(DynamicsCompressorNode.getReduction, null, .{});
 };

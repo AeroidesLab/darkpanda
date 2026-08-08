@@ -1,0 +1,110 @@
+<!doctype html>
+<script src="../testing.js"></script>
+
+<script id="chrome_defaults_and_rendering" type="module">
+  const state = await testing.async();
+  const context = new OfflineAudioContext(1, 5000, 44100);
+  const analyser = context.createAnalyser();
+  const oscillator = context.createOscillator();
+  const compressor = context.createDynamicsCompressor();
+  const biquad = context.createBiquadFilter();
+
+  testing.expectTrue(context instanceof BaseAudioContext);
+  testing.expectTrue(context instanceof EventTarget);
+  testing.expectTrue(analyser instanceof AudioNode);
+  testing.expectTrue(oscillator instanceof AudioScheduledSourceNode);
+  testing.expectEqual(44100, analyser.context.sampleRate);
+  testing.expectEqual(2, analyser.channelCount);
+  testing.expectEqual("max", analyser.channelCountMode);
+  testing.expectEqual("speakers", analyser.channelInterpretation);
+  testing.expectEqual(2048, analyser.fftSize);
+  testing.expectEqual(1024, analyser.frequencyBinCount);
+  testing.expectEqual(-30, analyser.maxDecibels);
+  testing.expectEqual(-100, analyser.minDecibels);
+  testing.expectEqual(1, analyser.numberOfInputs);
+  testing.expectEqual(1, analyser.numberOfOutputs);
+  testing.expectEqual(0.8, analyser.smoothingTimeConstant);
+
+  testing.expectEqual(440, oscillator.frequency.defaultValue);
+  testing.expectEqual(-22050, oscillator.frequency.minValue);
+  testing.expectEqual(22050, oscillator.frequency.maxValue);
+  testing.expectEqual(-153600, oscillator.detune.minValue);
+  testing.expectEqual(153600, oscillator.detune.maxValue);
+  testing.expectEqual(350, biquad.frequency.defaultValue);
+  testing.expectEqual(22050, biquad.frequency.maxValue);
+  testing.expectEqual(1541.273681640625, biquad.gain.maxValue);
+  testing.expectEqual(Math.fround(0.003), compressor.attack.defaultValue);
+  testing.expectEqual(30, compressor.knee.defaultValue);
+  testing.expectEqual(40, compressor.knee.maxValue);
+  testing.expectEqual(12, compressor.ratio.defaultValue);
+  testing.expectEqual(20, compressor.ratio.maxValue);
+  testing.expectEqual(0.25, compressor.release.defaultValue);
+  testing.expectEqual(1, compressor.release.maxValue);
+  testing.expectEqual(-24, compressor.threshold.defaultValue);
+  testing.expectEqual(-100, compressor.threshold.minValue);
+  testing.expectEqual(0, compressor.reduction);
+
+  const silence = new Float32Array(analyser.frequencyBinCount);
+  analyser.getFloatFrequencyData(silence);
+  testing.expectEqual(1, new Set(silence).size);
+  testing.expectEqual(-Infinity, silence[0]);
+
+  oscillator.type = "triangle";
+  oscillator.frequency.value = 10000;
+  compressor.threshold.value = -50;
+  compressor.knee.value = 40;
+  compressor.attack.value = 0;
+  oscillator.connect(compressor);
+  compressor.connect(analyser);
+  compressor.connect(context.destination);
+  oscillator.start(0);
+
+  const order = [];
+  context.oncomplete = (event) => {
+    order.push("property");
+    testing.expectTrue(event.isTrusted);
+    testing.expectTrue(event instanceof OfflineAudioCompletionEvent);
+    testing.expectEqual(context, event.target);
+    state.resolve(event.renderedBuffer);
+  };
+  context.addEventListener("complete", () => order.push("listener"));
+  const rendered = context.startRendering().then((buffer) => {
+    order.push("promise");
+    return buffer;
+  });
+
+  await state.done(async (eventBuffer) => {
+    const promiseBuffer = await rendered;
+    testing.expectEqual(eventBuffer, promiseBuffer);
+    testing.expectEqual(["property", "listener", "promise"], order);
+    testing.expectEqual("closed", context.state);
+
+    const channel = eventBuffer.getChannelData(0);
+    const copy = new Float32Array(channel.length);
+    eventBuffer.copyFromChannel(copy, 0);
+    testing.expectEqual(Array.from(channel), Array.from(copy));
+    channel[4000] = 0.125;
+    eventBuffer.copyFromChannel(copy, 0);
+    testing.expectEqual(0.125, copy[4000]);
+
+    const frequency = new Float32Array(analyser.frequencyBinCount);
+    const time = new Float32Array(analyser.fftSize);
+    analyser.getFloatFrequencyData(frequency);
+    analyser.getFloatTimeDomainData(time);
+    testing.expectTrue(frequency.some(Number.isFinite));
+    testing.expectTrue(time.some((value) => value !== 0));
+  });
+</script>
+
+<script id="zero_frequency_is_silent" type="module">
+  const state = await testing.async();
+  const context = new OfflineAudioContext(1, 100, 44100);
+  const oscillator = context.createOscillator();
+  oscillator.frequency.value = 0;
+  oscillator.start(0);
+  context.oncomplete = (event) => state.resolve(event.renderedBuffer);
+  context.startRendering();
+  await state.done((buffer) => {
+    testing.expectEqual([0], Array.from(new Set(buffer.getChannelData(0))));
+  });
+</script>

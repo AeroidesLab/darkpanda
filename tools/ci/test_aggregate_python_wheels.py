@@ -30,13 +30,16 @@ class AggregatePythonWheelsTests(unittest.TestCase):
         write_json(
             self.resolved,
             {
-                "schema": "darkpanda-resolved-inputs/v6",
+                "schema": "darkpanda-resolved-inputs/v7",
                 "pythonBinding": {
                     "repository": "AeroidesLab/py-darkpanda",
                     "revision": self.python_revision,
                 },
                 "darkpanda": {"revision": self.browser_revision},
-                "browserProfile": {"profileSha256": self.profile},
+                "browserProfile": {
+                    "profileSha256": self.profile,
+                    "googleChromeStableVersion": "149.0.7827.201",
+                },
             },
         )
         for target_id in subject.TARGETS:

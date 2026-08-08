@@ -4,10 +4,18 @@
     "browser": "fixed",
     "components": "latest-main-at-build-start"
   },
-  "chrome_for_testing_version": "149.0.7827.203",
-  "chromium_revision": "48860e577c01de4a313192cc79596c46b52efb3a",
+  "google_chrome_stable": {
+    "version": "149.0.7827.201",
+    "platform": "win64",
+    "omaha_app_id": "{8A69D345-D564-463C-AFF1-A69D9E530F96}",
+    "package_url": "https://dl.google.com/release2/chrome/d2ng6m5trxz4lcwk46uo7xsksy_149.0.7827.201/-8a69d345-d564-463c-aff1-a69d9e530f96-_149.0.7827.201_all_ivjf7mwk7pcrjwgfbxvph6pzlm.crx3",
+    "package_sha256": "8f7a70f1d836fa3a24efcb8560411fd9d20fdaff140979e3d17c82184e29f8e7",
+    "package_size": 482862881,
+    "installer_name": "149.0.7827.201_chrome_installer_uncompressed.exe"
+  },
+  "chromium_revision": "6a7b3dbec3b2ca25877c2553b5473b2f277ef644",
   "chromium_deps": {
-    "gitiles_url": "https://chromium.googlesource.com/chromium/src/+/48860e577c01de4a313192cc79596c46b52efb3a/DEPS?format=TEXT",
+    "gitiles_url": "https://chromium.googlesource.com/chromium/src/+/6a7b3dbec3b2ca25877c2553b5473b2f277ef644/DEPS?format=TEXT",
     "decoded_sha256": "6379a8a30190ea2a8a26f76c2b19e2b1769623bcd118895a85d7638c981f59be"
   },
   "skia_revision": "75c589e1f436688fca8f5b7f7a8affeafaa4f923",

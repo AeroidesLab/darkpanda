@@ -1,9 +1,9 @@
-"""Chrome-149 oracle and native regression for stale Window realm objects.
+"""Google Chrome Stable 149 oracle and native stale-realm regression.
 
 The fixture keeps one iframe WindowProxy while the iframe navigates from
 127.0.0.1 (A1), to localhost (B), and back to 127.0.0.1 (A2).  The host alias
 makes B cross-origin without external network access.  Run against either the
-Chrome-for-Testing CDP endpoint or the DarkPanda native ABI; no browser build is
+Google Chrome Stable CDP endpoint or the DarkPanda native ABI; no browser build is
 performed by this script.
 """
 
@@ -22,7 +22,7 @@ from typing import Any, Iterator
 import urllib.request
 
 
-EXPECTED_CHROME = "Chrome/149.0.7827.203"
+EXPECTED_CHROME = "Chrome/149.0.7827.201"
 EXPECTED_V8 = "14.9.207.35"
 FIXTURE = "src/browser/tests/window/windowproxy_stale_realm.html"
 RESULT_EXPRESSION = """

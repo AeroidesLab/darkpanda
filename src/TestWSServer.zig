@@ -85,7 +85,7 @@ fn runImpl(self: *TestWSServer, wg: *std.Thread.WaitGroup) !void {
 
     try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
     try posix.bind(socket, &addr.any, addr.getOsSockLen());
-    try posix.listen(socket, 8);
+    try posix.listen(socket, @intCast(std.c.SOMAXCONN));
 
     var bound_addr: std.net.Address = undefined;
     var bound_addr_len: posix.socklen_t = @sizeOf(std.net.Address);

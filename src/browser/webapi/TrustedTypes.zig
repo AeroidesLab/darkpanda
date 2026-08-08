@@ -874,7 +874,7 @@ fn isHtmlKnownNamespace(namespace: []const u8) bool {
         std.mem.eql(u8, namespace, mathml_namespace);
 }
 
-// Chrome 149.0.7827.203's generated EVENT_HANDLER_LIST, in the observable
+// Chrome Stable 149.0.7827.201's generated EVENT_HANDLER_LIST, in the observable
 // order emitted by TrustedTypePolicyFactory.getTypeMapping(). The source list
 // is generated from Blink's complete Web IDL database, including handler
 // attributes whose owning API is runtime-gated; it is intentionally broader

@@ -5,8 +5,8 @@
 
 const builtin = @import("builtin");
 
-pub const chrome149_full_version = "149.0.7827.203";
-pub const chrome149_chromium_revision = "48860e577c01de4a313192cc79596c46b52efb3a";
+pub const chrome149_full_version = "149.0.7827.201";
+pub const chrome149_chromium_revision = "6a7b3dbec3b2ca25877c2553b5473b2f277ef644";
 pub const chrome149_v8_version = "14.9.207.35";
 
 pub const Id = enum(u32) {
@@ -174,8 +174,8 @@ pub fn fromInt(value: u32) ?Id {
 test "Chrome149 profile is internally version coherent" {
     const std = @import("std");
     const profile = get(.chrome149);
-    try std.testing.expectEqualStrings("149.0.7827.203", profile.ua_full_version);
-    try std.testing.expectEqualStrings("149.0.7827.203", profile.full_version_list[0].version);
+    try std.testing.expectEqualStrings("149.0.7827.201", profile.ua_full_version);
+    try std.testing.expectEqualStrings("149.0.7827.201", profile.full_version_list[0].version);
     try std.testing.expect(std.mem.indexOf(u8, profile.user_agent, "Chrome/149.0.0.0") != null);
     try std.testing.expect(std.mem.indexOf(u8, profile.sec_ch_ua_header, "\"Google Chrome\";v=\"149\"") != null);
 }

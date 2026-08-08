@@ -153,8 +153,29 @@
   testing.expectEqual('number', typeof top2);
   testing.expectEqual('number', typeof left2);
 
-  // Siblings should have different positions (either different x or y)
-  testing.expectTrue(top1 !== top2 || left1 !== left2);
+  // Block siblings share a horizontal origin and flow vertically.
+  testing.expectEqual(left1, left2);
+  testing.expectTrue(top1 !== top2);
+}
+</script>
+
+<script id="transformedBoundingRect">
+{
+  const style = document.createElement('style');
+  style.textContent = '.transformed-bounds { position:absolute;left:0;top:0;width:100px;height:100px;transform:rotate(45deg) }';
+  document.head.appendChild(style);
+  const div = document.createElement('div');
+  div.className = 'transformed-bounds';
+  document.body.appendChild(div);
+  const rect = div.getBoundingClientRect();
+  testing.expectEqual(-20.710678100585938, rect.x);
+  testing.expectEqual(-20.710678100585938, rect.y);
+  testing.expectEqual(141.42135620117188, rect.width);
+  testing.expectEqual(141.42135620117188, rect.height);
+  testing.expectEqual(rect.width, rect.right - rect.left);
+  testing.expectEqual(rect.height, rect.bottom - rect.top);
+  div.remove();
+  style.remove();
 }
 </script>
 

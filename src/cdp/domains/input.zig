@@ -178,8 +178,8 @@ test "cdp.input: dispatchMouseEvent mouseMoved fires hover events" {
         \\t.addEventListener('mouseenter', () => { window.entered = true; });
     , null);
 
-    const rect_x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x", null)).toF64();
-    const rect_y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y", null)).toF64();
+    const rect_x = try (try ls.local.compileAndRun("{ const r = document.getElementById('hoverTarget').getBoundingClientRect(); r.x + r.width / 2 }", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("{ const r = document.getElementById('hoverTarget').getBoundingClientRect(); r.y + r.height / 2 }", null)).toF64();
 
     try ctx.processMessage(.{
         .id = 1,
@@ -367,7 +367,7 @@ test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click
 
     _ = try ls.local.compileAndRun(
         \\const t = document.getElementById('hoverTarget');
-        \\t.addEventListener('mousedown', (e) => { window.downButton = e.button; });
+        \\t.addEventListener('mousedown', (e) => { if (e.button === 2) window.downButton = e.button; });
         \\t.addEventListener('contextmenu', (e) => { window.ctxButton = e.button; });
         \\t.addEventListener('dblclick', () => { window.dbl = true; });
     , null);
@@ -387,15 +387,30 @@ test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click
         .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = "right" },
     });
 
-    // Left button with clickCount 2 fires dblclick.
+    // Chrome emits dblclick after two complete press/release sequences.
     try ctx.processMessage(.{
         .id = 3,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 1 },
+    });
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 1 },
+    });
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 2 },
+    });
+    try ctx.processMessage(.{
+        .id = 6,
         .method = "Input.dispatchMouseEvent",
         .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 2 },
     });
 
-    const result = try ls.local.compileAndRun("window.downButton === 2 && window.ctxButton === 2 && window.dbl === true", null);
-    try testing.expect(result.isTrue());
+    const result = try ls.local.compileAndRun("[window.downButton, window.ctxButton, window.dbl].join(',')", null);
+    try std.testing.expectEqualStrings("2,2,true", try (try result.toString()).toSlice());
 }
 
 test "cdp.input: dispatchKeyEvent Tab runs sequential focus navigation" {

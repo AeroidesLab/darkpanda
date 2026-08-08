@@ -32,6 +32,7 @@ const History = @import("History.zig");
 const Navigation = @import("navigation/Navigation.zig");
 const Crypto = @import("Crypto.zig");
 const TrustedTypes = @import("TrustedTypes.zig");
+const SpeechSynthesis = @import("speech/SpeechSynthesis.zig");
 const CSS = @import("CSS.zig");
 const Navigator = @import("Navigator.zig");
 const ModelContext = @import("ModelContext.zig");
@@ -91,6 +92,7 @@ _local_storage: ?*storage.Lookup = null,
 _session_storage: ?*storage.Lookup = null,
 _cookie_store: ?*CookieStore = null,
 _idb_factory: ?*idb.IDBFactory = null,
+_speech_synthesis: ?*SpeechSynthesis = null,
 _on_load: ?js.Function.Global = null,
 _on_pageshow: ?js.Function.Global = null,
 _on_pagehide: ?js.Function.Global = null,
@@ -238,6 +240,10 @@ pub fn getConsole(self: *Window) *Console {
     return &self._console;
 }
 
+pub fn getChrome(_: *Window, exec: *js.Execution) js.Object {
+    return exec.js.local.?.newObject();
+}
+
 pub fn setConsole(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "console");
 }
@@ -344,6 +350,13 @@ pub fn getCSS(self: *Window) *CSS {
 
 pub fn getPerformance(self: *Window) *Performance {
     return &self._performance;
+}
+
+pub fn getSpeechSynthesis(self: *Window, frame: *Frame) !*SpeechSynthesis {
+    if (self._speech_synthesis) |speech| return speech;
+    const speech = try SpeechSynthesis.init(frame);
+    self._speech_synthesis = speech;
+    return speech;
 }
 
 pub fn setPerformance(self: *Window, value: js.Value) void {
@@ -1818,6 +1831,7 @@ pub const JsApi = struct {
 
     pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = .{ .internal = 1 }, .deletable = false });
     pub const console = bridge.accessor(Window.getConsole, Window.setConsole, .{});
+    pub const chrome = bridge.accessor(Window.getChrome, null, .{});
 
     pub const top = bridge.accessor(Window.getTop, null, .{ .deletable = false, .cross_origin_getter_allowed = true });
     pub const self = bridge.accessor(Window.getWindow, Window.setSelf, .{ .cross_origin_getter_allowed = true });
@@ -1827,6 +1841,7 @@ pub const JsApi = struct {
     pub const screen = bridge.accessor(Window.getScreen, Window.setScreen, .{});
     pub const visualViewport = bridge.accessor(Window.getVisualViewport, Window.setVisualViewport, .{});
     pub const performance = bridge.accessor(Window.getPerformance, Window.setPerformance, .{});
+    pub const speechSynthesis = bridge.accessor(Window.getSpeechSynthesis, null, .{});
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{});
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{});
     pub const cookieStore = bridge.accessor(Window.getCookieStore, null, .{});

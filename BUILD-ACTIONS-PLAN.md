@@ -2,7 +2,7 @@
 
 ## 1. 唯一版本规则
 
-- 浏览器版本固定为 Chrome for Testing `149.0.7827.203`。
+- 浏览器版本固定为 Windows Google Chrome Stable `149.0.7827.201`。
 - Chromium、Skia、LLVM、Chromium Rust、GN、Ninja、Linux sysroot、Zig、V8 和
   zig-v8 fork 的精确版本由 DarkPanda 主仓库的
   `tools/ci/chromium-profile.json` 与根目录 `DEPS` 管理。

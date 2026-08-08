@@ -861,8 +861,7 @@ test "cdp.Network: canClearBrowserCache" {
         .method = "Network.canClearBrowserCache",
     });
 
-    // Cache is disabled in standard tests for now.
-    try ctx.expectSentResult(.{ .result = false }, .{ .id = 1 });
+    try ctx.expectSentResult(.{ .result = true }, .{ .id = 1 });
 }
 
 test "cdp.Network: setCacheDisabled disables cache" {
