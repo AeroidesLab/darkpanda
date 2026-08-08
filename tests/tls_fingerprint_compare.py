@@ -21,6 +21,7 @@ TRUST_ANCHORS_EXTENSION = 0xCA34
 PRE_SHARED_KEY_EXTENSION = 41
 KEY_SHARE_EXTENSION = 51
 ENCRYPTED_CLIENT_HELLO_EXTENSION = 0xFE0D
+ECH_GREASE_PAYLOAD_LENGTHS = {144, 176, 208, 240}
 CHROME_CAPTURE_SCHEMA = "darkpanda-google-chrome-stable-capture/v1"
 PROFILE_PATH = Path(__file__).parents[1] / "tools" / "ci" / "chromium-profile.json"
 TARGET_CHROME_VERSION = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))[
@@ -194,6 +195,34 @@ def dynamic_shape(value: Any) -> Any:
     return normalize_grease(value)
 
 
+def normalize_ech_grease(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate BoringSSL's randomized ECH GREASE envelope."""
+
+    assert set(payload) == {"data"}, payload
+    data = payload["data"]
+    assert isinstance(data, str) and re.fullmatch(r"[0-9a-fA-F]+", data), payload
+    raw = bytes.fromhex(data)
+    assert len(raw) >= 10, payload
+    assert raw[0] == 0, payload
+    enc_length = int.from_bytes(raw[6:8], "big")
+    assert enc_length == 32, payload
+    payload_length_offset = 8 + enc_length
+    assert len(raw) >= payload_length_offset + 2, payload
+    encrypted_payload_length = int.from_bytes(
+        raw[payload_length_offset : payload_length_offset + 2], "big"
+    )
+    assert encrypted_payload_length == len(raw) - payload_length_offset - 2, payload
+    assert encrypted_payload_length in ECH_GREASE_PAYLOAD_LENGTHS, payload
+    return {
+        "clientHelloType": 0,
+        "kdfId": int.from_bytes(raw[1:3], "big"),
+        "aeadId": int.from_bytes(raw[3:5], "big"),
+        "configId": "<random-byte>",
+        "enc": "<random-bytes:32>",
+        "payload": "<random-boringssl-ech-grease>",
+    }
+
+
 def normalize_extension(extension: dict[str, Any]) -> dict[str, Any]:
     """Normalize one extension while retaining order-relevant semantics."""
 
@@ -211,7 +240,9 @@ def normalize_extension(extension: dict[str, Any]) -> dict[str, Any]:
             )
             for key, value in payload.items()
         }
-    elif number in {PRE_SHARED_KEY_EXTENSION, ENCRYPTED_CLIENT_HELLO_EXTENSION}:
+    elif number == ENCRYPTED_CLIENT_HELLO_EXTENSION:
+        payload = normalize_ech_grease(payload)
+    elif number == PRE_SHARED_KEY_EXTENSION:
         payload = dynamic_shape(payload)
     else:
         payload = normalize_grease(payload)
@@ -332,7 +363,7 @@ def require_phase(capture: dict[str, Any], *, resumed: bool) -> None:
     assert order[terminal_grease_index] == "GREASE", capture
     if resumed:
         assert order[-1] == PRE_SHARED_KEY_EXTENSION, capture
-    expected_prefix = "t13d1518h2_" if resumed else "t13d1517h2_"
+    expected_prefix = "t13d1517h2_" if resumed else "t13d1516h2_"
     assert str(capture["ja4"]).startswith(expected_prefix), capture
 
 

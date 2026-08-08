@@ -78,7 +78,7 @@ def capture(*, grease: int = 0x0A0A, resumed: bool = False) -> dict[str, Any]:
             "ciphers": [f"GREASE (0x{grease:04x})", "TLS_AES_128_GCM_SHA256"],
             "extensions": extensions,
             "ja3": "771,4865,10-16-51,4588-29,0",
-            "ja4": ("t13d1518h2_same" if resumed else "t13d1517h2_same"),
+            "ja4": ("t13d1517h2_same" if resumed else "t13d1516h2_same"),
             "ja4_r": "same-ja4-r",
             "peetprint": "same-peetprint",
         },
@@ -100,6 +100,11 @@ def capture(*, grease: int = 0x0A0A, resumed: bool = False) -> dict[str, Any]:
                 {
                     "frame_type": "HEADERS",
                     "length": 100,
+                    "priority": {
+                        "weight": 256,
+                        "depends_on": 0,
+                        "exclusive": 1,
+                    },
                     "headers": [
                         ":method: GET",
                         ":authority: tls.peet.ws",
@@ -111,6 +116,26 @@ def capture(*, grease: int = 0x0A0A, resumed: bool = False) -> dict[str, Any]:
                 },
             ],
         },
+    }
+
+
+def ech_grease(
+    payload_length: int, fill: int, *, aead_id: int = 1
+) -> dict[str, Any]:
+    """Build one structurally valid randomized BoringSSL ECH GREASE value."""
+
+    data = (
+        b"\x00\x00\x01"
+        + aead_id.to_bytes(2, "big")
+        + bytes([fill])
+        + b"\x00\x20"
+        + bytes([fill]) * 32
+        + payload_length.to_bytes(2, "big")
+        + bytes([fill]) * payload_length
+    )
+    return {
+        "name": "extensionEncryptedClientHello (boringssl) (65037)",
+        "data": data.hex(),
     }
 
 
@@ -204,6 +229,19 @@ class StrictFingerprintCompareTests(unittest.TestCase):
         )
         self.assert_mismatch(chrome, wreq)
 
+    def test_ech_grease_random_length_and_bytes_are_normalized(self) -> None:
+        short = compare.normalize_extension(ech_grease(144, 0x11))
+        long = compare.normalize_extension(ech_grease(240, 0xEE))
+        self.assertEqual(short, long)
+        self.assertNotEqual(
+            short,
+            compare.normalize_extension(ech_grease(144, 0x11, aead_id=2)),
+        )
+
+        malformed = ech_grease(145, 0x11)
+        with self.assertRaises(AssertionError):
+            compare.normalize_extension(malformed)
+
     def test_http2_settings_and_header_order_are_strict(self) -> None:
         chrome = capture()
         settings = copy.deepcopy(chrome)
@@ -215,6 +253,14 @@ class StrictFingerprintCompareTests(unittest.TestCase):
             headers["http2"]["sent_frames"][2]["headers"][-2:]
         )
         self.assert_mismatch(chrome, headers)
+
+        priority = copy.deepcopy(chrome)
+        priority["http2"]["sent_frames"][2]["priority"] = {
+            "weight": 220,
+            "depends_on": 0,
+            "exclusive": 1,
+        }
+        self.assert_mismatch(chrome, priority)
 
 
 class StableChromeCaptureTests(unittest.TestCase):

@@ -31,9 +31,10 @@ pub const chrome149_transport_manifest =
     "arch=x86_64\n" ++
     "tls=BoringSSL\n" ++
     "trust_anchors=disabled\n" ++
+    "h2_headers_weight=256\n" ++
     "http=2,1.1\n";
 pub const chrome149_transport_manifest_digest =
-    "bb3e4162663b2ae8d72a6120554bebe4b66f546f4dba473e4185d700a6cd6db1";
+    "dfe52c852a282f7d013005ef3d21eec0b657d970e23acdf7e7fcbfe41e64ec04";
 
 const chrome149_user_agent =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " ++
@@ -1002,7 +1003,7 @@ pub const legacy_chrome149_windows_json =
     \\  },
     \\  "network": {
     \\    "transportProfileId": "wreq-6.0.0-rc.29/chrome149/windows-x64",
-    \\    "manifestDigest": "bb3e4162663b2ae8d72a6120554bebe4b66f546f4dba473e4185d700a6cd6db1"
+    \\    "manifestDigest": "dfe52c852a282f7d013005ef3d21eec0b657d970e23acdf7e7fcbfe41e64ec04"
     \\  },
     \\  "provenance": {
     \\    "source": "legacy_catalog",

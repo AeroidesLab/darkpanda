@@ -75,7 +75,7 @@ def main() -> None:
         "Chrome149 Windows must not force trust_anchors (0xca34/51764); "
         f"observed JA4={evidence['ja4']} extensions={sorted(extensions)}"
     )
-    assert str(evidence["ja4"]).startswith("t13d1517h2_"), evidence
+    assert str(evidence["ja4"]).startswith("t13d1516h2_"), evidence
     print(json.dumps(evidence, separators=(",", ":")))
     print("darkpanda native wreq TLS/HTTP2: PASS")
 
