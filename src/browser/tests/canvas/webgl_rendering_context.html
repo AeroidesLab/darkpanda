@@ -70,9 +70,9 @@
   testing.expectEqual(UNMASKED_VENDOR_WEBGL, 0x9245);
   testing.expectEqual(UNMASKED_RENDERER_WEBGL, 0x9246);
 
-  testing.expectEqual("Google Inc. (Google)", ctx.getParameter(UNMASKED_VENDOR_WEBGL));
+  testing.expectEqual("Google Inc. (Microsoft)", ctx.getParameter(UNMASKED_VENDOR_WEBGL));
   testing.expectEqual(
-    "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C) Direct3D11 vs_5_0 ps_5_0, D3D11)",
     ctx.getParameter(UNMASKED_RENDERER_WEBGL),
   );
 }
@@ -100,7 +100,24 @@
   testing.expectEqual(256, gl.drawingBufferWidth);
   testing.expectEqual(256, gl.drawingBufferHeight);
   testing.expectEqual(true, gl.getContextAttributes().antialias);
-  testing.expectEqual([16384, 16384], Array.from(gl.getParameter(gl.MAX_VIEWPORT_DIMS)));
+  testing.expectEqual([32767, 32767], Array.from(gl.getParameter(gl.MAX_VIEWPORT_DIMS)));
+  const expectedCapabilities = new Map([
+    [gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS, 32],
+    [gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS, 16],
+    [gl.MAX_TEXTURE_IMAGE_UNITS, 16],
+    [gl.MAX_ELEMENTS_VERTICES, 2147483647],
+    [gl.MAX_ELEMENTS_INDICES, 2147483647],
+    [gl.MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS, 120],
+    [gl.MAX_SAMPLES, 16],
+    [gl.MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS, 212992],
+    [gl.MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS, 200704],
+    [gl.MAX_VERTEX_OUTPUT_COMPONENTS, 120],
+    [gl.MAX_FRAGMENT_INPUT_COMPONENTS, 120],
+    [gl.MAX_ELEMENT_INDEX, 4294967294],
+  ]);
+  for (const [parameter, expected] of expectedCapabilities) {
+    testing.expectEqual(expected, gl.getParameter(parameter));
+  }
 
   const program = gl.createProgram();
   const shader = gl.createShader(gl.VERTEX_SHADER);
@@ -120,6 +137,10 @@
 
   const highFloat = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
   testing.expectEqual({precision: 23, rangeMax: 127, rangeMin: 127}, highFloat);
+  const lowFloat = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.LOW_FLOAT);
+  testing.expectEqual({precision: 23, rangeMax: 127, rangeMin: 127}, lowFloat);
+  const highInt = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_INT);
+  testing.expectEqual({precision: 0, rangeMax: 30, rangeMin: 31}, highInt);
 }
 </script>
 
@@ -140,7 +161,7 @@
   worker.onmessage = event => state.resolve(event.data);
   await state.done(data => {
     testing.expectTrue(data.ok, data.error);
-    testing.expectEqual('Google Inc. (Google)', data.vendor);
+    testing.expectEqual('Google Inc. (Microsoft)', data.vendor);
     testing.expectEqual(8, data.width);
   });
 }

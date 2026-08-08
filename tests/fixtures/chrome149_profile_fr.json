@@ -64,7 +64,7 @@
   },
   "network": {
     "transportProfileId": "wreq-6.0.0-rc.29/chrome149/windows-x64",
-    "manifestDigest": "a4f151202d8303f6523d0e2114cb7dd1bc0b771adb3fceab9b96baf9ae9fcdaa"
+    "manifestDigest": "bb3e4162663b2ae8d72a6120554bebe4b66f546f4dba473e4185d700a6cd6db1"
   },
   "provenance": {
     "source": "manual",

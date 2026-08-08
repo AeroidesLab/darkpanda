@@ -59,7 +59,6 @@ def capture(*, grease: int = 0x0A0A, resumed: bool = False) -> dict[str, Any]:
                 {"X25519MLKEM768 (4588)": "00" * 1216},
             ],
         },
-        {"name": "trust_anchors (0xca34)", "data": "0000"},
         {"name": f"GREASE (0x{grease + 0x2020:04x})", "data": "ef01"},
     ]
     if resumed:
@@ -78,7 +77,7 @@ def capture(*, grease: int = 0x0A0A, resumed: bool = False) -> dict[str, Any]:
             "tls_version_negotiated": "772",
             "ciphers": [f"GREASE (0x{grease:04x})", "TLS_AES_128_GCM_SHA256"],
             "extensions": extensions,
-            "ja3": "771,4865,10-16-51-51764,4588-29,0",
+            "ja3": "771,4865,10-16-51,4588-29,0",
             "ja4": ("t13d1518h2_same" if resumed else "t13d1517h2_same"),
             "ja4_r": "same-ja4-r",
             "peetprint": "same-peetprint",
@@ -166,7 +165,7 @@ class StrictFingerprintCompareTests(unittest.TestCase):
         chrome = capture()
         wreq = copy.deepcopy(chrome)
         wreq["tls"]["extensions"][1:3] = reversed(wreq["tls"]["extensions"][1:3])
-        wreq["tls"]["ja3"] = "771,4865,16-10-51-51764,4588-29,0"
+        wreq["tls"]["ja3"] = "771,4865,16-10-51,4588-29,0"
         compare.compare_phase(
             compare.normalized_peet(chrome, "chrome"),
             compare.normalized_peet(wreq, "wreq"),
@@ -196,6 +195,14 @@ class StrictFingerprintCompareTests(unittest.TestCase):
         alpn = copy.deepcopy(chrome)
         alpn["tls"]["extensions"][2]["protocols"].reverse()
         self.assert_mismatch(chrome, alpn)
+
+    def test_trust_anchors_extension_is_rejected(self) -> None:
+        chrome = capture()
+        wreq = copy.deepcopy(chrome)
+        wreq["tls"]["extensions"].insert(
+            -1, {"name": "trust_anchors (0xca34)", "data": "0000"}
+        )
+        self.assert_mismatch(chrome, wreq)
 
     def test_http2_settings_and_header_order_are_strict(self) -> None:
         chrome = capture()

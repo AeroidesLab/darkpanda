@@ -1,4 +1,4 @@
-"""Deterministic local Chrome149 trust_anchors + TLS 1.3 PSK test.
+"""Deterministic local Chrome149 extension inventory + TLS 1.3 PSK test.
 
 The fixture keeps one wreq transport/client alive while a local TLS server
 closes each HTTP/1.1 connection.  This forces two TCP/TLS handshakes without
@@ -406,8 +406,8 @@ def main() -> None:
         resumed_trust_anchors = extension_payload(resumed, TRUST_ANCHORS_EXTENSION)
         cold_types = ordered_extension_types(cold)
         resumed_types = ordered_extension_types(resumed)
-        assert cold_trust_anchors == b"\x00\x00", cold
-        assert resumed_trust_anchors == b"\x00\x00", resumed
+        assert cold_trust_anchors is None, cold
+        assert resumed_trust_anchors is None, resumed
         assert PRE_SHARED_KEY_EXTENSION not in cold_types, cold_types
         assert PRE_SHARED_KEY_EXTENSION in resumed_types, resumed_types
 
@@ -415,12 +415,12 @@ def main() -> None:
             "serverSessionReused": reused,
             "cold": {
                 "orderedExtensions": cold_types,
-                "trustAnchorsData": cold_trust_anchors.hex(),
+                "trustAnchors": False,
                 "preSharedKey": PRE_SHARED_KEY_EXTENSION in cold_types,
             },
             "resumed": {
                 "orderedExtensions": resumed_types,
-                "trustAnchorsData": resumed_trust_anchors.hex(),
+                "trustAnchors": False,
                 "preSharedKey": PRE_SHARED_KEY_EXTENSION in resumed_types,
             },
         }
@@ -428,7 +428,7 @@ def main() -> None:
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
         print(json.dumps(evidence, separators=(",", ":")))
-        print("wreq Chrome149 local TLS trust_anchors + PSK resumption: PASS")
+        print("wreq Chrome149 local TLS extension inventory + PSK resumption: PASS")
 
 
 if __name__ == "__main__":

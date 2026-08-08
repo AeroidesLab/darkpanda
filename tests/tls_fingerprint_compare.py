@@ -324,9 +324,7 @@ def extension_payload(capture: dict[str, Any], number: int) -> dict[str, Any] | 
 def require_phase(capture: dict[str, Any], *, resumed: bool) -> None:
     """Validate cold/resumed invariants before cross-client comparison."""
 
-    trust_anchors = extension_payload(capture, TRUST_ANCHORS_EXTENSION)
-    assert trust_anchors is not None, capture
-    assert str(trust_anchors.get("data") or "").lower() == "0000", capture
+    assert extension_payload(capture, TRUST_ANCHORS_EXTENSION) is None, capture
     assert (PRE_SHARED_KEY_EXTENSION in capture["extensionOrder"]) is resumed, capture
     order = capture["extensionOrder"]
     assert order and order[0] == "GREASE", capture

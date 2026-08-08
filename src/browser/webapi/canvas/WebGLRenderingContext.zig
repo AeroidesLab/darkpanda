@@ -224,20 +224,20 @@ pub fn getParameter(self: *const WebGLRenderingContext, pname: u32, exec: *js.Ex
         0x846E => jsValue([2]f64{ 1, 1 }, exec), // ALIASED_LINE_WIDTH_RANGE
         0x0B93, 0x0B98, 0x8CA4, 0x8CA5 => jsValue(@as(u64, std.math.maxInt(u32)), exec),
         0x0D33, 0x851C, 0x84E8 => jsValue(@as(u32, 16384), exec),
-        0x0D3A => jsValue([2]u32{ 16384, 16384 }, exec),
+        0x0D3A => jsValue([2]u32{ 32767, 32767 }, exec),
         0x0D50 => jsValue(@as(u32, 4), exec),
         0x8869 => jsValue(@as(u32, 16), exec),
         0x8DFB => jsValue(@as(u32, 4096), exec),
         0x8DFC => jsValue(@as(u32, 30), exec),
-        0x8B4D => jsValue(@as(u32, 64), exec),
-        0x8B4C, 0x8872 => jsValue(@as(u32, 32), exec),
+        0x8B4D => jsValue(@as(u32, 32), exec),
+        0x8B4C, 0x8872 => jsValue(@as(u32, 16), exec),
         0x8DFD => jsValue(@as(u32, 1024), exec),
         0x8B8C => jsValue(if (self._webgl2) "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)" else "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)", exec),
         0x1F00 => jsValue("WebKit", exec),
         0x1F01 => jsValue("WebKit WebGL", exec),
         0x1F02 => jsValue(if (self._webgl2) "WebGL 2.0 (OpenGL ES 3.0 Chromium)" else "WebGL 1.0 (OpenGL ES 2.0 Chromium)", exec),
         0x8069 => jsValue(@as(u32, 2048), exec),
-        0x80E8, 0x80E9 => jsValue(@as(u32, 1_048_576), exec),
+        0x80E8, 0x80E9 => jsValue(@as(u32, std.math.maxInt(i32)), exec),
         0x84FD => jsValue(@as(f64, 2), exec),
         0x8824, 0x8CDF => jsValue(@as(u32, 8), exec),
         0x8B49 => jsValue(@as(u32, 4096), exec),
@@ -246,20 +246,20 @@ pub fn getParameter(self: *const WebGLRenderingContext, pname: u32, exec: *js.Ex
         0x8905 => jsValue(@as(i32, 7), exec),
         0x8B4B => jsValue(@as(u32, 120), exec),
         0x8C80 => jsValue(@as(u32, 4), exec),
-        0x8C8A => jsValue(@as(u32, 64), exec),
+        0x8C8A => jsValue(@as(u32, 120), exec),
         0x8C8B => jsValue(@as(u32, 4), exec),
-        0x8D57 => jsValue(@as(u32, 4), exec),
+        0x8D57 => jsValue(@as(u32, 16), exec),
         0x8A2B, 0x8A2D => jsValue(@as(u32, 12), exec),
         0x8A2E, 0x8A2F => jsValue(@as(u32, 24), exec),
         0x8A30 => jsValue(@as(u32, 65_536), exec),
-        0x8A31 => jsValue(@as(u32, 266_240), exec),
-        0x8A33 => jsValue(@as(u32, 135_168), exec),
-        0x9122 => jsValue(@as(u32, 128), exec),
-        0x9125 => jsValue(@as(u32, 128), exec),
+        0x8A31 => jsValue(@as(u32, 212_992), exec),
+        0x8A33 => jsValue(@as(u32, 200_704), exec),
+        0x9122 => jsValue(@as(u32, 120), exec),
+        0x9125 => jsValue(@as(u32, 120), exec),
         0x9111, 0x9247 => jsValue(@as(u64, 0), exec),
-        0x8D6B => jsValue(@as(u64, std.math.maxInt(u32)), exec),
-        0x9245 => jsValue("Google Inc. (Google)", exec),
-        0x9246 => jsValue("ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)", exec),
+        0x8D6B => jsValue(@as(u64, std.math.maxInt(u32) - 1), exec),
+        0x9245 => jsValue("Google Inc. (Microsoft)", exec),
+        0x9246 => jsValue("ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C) Direct3D11 vs_5_0 ps_5_0, D3D11)", exec),
         0x84FF => jsValue(@as(u32, 16), exec),
         else => jsValue(null, exec),
     };
@@ -362,9 +362,9 @@ pub fn getShaderPrecisionFormat(_: *WebGLRenderingContext, shader: u32, precisio
     const high = precision == 0x8DF2 or precision == 0x8DF5;
     _ = shader;
     return if (integer)
-        .{ .precision = 0, .rangeMax = if (high) 31 else 15, .rangeMin = if (high) 31 else 15 }
+        .{ .precision = 0, .rangeMax = if (high) 30 else 15, .rangeMin = if (high) 31 else 15 }
     else
-        .{ .precision = if (high) 23 else 10, .rangeMax = if (high) 127 else 15, .rangeMin = if (high) 127 else 15 };
+        .{ .precision = 23, .rangeMax = 127, .rangeMin = 127 };
 }
 
 pub fn readPixels(_: *WebGLRenderingContext, _: i32, _: i32, _: f64, _: f64, _: u32, _: u32, destination: js.TypedArray(u8)) void {
