@@ -13,8 +13,6 @@
 
 const periodic_wave = @import("periodic_wave.zig");
 
-const INTERPOLATE_2_POINT: f32 = 2.0;
-
 pub const Oscillator = struct {
     pw: *const periodic_wave.PeriodicWave,
     clamped_frequency: f32,
@@ -49,37 +47,29 @@ pub const Oscillator = struct {
 
         var v_index: f64 = self.virtual_read_index;
 
-        if (incr >= INTERPOLATE_2_POINT) {
-            // 线性插值路径 (1000Hz 走这里)
-            for (0..num_samples) |k| {
-                // Chromium: const unsigned read_index_0 =
-                //   static_cast<unsigned>(virtual_read_index) & read_index_mask;
-                const read_index_0 = @as(usize, @intCast(@as(u64, @intFromFloat(v_index)))) & read_index_mask;
-                // Chromium: const unsigned read_index_1 = (read_index_0 + 1) & read_index_mask;
-                const read_index_1 = (read_index_0 + 1) & read_index_mask;
-                const s1_lower = lower[read_index_0];
-                const s2_lower = lower[read_index_1];
-                const s1_higher = higher[read_index_0];
-                const s2_higher = higher[read_index_1];
-                // Chromium: const float interpolation_factor =
-                //   static_cast<float>(virtual_read_index) - read_index_0;
-                // 这里 read_index_0 是 mask 后的值,与源码一致。
-                const interp_factor: f32 = @as(f32, @floatCast(v_index)) - @as(f32, @floatFromInt(read_index_0));
-                const sample_higher = s1_higher + interp_factor * (s2_higher - s1_higher);
-                const sample_lower = s1_lower + interp_factor * (s2_lower - s1_lower);
-                const sample = sample_higher + table_interp * (sample_lower - sample_higher);
-                out[k] = sample;
-                // Chromium: virtual_read_index += incr;
-                //   virtual_read_index -=
-                //     floor(virtual_read_index * inv_periodic_wave_size) * periodic_wave_size;
-                v_index += @as(f64, incr);
-                v_index -= @floor(v_index * inv_pw_size) * @as(f64, @floatFromInt(pw_size));
-            }
-            self.virtual_read_index = v_index;
-        } else {
-            // 低频率高阶插值路径 (本场景 1000Hz 不会走到)
-            @panic("low-frequency high-order interpolation path not needed for 1000Hz");
+        if (incr == 0) {
+            @memset(out[0..num_samples], 0);
+            return;
         }
+
+        // ponytail: two-point interpolation also covers sub-21.5Hz input;
+        // port Chromium's higher-order path only if low-frequency audio fidelity
+        // becomes observable outside fingerprint probes.
+        for (0..num_samples) |k| {
+            const read_index_0 = @as(usize, @intCast(@as(u64, @intFromFloat(v_index)))) & read_index_mask;
+            const read_index_1 = (read_index_0 + 1) & read_index_mask;
+            const s1_lower = lower[read_index_0];
+            const s2_lower = lower[read_index_1];
+            const s1_higher = higher[read_index_0];
+            const s2_higher = higher[read_index_1];
+            const interp_factor: f32 = @as(f32, @floatCast(v_index)) - @as(f32, @floatFromInt(read_index_0));
+            const sample_higher = s1_higher + interp_factor * (s2_higher - s1_higher);
+            const sample_lower = s1_lower + interp_factor * (s2_lower - s1_lower);
+            out[k] = sample_higher + table_interp * (sample_lower - sample_higher);
+            v_index += @as(f64, incr);
+            v_index -= @floor(v_index * inv_pw_size) * @as(f64, @floatFromInt(pw_size));
+        }
+        self.virtual_read_index = v_index;
     }
 };
 

@@ -4,6 +4,8 @@
 <script id=fingerprint_profile_consistency type=module>
   {
     const state = await testing.async();
+    testing.expectTrue('chrome' in window);
+    testing.expectEqual('object', typeof window.chrome);
     const ua = navigator.userAgentData;
     const high = await ua.getHighEntropyValues([
       'architecture', 'bitness', 'platformVersion', 'uaFullVersion',
@@ -25,8 +27,8 @@
 
     testing.expectEqual('Windows', ua.platform);
     testing.expectEqual(false, ua.mobile);
-    testing.expectEqual('149.0.7827.203', high.uaFullVersion);
-    testing.expectEqual('149.0.7827.203', high.fullVersionList[0].version);
+    testing.expectEqual('149.0.7827.201', high.uaFullVersion);
+    testing.expectEqual('149.0.7827.201', high.fullVersionList[0].version);
     testing.expectEqual('x86', high.architecture);
     testing.expectEqual('64', high.bitness);
     testing.expectEqual('19.0.0', high.platformVersion);

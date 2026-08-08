@@ -1130,6 +1130,7 @@ const PrivateSymbols = struct {
 
     child_nodes: Private,
     performance_observer_supported_entry_types: Private,
+    webidl_native_conversion_reason: Private,
 
     fn init(isolate: *v8.Isolate) PrivateSymbols {
         return .{
@@ -1138,12 +1139,17 @@ const PrivateSymbols = struct {
                 isolate,
                 "performance_observer_supported_entry_types",
             ),
+            .webidl_native_conversion_reason = Private.init(
+                isolate,
+                "webidl_native_conversion_reason",
+            ),
         };
     }
 
     fn deinit(self: *PrivateSymbols) void {
         self.child_nodes.deinit();
         self.performance_observer_supported_entry_types.deinit();
+        self.webidl_native_conversion_reason.deinit();
     }
 };
 

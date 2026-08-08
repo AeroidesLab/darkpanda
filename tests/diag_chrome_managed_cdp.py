@@ -1,7 +1,9 @@
-"""Chrome 149 CDP oracle for native mouse input in a managed challenge.
+"""Native mouse-input diagnostic for a real Chrome managed challenge.
 
 Creates and closes one dedicated target on an already-running debugging port.
-Only paths, geometry, event metadata and DOM labels are printed.
+It intentionally keeps the browser's real identity: this is not a fingerprint
+oracle and does not override User-Agent or client hints.  Only paths, geometry,
+event metadata and DOM labels are printed.
 """
 
 from __future__ import annotations
@@ -331,33 +333,6 @@ def oracle(port: int, fresh_context: bool = False) -> None:
         cdp.call("Page.enable")
         cdp.call("DOM.enable")
         cdp.call("Network.enable")
-        cdp.call("Network.setUserAgentOverride", {
-            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                         "AppleWebKit/537.36 (KHTML, like Gecko) "
-                         "Chrome/149.0.0.0 Safari/537.36",
-            "acceptLanguage": "en-US,en;q=0.9",
-            "platform": "Windows",
-            "userAgentMetadata": {
-                "brands": [
-                    {"brand": "Google Chrome", "version": "149"},
-                    {"brand": "Chromium", "version": "149"},
-                    {"brand": "Not_A Brand", "version": "99"},
-                ],
-                "fullVersionList": [
-                    {"brand": "Google Chrome", "version": "149.0.7827.203"},
-                    {"brand": "Chromium", "version": "149.0.7827.203"},
-                    {"brand": "Not_A Brand", "version": "99.0.0.0"},
-                ],
-                "fullVersion": "149.0.7827.203",
-                "platform": "Windows",
-                "platformVersion": "10.0.0",
-                "architecture": "x86",
-                "model": "",
-                "mobile": False,
-                "bitness": "64",
-                "wow64": False,
-            },
-        })
         cdp.call("Page.navigate", {"url": URL})
         deadline = time.monotonic() + 30
         frame_tree = cdp.call("Page.getFrameTree")["frameTree"]

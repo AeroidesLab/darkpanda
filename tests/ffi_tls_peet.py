@@ -71,12 +71,11 @@ def main() -> None:
     assert str(evidence["ja4"]).startswith("t13"), evidence
     assert evidence["ja3Hash"], evidence
     assert evidence["akamaiFingerprintHash"], evidence
-    assert trust_anchors is not None, (
-        "Chrome149 Windows requires trust_anchors (0xca34/51764); "
+    assert trust_anchors is None, (
+        "Chrome149 Windows must not force trust_anchors (0xca34/51764); "
         f"observed JA4={evidence['ja4']} extensions={sorted(extensions)}"
     )
-    assert str(trust_anchors.get("data") or "").lower() == "0000", trust_anchors
-    assert str(evidence["ja4"]).startswith("t13d1517h2_"), evidence
+    assert str(evidence["ja4"]).startswith("t13d1516h2_"), evidence
     print(json.dumps(evidence, separators=(",", ":")))
     print("darkpanda native wreq TLS/HTTP2: PASS")
 

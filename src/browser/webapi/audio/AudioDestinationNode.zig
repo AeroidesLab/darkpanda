@@ -15,20 +15,19 @@
 
 const std = @import("std");
 const js = @import("../../js/js.zig");
+const BaseAudioContext = @import("BaseAudioContext.zig");
+const AudioNode = @import("AudioNode.zig");
 
 const Execution = js.Execution;
 
 /// AudioDestinationNode — OfflineAudioContext.destination 的占位对象。
 /// connect 到此节点表示连接到最终输出。
 pub const AudioDestinationNode = @This();
+_proto: *AudioNode,
 
-pub fn init(exec: *const Execution) !*AudioDestinationNode {
-    return exec._factory.create(AudioDestinationNode{});
+pub fn init(context: *BaseAudioContext, exec: *const Execution) !*AudioDestinationNode {
+    return exec._factory.audioNode(context, AudioDestinationNode{ ._proto = undefined });
 }
-
-/// connect 的 no-op 实现:返回 undefined(Web Audio connect 返回 destination,
-/// 但大多数代码忽略返回值)。
-pub fn connect(_: *AudioDestinationNode) void {}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(AudioDestinationNode);
@@ -38,6 +37,4 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
-
-    pub const connect = bridge.function(AudioDestinationNode.connect, .{});
 };

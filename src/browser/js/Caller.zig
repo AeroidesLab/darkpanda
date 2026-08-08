@@ -825,6 +825,7 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         }
     }
 
+    var skip_propagation = false;
     const js_err: *const v8.Value = switch (err) {
         // Both sentinels mean V8 already installed the original JavaScript
         // exception. Replacing JsException with `Error: JsException` loses
@@ -836,8 +837,26 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         error.RangeError => isolate.createRangeError(""),
         error.OutOfMemory => isolate.createError("out of memory"),
         error.IllegalConstructor => isolate.createError("Illegal Constructor"),
-        else => domExceptionToJs(local, err) orelse isolate.createError(@errorName(err)),
+        else => domExceptionToJs(local, err) orelse blk: {
+            skip_propagation = true;
+            break :blk isolate.createError(@errorName(err));
+        },
     };
+
+    if (skip_propagation) {
+        const key: *const v8.Private = v8.v8__Global__Get(
+            &local.ctx.env.private_symbols.webidl_native_conversion_reason.handle,
+            isolate.handle,
+        ).?;
+        var marker_result: v8.MaybeBool = undefined;
+        v8.v8__Object__SetPrivate(
+            @ptrCast(js_err),
+            local.handle,
+            key,
+            isolate.initTrue(),
+            &marker_result,
+        );
+    }
 
     const js_exception = isolate.throwException(js_err);
     info.getReturnValue().setValueHandle(js_exception);

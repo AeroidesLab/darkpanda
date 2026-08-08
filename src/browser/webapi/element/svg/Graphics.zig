@@ -17,8 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
+const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const DOMRect = @import("../../DOMRect.zig");
 const SvgElement = @import("../Svg.zig");
 
 pub const Svg = @import("Svg.zig");
@@ -64,6 +66,10 @@ pub fn asNode(self: *Graphics) *Node {
     return self.asElement().asNode();
 }
 
+pub fn getBBox(self: *Graphics, frame: *Frame) DOMRect {
+    return self.asElement().getBoundingClientRect(frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Graphics);
 
@@ -72,4 +78,6 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const getBBox = bridge.function(Graphics.getBBox, .{});
 };

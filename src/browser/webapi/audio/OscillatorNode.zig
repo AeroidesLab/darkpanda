@@ -19,6 +19,8 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
 const AudioParam = @import("AudioParam.zig");
+const BaseAudioContext = @import("BaseAudioContext.zig");
+const AudioScheduledSourceNode = @import("AudioScheduledSourceNode.zig");
 
 const Execution = js.Execution;
 
@@ -26,8 +28,10 @@ const Execution = js.Execution;
 /// 实际渲染在 OfflineAudioContext.startRendering 中统一进行。
 pub const OscillatorNode = @This();
 
+_proto: *AudioScheduledSourceNode,
 _type: OscillatorType = .sine,
 _frequency: ?*AudioParam.AudioParam = null,
+_detune: ?*AudioParam.AudioParam = null,
 _started: bool = false,
 
 pub const OscillatorType = enum {
@@ -47,9 +51,10 @@ pub const OscillatorType = enum {
     }
 };
 
-pub fn init(exec: *const Execution) !*OscillatorNode {
-    const osc = try exec._factory.create(OscillatorNode{});
-    osc._frequency = try AudioParam.init(exec, 440.0);
+pub fn init(context: *BaseAudioContext, exec: *const Execution) !*OscillatorNode {
+    const osc = try exec._factory.audioScheduledSourceNode(context, OscillatorNode{ ._proto = undefined });
+    osc._frequency = try AudioParam.init(exec, 440, -context._sample_rate / 2, context._sample_rate / 2);
+    osc._detune = try AudioParam.init(exec, 0, -153600, 153600);
     return osc;
 }
 
@@ -71,13 +76,13 @@ pub fn getFrequency(self: *OscillatorNode) ?*AudioParam.AudioParam {
     return self._frequency;
 }
 
+pub fn getDetune(self: *OscillatorNode) ?*AudioParam.AudioParam {
+    return self._detune;
+}
+
 pub fn start(self: *OscillatorNode) void {
     self._started = true;
 }
-
-/// connect — no-op,图在 startRendering 时从已创建节点重建。
-/// 返回 undefined(Web Audio connect 返回 destination,但大多数代码忽略)。
-pub fn connect(_: *OscillatorNode) void {}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(OscillatorNode);
@@ -90,6 +95,6 @@ pub const JsApi = struct {
 
     pub const @"type" = bridge.accessor(OscillatorNode.getType, OscillatorNode.setType, .{});
     pub const frequency = bridge.accessor(OscillatorNode.getFrequency, null, .{});
+    pub const detune = bridge.accessor(OscillatorNode.getDetune, null, .{});
     pub const start = bridge.function(OscillatorNode.start, .{});
-    pub const connect = bridge.function(OscillatorNode.connect, .{});
 };

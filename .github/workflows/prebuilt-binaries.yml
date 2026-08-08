@@ -13,8 +13,14 @@ on:
         required: true
         default: false
         type: boolean
+      fingerprint_source_run_id:
+        description: Reuse Windows artifacts from this run and execute only fingerprint verification
+        required: false
+        default: ""
+        type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -31,6 +37,7 @@ env:
 jobs:
   prepare:
     name: prepare
+    if: inputs.fingerprint_source_run_id == ''
     runs-on: ubuntu-24.04
     outputs:
       canvas_revision: ${{ steps.resolve.outputs.canvas_revision }}
@@ -133,7 +140,7 @@ jobs:
           wreq_revision=$(git -C components/wreq rev-parse HEAD)
           boringssl_revision=$(git -C components/boringssl rev-parse HEAD)
           py_darkpanda_revision=$(git -C components/py-darkpanda rev-parse HEAD)
-          chrome_version=$(jq -r .chrome_for_testing_version "$profile")
+          chrome_version=$(jq -r .google_chrome_stable.version "$profile")
           chromium_revision=$(jq -r .chromium_revision "$profile")
           skia_revision=$(jq -r .skia_revision "$profile")
           zig_version=$(jq -r .darkpanda_build.zig.version "$profile")
@@ -220,7 +227,7 @@ jobs:
             --arg v8_revision "$v8_revision" \
             --arg zig_v8_revision "$zig_v8_revision" \
             '{
-              schema: "darkpanda-resolved-inputs/v6",
+              schema: "darkpanda-resolved-inputs/v7",
               buildId: $build_id,
               policies: {
                 browserProfile: "fixed-in-darkpanda",
@@ -236,7 +243,7 @@ jobs:
                 revision: $py_darkpanda
               },
               browserProfile: {
-                chromeForTestingVersion: $chrome,
+                googleChromeStableVersion: $chrome,
                 chromiumRevision: $chromium,
                 skiaRevision: $skia,
                 profileSha256: $profile_sha256
@@ -292,8 +299,11 @@ jobs:
             tools.ci.test_aggregate_darkpanda_reports \
             tools.ci.test_aggregate_python_wheels \
             tools.ci.test_build_python_wheel \
+            tools.ci.test_creepjs_probe \
+            tools.ci.test_materialize_google_chrome_stable \
             tools.ci.test_materialize_skia_cpu_deps \
             tools.ci.test_package_prebuilt \
+            tools.ci.test_tls_fingerprint_compare \
             tools.ci.test_verify_chromium_toolchain \
             tools.ci.test_v8_bundle
 
@@ -312,7 +322,7 @@ jobs:
           contracts='${{ steps.contract_tests.outcome }}'
           valid=false
           if [[ -f resolved-inputs.json ]] &&
-             jq -e '.schema == "darkpanda-resolved-inputs/v6"' \
+             jq -e '.schema == "darkpanda-resolved-inputs/v7"' \
                resolved-inputs.json >/dev/null &&
              [[ $browser == success &&
                 $canvas == success &&
@@ -1104,7 +1114,7 @@ jobs:
     needs:
       - prepare
       - components
-    if: always()
+    if: always() && inputs.fingerprint_source_run_id == ''
     runs-on: ubuntu-24.04
     steps:
       - name: Download every component result
@@ -1385,13 +1395,15 @@ jobs:
           jq -e \
             --arg darkpanda "$GITHUB_SHA" \
             --arg profile '${{ needs.prepare.outputs.profile_sha256 }}' \
+            --arg chrome '${{ needs.prepare.outputs.chrome_version }}' \
             --arg zig "$ZIG_VERSION" \
             --arg v8 "$V8_VERSION" \
             --arg v8_revision "$V8_REVISION" \
             --arg zig_v8 "$ZIG_V8_SOURCE_REVISION" \
-            '.schema == "darkpanda-resolved-inputs/v6" and
+            '.schema == "darkpanda-resolved-inputs/v7" and
              .darkpanda.revision == $darkpanda and
              .browserProfile.profileSha256 == $profile and
+             .browserProfile.googleChromeStableVersion == $chrome and
              .buildDependencies.zig.version == $zig and
              .buildDependencies.v8.version == $v8 and
              .buildDependencies.v8.revision == $v8_revision and
@@ -2201,6 +2213,361 @@ jobs:
           jq -e '.status == "passed"' \
             "python-reports/py-darkpanda-${{ matrix.id }}.json" >/dev/null
 
+  fingerprint:
+    name: fingerprint/windows-x86_64
+    needs:
+      - prepare
+      - darkpanda
+      - python
+    if: >-
+      always() &&
+      needs.prepare.result == 'success' &&
+      needs.darkpanda.result == 'success' &&
+      needs.python.result == 'success'
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Check out the exact browser build authority
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: browser
+          persist-credentials: false
+
+      - name: Download the Windows runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: darkpanda-result-windows-x86_64
+          path: runtime-result
+
+      - name: Download the Windows Python wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: python-result-windows-x86_64
+          path: python-result
+
+      - name: Install the fingerprint test environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m venv fingerprint-venv
+          $python = Join-Path $env:GITHUB_WORKSPACE 'fingerprint-venv/Scripts/python.exe'
+          $wheel = Get-ChildItem -LiteralPath python-result -Recurse -Filter '*.whl'
+          if ($wheel.Count -ne 1) {
+            throw "Expected one Windows wheel, found $($wheel.Count)"
+          }
+          & $python -m pip install `
+            --disable-pip-version-check `
+            $wheel[0].FullName `
+            'websocket-client==1.8.0'
+          "FINGERPRINT_PYTHON=$python" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Unpack the verified Windows runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Get-ChildItem `
+            -LiteralPath runtime-result `
+            -Recurse `
+            -Filter '*.zip'
+          if ($archive.Count -ne 1) {
+            throw "Expected one Windows runtime archive, found $($archive.Count)"
+          }
+          Expand-Archive -LiteralPath $archive[0].FullName -DestinationPath runtime
+          $library = Get-ChildItem -LiteralPath runtime -Recurse -Filter darkpanda.dll
+          $wreq = Get-ChildItem -LiteralPath runtime -Recurse -Filter wreq.dll
+          if ($library.Count -ne 1 -or $wreq.Count -ne 1) {
+            throw 'The Windows runtime does not contain one darkpanda.dll and wreq.dll'
+          }
+          "DARKPANDA_LIBRARY=$($library[0].FullName)" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WREQ_LIBRARY=$($wreq[0].FullName)" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Materialize the pinned Google Chrome Stable oracle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & $env:FINGERPRINT_PYTHON `
+            browser/tools/ci/materialize_google_chrome_stable.py `
+            --profile browser/tools/ci/chromium-profile.json `
+            --output chrome-oracle `
+            --seven-zip 'C:\Program Files\7-Zip\7z.exe'
+
+      - name: Capture official Chrome Stable and DarkPanda transport evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          New-Item -ItemType Directory -Force fingerprint-evidence | Out-Null
+          $chrome = Join-Path $env:GITHUB_WORKSPACE 'chrome-oracle/Chrome-bin/chrome.exe'
+          $profile = Join-Path $env:GITHUB_WORKSPACE 'chrome-oracle-profile'
+          $arguments = @(
+            '--remote-debugging-port=9222',
+            "--user-data-dir=$profile",
+            '--no-first-run',
+            '--no-default-browser-check',
+            'about:blank'
+          )
+          $process = Start-Process -FilePath $chrome -ArgumentList $arguments -PassThru
+          try {
+            $ready = $false
+            foreach ($attempt in 1..120) {
+              try {
+                Invoke-RestMethod 'http://127.0.0.1:9222/json/version' | Out-Null
+                $ready = $true
+                break
+              } catch {
+                Start-Sleep -Milliseconds 250
+              }
+            }
+            if (-not $ready) {
+              throw 'Google Chrome Stable DevTools endpoint did not start'
+            }
+            & $env:FINGERPRINT_PYTHON `
+              browser/tests/chrome_stable_tls_capture.py `
+              --chrome-binary $chrome `
+              --materialization chrome-oracle/materialization.json `
+              --endpoint 'http://127.0.0.1:9222' `
+              --phase cold `
+              --out fingerprint-evidence/chrome-cold.json
+            & $env:FINGERPRINT_PYTHON browser/tests/creepjs_probe.py chrome `
+              --endpoint 'http://127.0.0.1:9222' `
+              --out fingerprint-evidence/chrome-creepjs.json
+          } finally {
+            Get-CimInstance Win32_Process |
+              Where-Object { $_.CommandLine -like "*$profile*" } |
+              ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          }
+
+          & $env:FINGERPRINT_PYTHON browser/tests/ffi_tls_peet.py `
+            --library $env:DARKPANDA_LIBRARY `
+            --wreq $env:WREQ_LIBRARY `
+            --out fingerprint-evidence/wreq-cold.json
+          & $env:FINGERPRINT_PYTHON browser/tests/creepjs_probe.py darkpanda `
+            --library $env:DARKPANDA_LIBRARY `
+            --wreq $env:WREQ_LIBRARY `
+            --out fingerprint-evidence/darkpanda-creepjs.json
+
+      - name: Enforce TLS, HTTP/2, and header-order parity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & $env:FINGERPRINT_PYTHON browser/tests/tls_fingerprint_compare.py `
+            --chrome-cold fingerprint-evidence/chrome-cold.json `
+            --wreq-cold fingerprint-evidence/wreq-cold.json `
+            2>&1 | Tee-Object fingerprint-evidence/comparison.log
+          & $env:FINGERPRINT_PYTHON browser/tests/creepjs_probe.py compare `
+            --chrome fingerprint-evidence/chrome-creepjs.json `
+            --darkpanda fingerprint-evidence/darkpanda-creepjs.json `
+            2>&1 | Tee-Object fingerprint-evidence/creepjs-comparison.log
+
+      - name: Upload fingerprint evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fingerprint-windows-x86_64
+          path: |
+            chrome-oracle/materialization.json
+            fingerprint-evidence
+          if-no-files-found: warn
+          retention-days: 30
+
+  fingerprint-recovery:
+    name: fingerprint/windows-x86_64
+    if: inputs.fingerprint_source_run_id != ''
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Validate the source workflow run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.fingerprint_source_run_id }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:SOURCE_RUN_ID -notmatch '^\d+$') {
+            throw "Invalid source run id: $env:SOURCE_RUN_ID"
+          }
+          $run = gh api "/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN_ID" |
+            ConvertFrom-Json
+          if ($run.path -ne '.github/workflows/prebuilt-binaries.yml') {
+            throw "Source run used a different workflow: $($run.path)"
+          }
+          if ($run.head_repository.full_name -ne $env:GITHUB_REPOSITORY) {
+            throw "Source run belongs to a different repository"
+          }
+          if ($run.status -ne 'completed') {
+            throw "Source run is not complete: $($run.status)"
+          }
+          "FINGERPRINT_SOURCE_SHA=$($run.head_sha)" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Check out the fingerprint verifier fix
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: browser
+          persist-credentials: false
+
+      - name: Download the existing Windows runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: darkpanda-result-windows-x86_64
+          path: runtime-result
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.fingerprint_source_run_id }}
+
+      - name: Download the existing Windows Python wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: python-result-windows-x86_64
+          path: python-result
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.fingerprint_source_run_id }}
+
+      - name: Install the fingerprint test environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m venv fingerprint-venv
+          $python = Join-Path $env:GITHUB_WORKSPACE 'fingerprint-venv/Scripts/python.exe'
+          $wheel = Get-ChildItem -LiteralPath python-result -Recurse -Filter '*.whl'
+          if ($wheel.Count -ne 1) {
+            throw "Expected one Windows wheel, found $($wheel.Count)"
+          }
+          & $python -m pip install `
+            --disable-pip-version-check `
+            $wheel[0].FullName `
+            'websocket-client==1.8.0'
+          "FINGERPRINT_PYTHON=$python" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Unpack the existing Windows runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Get-ChildItem `
+            -LiteralPath runtime-result `
+            -Recurse `
+            -Filter '*.zip'
+          if ($archive.Count -ne 1) {
+            throw "Expected one Windows runtime archive, found $($archive.Count)"
+          }
+          Expand-Archive -LiteralPath $archive[0].FullName -DestinationPath runtime
+          $library = Get-ChildItem -LiteralPath runtime -Recurse -Filter darkpanda.dll
+          $wreq = Get-ChildItem -LiteralPath runtime -Recurse -Filter wreq.dll
+          if ($library.Count -ne 1 -or $wreq.Count -ne 1) {
+            throw 'The Windows runtime does not contain one darkpanda.dll and wreq.dll'
+          }
+          "DARKPANDA_LIBRARY=$($library[0].FullName)" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WREQ_LIBRARY=$($wreq[0].FullName)" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Materialize the pinned Google Chrome Stable oracle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & $env:FINGERPRINT_PYTHON `
+            browser/tools/ci/materialize_google_chrome_stable.py `
+            --profile browser/tools/ci/chromium-profile.json `
+            --output chrome-oracle `
+            --seven-zip 'C:\Program Files\7-Zip\7z.exe'
+
+      - name: Capture official Chrome Stable and DarkPanda transport evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          New-Item -ItemType Directory -Force fingerprint-evidence | Out-Null
+          $chrome = Join-Path $env:GITHUB_WORKSPACE 'chrome-oracle/Chrome-bin/chrome.exe'
+          $profile = Join-Path $env:GITHUB_WORKSPACE 'chrome-oracle-profile'
+          $arguments = @(
+            '--remote-debugging-port=9222',
+            "--user-data-dir=$profile",
+            '--no-first-run',
+            '--no-default-browser-check',
+            'about:blank'
+          )
+          $process = Start-Process -FilePath $chrome -ArgumentList $arguments -PassThru
+          try {
+            $ready = $false
+            foreach ($attempt in 1..120) {
+              try {
+                Invoke-RestMethod 'http://127.0.0.1:9222/json/version' | Out-Null
+                $ready = $true
+                break
+              } catch {
+                Start-Sleep -Milliseconds 250
+              }
+            }
+            if (-not $ready) {
+              throw 'Google Chrome Stable DevTools endpoint did not start'
+            }
+            & $env:FINGERPRINT_PYTHON `
+              browser/tests/chrome_stable_tls_capture.py `
+              --chrome-binary $chrome `
+              --materialization chrome-oracle/materialization.json `
+              --endpoint 'http://127.0.0.1:9222' `
+              --phase cold `
+              --out fingerprint-evidence/chrome-cold.json
+            & $env:FINGERPRINT_PYTHON browser/tests/creepjs_probe.py chrome `
+              --endpoint 'http://127.0.0.1:9222' `
+              --out fingerprint-evidence/chrome-creepjs.json
+          } finally {
+            Get-CimInstance Win32_Process |
+              Where-Object { $_.CommandLine -like "*$profile*" } |
+              ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          }
+
+          & $env:FINGERPRINT_PYTHON browser/tests/ffi_tls_peet.py `
+            --library $env:DARKPANDA_LIBRARY `
+            --wreq $env:WREQ_LIBRARY `
+            --out fingerprint-evidence/wreq-cold.json
+          & $env:FINGERPRINT_PYTHON browser/tests/creepjs_probe.py darkpanda `
+            --library $env:DARKPANDA_LIBRARY `
+            --wreq $env:WREQ_LIBRARY `
+            --out fingerprint-evidence/darkpanda-creepjs.json
+
+      - name: Enforce TLS, HTTP/2, header-order, and CreepJS compatibility
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & $env:FINGERPRINT_PYTHON browser/tests/tls_fingerprint_compare.py `
+            --chrome-cold fingerprint-evidence/chrome-cold.json `
+            --wreq-cold fingerprint-evidence/wreq-cold.json `
+            2>&1 | Tee-Object fingerprint-evidence/comparison.log
+          & $env:FINGERPRINT_PYTHON browser/tests/creepjs_probe.py compare `
+            --chrome fingerprint-evidence/chrome-creepjs.json `
+            --darkpanda fingerprint-evidence/darkpanda-creepjs.json `
+            2>&1 | Tee-Object fingerprint-evidence/creepjs-comparison.log
+
+      - name: Upload recovered fingerprint evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fingerprint-recovery-windows-x86_64
+          path: |
+            chrome-oracle/materialization.json
+            fingerprint-evidence
+          if-no-files-found: warn
+          retention-days: 30
+
   aggregate:
     name: package
     needs:
@@ -2208,7 +2575,8 @@ jobs:
       - native-summary
       - darkpanda
       - python
-    if: always()
+      - fingerprint
+    if: always() && inputs.fingerprint_source_run_id == ''
     runs-on: ubuntu-24.04
     steps:
       - name: Download every DarkPanda platform result
@@ -2367,6 +2735,7 @@ jobs:
           test '${{ needs.native-summary.result }}' = success
           test '${{ needs.darkpanda.result }}' = success
           test '${{ needs.python.result }}' = success
+          test '${{ needs.fingerprint.result }}' = success
           test '${{ steps.download_platforms.outcome }}' = success
           test '${{ steps.download_python.outcome }}' = success
           test '${{ steps.download_inputs.outcome }}' = success

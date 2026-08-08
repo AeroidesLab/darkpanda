@@ -300,7 +300,7 @@ def wait_for_client_completion(
                 page.click(
                     "body",
                     frame_id=frame.frame_id,
-                    pierce=True,
+                    pierce_shadow=True,
                     timeout_ms=5_000,
                     move_delay_ms=16,
                     press_delay_ms=60,

@@ -754,6 +754,14 @@ fn extractVisibilityProperties(style: *CSSStyleProperties) VisibilityProperties 
         props.set("top", property._value.str(), property._important);
     }
 
+    if (decl.findProperty(.wrap("margin-left"))) |property| {
+        props.set("margin-left", property._value.str(), property._important);
+    }
+
+    if (decl.findProperty(comptime .wrap("transform"))) |property| {
+        props.set("transform", property._value.str(), property._important);
+    }
+
     return props;
 }
 
@@ -826,6 +834,8 @@ const VisibilityProperties = struct {
     position: ?AuthoredDeclaration = null,
     left: ?AuthoredDeclaration = null,
     top: ?AuthoredDeclaration = null,
+    margin_left: ?AuthoredDeclaration = null,
+    transform: ?AuthoredDeclaration = null,
 
     fn setSlot(slot: *?AuthoredDeclaration, value: []const u8, important: bool) void {
         if (slot.*) |existing| {
@@ -860,6 +870,10 @@ const VisibilityProperties = struct {
             setSlot(&self.left, value, important);
         } else if (std.ascii.eqlIgnoreCase(name, "top")) {
             setSlot(&self.top, value, important);
+        } else if (std.ascii.eqlIgnoreCase(name, "margin-left")) {
+            setSlot(&self.margin_left, value, important);
+        } else if (std.ascii.eqlIgnoreCase(name, "transform")) {
+            setSlot(&self.transform, value, important);
         }
     }
 
@@ -875,6 +889,8 @@ const VisibilityProperties = struct {
         if (name.eql(comptime .wrap("position"))) return self.position;
         if (name.eql(comptime .wrap("left"))) return self.left;
         if (name.eql(comptime .wrap("top"))) return self.top;
+        if (name.eqlSlice("margin-left")) return self.margin_left;
+        if (name.eql(comptime .wrap("transform"))) return self.transform;
         return null;
     }
 
@@ -889,7 +905,9 @@ const VisibilityProperties = struct {
             self.height != null or
             self.position != null or
             self.left != null or
-            self.top != null;
+            self.top != null or
+            self.margin_left != null or
+            self.transform != null;
     }
 };
 

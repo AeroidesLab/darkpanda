@@ -1,0 +1,15 @@
+<!doctype html>
+<script src="../testing.js"></script>
+
+<script id="voices">
+  testing.expectTrue(speechSynthesis instanceof SpeechSynthesis);
+  testing.expectTrue(speechSynthesis instanceof EventTarget);
+  testing.expectEqual(speechSynthesis, window.speechSynthesis);
+  const voices = speechSynthesis.getVoices();
+  testing.expectTrue(voices.length > 0);
+  testing.expectTrue(voices[0] instanceof SpeechSynthesisVoice);
+  testing.expectTrue(voices[0].localService);
+  testing.expectTrue(voices[0].default);
+  testing.expectTrue(voices[0].lang.length > 0);
+  testing.expectEqual(voices[0].name, voices[0].voiceURI);
+</script>

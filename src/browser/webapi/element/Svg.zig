@@ -27,6 +27,7 @@ const Element = @import("../Element.zig");
 const AnimatedString = @import("../svg/AnimatedString.zig");
 pub const Generic = @import("svg/Generic.zig");
 pub const Graphics = @import("svg/Graphics.zig");
+pub const TextContent = @import("svg/TextContent.zig");
 
 const String = lp.String;
 
@@ -37,6 +38,7 @@ _tag_name: String, // Svg elements are case-preserving
 
 pub const Type = union(enum) {
     graphics: *Graphics,
+    text_content: *TextContent,
     generic: *Generic,
 };
 
@@ -47,6 +49,10 @@ pub fn is(self: *Svg, comptime T: type) ?*T {
                 return g;
             }
             return g.is(T);
+        },
+        .text_content => |text| {
+            if (T == TextContent) return text;
+            return text.is(T);
         },
         .generic => |g| {
             if (T == Generic) {
@@ -75,6 +81,7 @@ pub fn getTag(self: *const Svg) Element.Tag {
                 .polyline => .polyline,
             },
         },
+        .text_content => .text,
         .generic => |g| g._tag,
     };
 }

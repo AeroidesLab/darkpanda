@@ -235,6 +235,30 @@ const DrawingContext = union(enum) {
     webgl: *WebGLRenderingContext,
 };
 
+fn webglCanvasToJs(raw: *anyopaque, local: *const js.Local) !js.Value {
+    const canvas: *Canvas = @ptrCast(@alignCast(raw));
+    return local.zigValueToJs(canvas, .{});
+}
+
+fn webglCanvasWidth(raw: *anyopaque) u32 {
+    const canvas: *Canvas = @ptrCast(@alignCast(raw));
+    return canvas.getWidth();
+}
+
+fn webglCanvasHeight(raw: *anyopaque) u32 {
+    const canvas: *Canvas = @ptrCast(@alignCast(raw));
+    return canvas.getHeight();
+}
+
+fn webglCanvasHooks(self: *Canvas) WebGLRenderingContext.CanvasHooks {
+    return .{
+        .ptr = self,
+        .toJs = webglCanvasToJs,
+        .width = webglCanvasWidth,
+        .height = webglCanvasHeight,
+    };
+}
+
 pub fn getContext(
     self: *Canvas,
     context_type: []const u8,
@@ -251,6 +275,10 @@ pub fn getContext(
         );
     }
     const is_2d = std.mem.eql(u8, context_type, "2d");
+    const is_webgl = std.mem.eql(u8, context_type, "webgl") or
+        std.mem.eql(u8, context_type, "experimental-webgl");
+    const is_webgl2 = std.mem.eql(u8, context_type, "webgl2") or
+        std.mem.eql(u8, context_type, "experimental-webgl2");
     const attributes = if (is_2d)
         try ContextOptions.parse(raw_options, &frame.js.execution, .html_canvas)
     else
@@ -259,7 +287,7 @@ pub fn getContext(
     if (self._cached) |cached| {
         const matches = switch (cached) {
             .@"2d" => is_2d,
-            .webgl => std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl"),
+            .webgl => is_webgl or is_webgl2,
         };
         return if (matches) cached else null;
     }
@@ -272,17 +300,12 @@ pub fn getContext(
             break :blk .{ .@"2d" = ctx };
         }
 
-        // We only stub a tiny slice of the WebGL API (getParameter,
-        // getExtension, getSupportedExtensions). Real WebGL consumers like
-        // Three.js immediately call createTexture/createBuffer/etc. and
-        // throw `TypeError: e.createTexture is not a function`. Pretending
-        // WebGL works until the first non-stubbed call is the worst of both
-        // worlds: pages that have an error boundary above the WebGL widget
-        // catch the throw, reset, re-render, and loop forever.
-        // Spec-correct signal for "no WebGL" is null, so apps that check
-        // (Three.js does) can degrade gracefully.
-        if (std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl")) {
-            return null;
+        if (is_webgl or is_webgl2) {
+            const ctx = try frame._factory.create(WebGLRenderingContext.init(
+                webglCanvasHooks(self),
+                is_webgl2,
+            ));
+            break :blk .{ .webgl = ctx };
         }
         return null;
     };

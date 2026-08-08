@@ -410,7 +410,7 @@ def run_turnstile_case(runtime: Runtime, url: str, label: str) -> dict[str, obje
         page.click(
             CHECKBOX_SELECTOR,
             frame_id=frame.frame_id,
-            pierce=True,
+            pierce_shadow=True,
             timeout_ms=30_000,
             move_delay_ms=16,
             press_delay_ms=60,
@@ -508,7 +508,7 @@ def run_site_challenge(runtime: Runtime) -> dict[str, object]:
                 page.click(
                     CHECKBOX_SELECTOR,
                     frame_id=frame.frame_id,
-                    pierce=True,
+                    pierce_shadow=True,
                     timeout_ms=min(30_000, remaining_ms),
                     move_delay_ms=16,
                     press_delay_ms=60,

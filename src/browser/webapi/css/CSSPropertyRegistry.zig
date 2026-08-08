@@ -2,7 +2,7 @@
 //
 // Chrome 149 CSSOM property exposure registry. The entries are the generic
 // CSSStyleDeclaration supported-property surface captured from the pinned
-// Chrome 149.0.7827.203 profile, not page- or challenge-specific data.
+// Chrome Stable 149.0.7827.201 profile, not page- or challenge-specific data.
 
 const std = @import("std");
 

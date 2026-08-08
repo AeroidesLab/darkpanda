@@ -2,7 +2,7 @@
 
 DarkPanda supports a native `x86_64-windows-msvc` build with Zig `0.15.2`,
 Visual Studio 2022 C++ Build Tools, and a Windows 10 or 11 SDK. The default
-application/network profile is Chrome `149.0.7827.203` with V8 `14.9.207.35`.
+application/network profile is Chrome Stable `149.0.7827.201` with V8 `14.9.207.35`.
 
 HTTP and TLS use the external `wreq.dll`; libcurl is not part of the runtime.
 WebCrypto links only the M149 BoringSSL `crypto.lib`. That archive already

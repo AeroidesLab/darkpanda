@@ -64,14 +64,17 @@
   const element = document.createElement("canvas");
   const ctx = element.getContext("webgl");
   const rendererInfo = ctx.getExtension("WEBGL_debug_renderer_info");
-  testing.expectEqual(true, rendererInfo instanceof WEBGL_debug_renderer_info);
+  testing.expectTrue(rendererInfo !== null);
 
   const { UNMASKED_VENDOR_WEBGL, UNMASKED_RENDERER_WEBGL } = rendererInfo;
   testing.expectEqual(UNMASKED_VENDOR_WEBGL, 0x9245);
   testing.expectEqual(UNMASKED_RENDERER_WEBGL, 0x9246);
 
-  testing.expectEqual("", ctx.getParameter(UNMASKED_VENDOR_WEBGL));
-  testing.expectEqual("", ctx.getParameter(UNMASKED_RENDERER_WEBGL));
+  testing.expectEqual("Google Inc. (Microsoft)", ctx.getParameter(UNMASKED_VENDOR_WEBGL));
+  testing.expectEqual(
+    "ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    ctx.getParameter(UNMASKED_RENDERER_WEBGL),
+  );
 }
 
 // WEBGL_lose_context
@@ -79,10 +82,65 @@
   const element = document.createElement("canvas");
   const ctx = element.getContext("webgl");
   const loseContext = ctx.getExtension("WEBGL_lose_context");
-  testing.expectEqual(true, loseContext instanceof WEBGL_lose_context);
+  testing.expectTrue(loseContext !== null);
 
   loseContext.loseContext();
   loseContext.restoreContext();
+}
+</script>
+
+<script id=fingerprint-surface>
+{
+  const canvas = new OffscreenCanvas(256, 256);
+  const gl = canvas.getContext('webgl');
+  const gl2 = new OffscreenCanvas(256, 256).getContext('webgl2');
+
+  testing.expectTrue(gl instanceof WebGLRenderingContext);
+  testing.expectTrue(gl2 instanceof WebGLRenderingContext);
+  testing.expectEqual(256, gl.drawingBufferWidth);
+  testing.expectEqual(256, gl.drawingBufferHeight);
+  testing.expectEqual(true, gl.getContextAttributes().antialias);
+  testing.expectEqual([32767, 32767], Array.from(gl.getParameter(gl.MAX_VIEWPORT_DIMS)));
+  const expectedCapabilities = new Map([
+    [gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS, 32],
+    [gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS, 16],
+    [gl.MAX_TEXTURE_IMAGE_UNITS, 16],
+    [gl.MAX_ELEMENTS_VERTICES, 2147483647],
+    [gl.MAX_ELEMENTS_INDICES, 2147483647],
+    [gl.MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS, 120],
+    [gl.MAX_SAMPLES, 16],
+    [gl.MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS, 212992],
+    [gl.MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS, 200704],
+    [gl.MAX_VERTEX_OUTPUT_COMPONENTS, 120],
+    [gl.MAX_FRAGMENT_INPUT_COMPONENTS, 120],
+    [gl.MAX_ELEMENT_INDEX, 4294967294],
+  ]);
+  for (const [parameter, expected] of expectedCapabilities) {
+    testing.expectEqual(expected, gl.getParameter(parameter));
+  }
+
+  const program = gl.createProgram();
+  const shader = gl.createShader(gl.VERTEX_SHADER);
+  gl.shaderSource(shader, 'void main() {}');
+  gl.compileShader(shader);
+  gl.attachShader(program, shader);
+  gl.linkProgram(program);
+  gl.useProgram(program);
+  gl.drawArrays(gl.LINE_LOOP, 0, 3);
+
+  const pixels = new Uint8Array(16);
+  gl.readPixels(0, 0, 2, 2, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  testing.expectEqual(
+    [17, 46, 75, 104, 133, 162, 191, 220, 249, 27, 56, 85, 114, 143, 172, 201],
+    Array.from(pixels),
+  );
+
+  const highFloat = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
+  testing.expectEqual({precision: 23, rangeMax: 127, rangeMin: 127}, highFloat);
+  const lowFloat = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.LOW_FLOAT);
+  testing.expectEqual({precision: 23, rangeMax: 127, rangeMin: 127}, lowFloat);
+  const highInt = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_INT);
+  testing.expectEqual({precision: 0, rangeMax: 30, rangeMin: 31}, highInt);
 }
 </script>
 
@@ -93,5 +151,18 @@
 
   testing.expectTrue(ctx === element.getContext('webgl'));
   testing.expectEqual(null, element.getContext('2d'));
+}
+</script>
+
+<script id=worker-webgl type=module>
+{
+  const state = await testing.async();
+  const worker = new Worker('./webgl-worker.js');
+  worker.onmessage = event => state.resolve(event.data);
+  await state.done(data => {
+    testing.expectTrue(data.ok, data.error);
+    testing.expectEqual('Google Inc. (Microsoft)', data.vendor);
+    testing.expectEqual(8, data.width);
+  });
 }
 </script>

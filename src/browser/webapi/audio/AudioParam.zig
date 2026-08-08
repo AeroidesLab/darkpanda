@@ -24,11 +24,15 @@ pub const AudioParam = @This();
 
 _value: f32,
 _default_value: f32,
+_min_value: f32,
+_max_value: f32,
 
-pub fn init(exec: *const Execution, value: f32) !*AudioParam {
+pub fn init(exec: *const Execution, value: f32, min_value: f32, max_value: f32) !*AudioParam {
     return exec._factory.create(AudioParam{
         ._value = value,
         ._default_value = value,
+        ._min_value = min_value,
+        ._max_value = max_value,
     });
 }
 
@@ -37,11 +41,19 @@ pub fn getValue(self: *const AudioParam) f32 {
 }
 
 pub fn setValue(self: *AudioParam, value: f32) void {
-    self._value = value;
+    self._value = std.math.clamp(value, self._min_value, self._max_value);
 }
 
 pub fn getDefaultValue(self: *const AudioParam) f32 {
     return self._default_value;
+}
+
+pub fn getMinValue(self: *const AudioParam) f32 {
+    return self._min_value;
+}
+
+pub fn getMaxValue(self: *const AudioParam) f32 {
+    return self._max_value;
 }
 
 pub const JsApi = struct {
@@ -55,4 +67,6 @@ pub const JsApi = struct {
 
     pub const value = bridge.accessor(AudioParam.getValue, AudioParam.setValue, .{});
     pub const defaultValue = bridge.accessor(AudioParam.getDefaultValue, null, .{});
+    pub const minValue = bridge.accessor(AudioParam.getMinValue, null, .{});
+    pub const maxValue = bridge.accessor(AudioParam.getMaxValue, null, .{});
 };

@@ -44,6 +44,10 @@
   testing.expectEqual('Gecko', navigator.product);
   testing.expectEqual(false, navigator.javaEnabled());
   testing.expectEqual(false, navigator.webdriver);
+  testing.expectEqual(true, navigator.canShare({text: 'DarkPanda'}));
+  testing.expectEqual('[object Promise]', Object.prototype.toString.call(
+    navigator.share({text: 'DarkPanda'}),
+  ));
 
   testing.expectEqual(null, navigator.doNotTrack);
   testing.expectEqual('', navigator.vendorSub);
@@ -61,7 +65,7 @@
     'userAgent', 'appName', 'appCodeName', 'appVersion', 'platform',
     'language', 'languages', 'onLine', 'cookieEnabled', 'hardwareConcurrency',
     'deviceMemory', 'maxTouchPoints', 'vendor', 'product', 'webdriver',
-    'plugins', 'doNotTrack',
+    'mimeTypes', 'plugins', 'doNotTrack',
   ]) {
     const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, name);
     testing.expectEqual('function', typeof desc.get); // accessor on prototype
@@ -76,6 +80,46 @@
     testing.expectError('TypeError: Illegal invocation', () => desc.get.call({}));
     testing.expectError('TypeError: Illegal invocation', () => desc.get.call(null));
   }
+</script>
+
+<script id=pdfPluginSurface>
+  testing.expectEqual(5, navigator.plugins.length);
+  testing.expectEqual(2, navigator.mimeTypes.length);
+  testing.expectEqual([
+    'PDF Viewer',
+    'Chrome PDF Viewer',
+    'Chromium PDF Viewer',
+    'Microsoft Edge PDF Viewer',
+    'WebKit built-in PDF',
+  ], [...navigator.plugins].map(plugin => plugin.name));
+  testing.expectEqual(
+    ['application/pdf', 'text/pdf'],
+    [...navigator.mimeTypes].map(mimeType => mimeType.type),
+  );
+  testing.expectEqual('internal-pdf-viewer', navigator.plugins[0].filename);
+  testing.expectEqual('Portable Document Format', navigator.plugins[0].description);
+  testing.expectEqual('pdf', navigator.mimeTypes[0].suffixes);
+  testing.expectEqual(navigator.plugins[0], navigator.mimeTypes[0].enabledPlugin);
+  testing.expectEqual(navigator.mimeTypes[0], navigator.plugins[0][0]);
+  testing.expectEqual(navigator.plugins[0], navigator.plugins['PDF Viewer']);
+  testing.expectEqual(navigator.mimeTypes[0], navigator.mimeTypes['application/pdf']);
+  testing.expectEqual(['0', '1'], Object.keys({...navigator.mimeTypes}));
+  testing.expectEqual(
+    ['0', '1', 'application/pdf', 'text/pdf'],
+    Object.getOwnPropertyNames(navigator.mimeTypes),
+  );
+  testing.expectEqual(
+    {writable: false, enumerable: true, configurable: true},
+    (({writable, enumerable, configurable}) => ({writable, enumerable, configurable}))(
+      Object.getOwnPropertyDescriptor(navigator.mimeTypes, '0'),
+    ),
+  );
+  testing.expectEqual(
+    {writable: false, enumerable: false, configurable: true},
+    (({writable, enumerable, configurable}) => ({writable, enumerable, configurable}))(
+      Object.getOwnPropertyDescriptor(navigator.mimeTypes, 'application/pdf'),
+    ),
+  );
 </script>
 
 <script id=userActivation>
@@ -311,4 +355,3 @@
   // rather than a stub that always rejects.
   testing.expectEqual('undefined', typeof navigator.getBattery);
 </script>
-

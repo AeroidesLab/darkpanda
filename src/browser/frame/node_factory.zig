@@ -898,6 +898,7 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                     asUint("rect") => return createSvgGeometryElementT(frame, Geometry.Rect, name, attribute_iterator),
                     asUint("line") => return createSvgGeometryElementT(frame, Geometry.Line, name, attribute_iterator),
                     asUint("path") => return createSvgGeometryElementT(frame, Geometry.Path, name, attribute_iterator),
+                    asUint("text") => return createSvgTextContentElementT(frame, Element.Svg.TextContent.Text, name, attribute_iterator),
                     else => {},
                 },
                 5 => switch (@as(u40, @bitCast(name[0..5].*))) {
@@ -966,6 +967,11 @@ fn createSvgElementT(frame: *Frame, comptime E: type, tag_name: []const u8, attr
 
 fn createSvgGraphicsElementT(frame: *Frame, comptime E: type, tag_name: []const u8, attribute_iterator: anytype) !*Node {
     const svg_element_ptr = try frame._factory.svgGraphicsElement(tag_name, E{ ._proto = undefined });
+    return initSvgElement(frame, svg_element_ptr.asElement(), attribute_iterator);
+}
+
+fn createSvgTextContentElementT(frame: *Frame, comptime E: type, tag_name: []const u8, attribute_iterator: anytype) !*Node {
+    const svg_element_ptr = try frame._factory.svgTextContentElement(tag_name, E{ ._proto = undefined });
     return initSvgElement(frame, svg_element_ptr.asElement(), attribute_iterator);
 }
 

@@ -291,9 +291,13 @@ def main() -> int:
     browser_profile = resolved.get("browserProfile")
     python_binding = resolved.get("pythonBinding")
     if (
-        resolved.get("schema") != "darkpanda-resolved-inputs/v6"
+        resolved.get("schema") != "darkpanda-resolved-inputs/v7"
         or not isinstance(components, dict)
         or not isinstance(browser_profile, dict)
+        or not re.fullmatch(
+            r"[0-9]+(?:\.[0-9]+){3}",
+            str(browser_profile.get("googleChromeStableVersion", "")),
+        )
         or not isinstance(python_binding, dict)
         or python_binding.get("repository") != "AeroidesLab/py-darkpanda"
         or not re.fullmatch(

@@ -47,6 +47,15 @@
 }
 </script>
 
+<script id=matchMedia_device_and_resolution>
+{
+  testing.expectEqual(true, window.matchMedia('(device-width: 1920px) and (device-height: 1080px)').matches);
+  testing.expectEqual(true, window.matchMedia('(resolution: 1dppx)').matches);
+  testing.expectEqual(true, window.matchMedia('(min-resolution: 96dpi)').matches);
+  testing.expectEqual(false, window.matchMedia('(min-resolution: 2dppx)').matches);
+}
+</script>
+
 <script id=matchMedia_media_types>
 {
   testing.expectEqual(true, window.matchMedia('all').matches);

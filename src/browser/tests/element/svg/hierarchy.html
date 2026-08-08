@@ -9,6 +9,7 @@
     <line id=line1></line>
     <polygon id=polygon1></polygon>
     <polyline id=polyline1></polyline>
+    <text id=text1 x="32" y="32" font-size="20">Hello</text>
   </g>
   <path id=path1 d="M 0 0 L 10 10"></path>
   <a id=link1></a>
@@ -23,6 +24,8 @@
   testing.expectEqual('function', typeof SVGElement);
   testing.expectEqual('function', typeof SVGGraphicsElement);
   testing.expectEqual('function', typeof SVGGeometryElement);
+  testing.expectEqual('function', typeof SVGTextContentElement);
+  testing.expectEqual('function', typeof SVGTextElement);
   testing.expectEqual('function', typeof SVGSVGElement);
   testing.expectEqual('function', typeof SVGGElement);
   testing.expectEqual('function', typeof SVGAElement);
@@ -66,6 +69,9 @@
   testing.expectEqual(true, $('#line1') instanceof SVGLineElement);
   testing.expectEqual(true, $('#polygon1') instanceof SVGPolygonElement);
   testing.expectEqual(true, $('#polyline1') instanceof SVGPolylineElement);
+  testing.expectEqual(true, $('#text1') instanceof SVGTextElement);
+  testing.expectEqual(true, $('#text1') instanceof SVGTextContentElement);
+  testing.expectEqual(true, $('#text1') instanceof SVGElement);
   testing.expectEqual(true, $('#path1') instanceof SVGPathElement);
   testing.expectEqual(true, $('#link1') instanceof SVGAElement);
   testing.expectEqual(true, $('#use1') instanceof SVGUseElement);
@@ -77,6 +83,23 @@
   testing.expectEqual(true, filter instanceof SVGElement);
   testing.expectEqual(false, filter instanceof SVGGraphicsElement);
   testing.expectEqual('filter', filter.tagName);
+}
+</script>
+
+<script id=measurement>
+{
+  const text = $('#text1');
+  const full = text.getComputedTextLength();
+  testing.expectTrue(full > 0);
+  testing.expectTrue(text.getSubStringLength(0, 2) > 0);
+  testing.expectTrue(text.getSubStringLength(0, 2) < full);
+  const extent = text.getExtentOfChar(0);
+  testing.expectEqual(true, extent instanceof DOMRect);
+  testing.expectEqual(32, extent.x);
+  testing.expectTrue(extent.width > 0);
+  testing.expectEqual('function', typeof $('#group').getBBox);
+  testing.expectEqual(true, $('#group').getBBox() instanceof DOMRect);
+  testing.expectEqual('undefined', typeof SVGElement.prototype.getComputedTextLength);
 }
 </script>
 

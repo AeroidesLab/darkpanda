@@ -430,6 +430,10 @@ pub const Api = struct {
         return if (self.version_fn()) |raw| std.mem.span(raw) else "";
     }
 
+    pub fn measureText(self: *const Api, utf8: []const u8, font_size: f64, family: [:0]const u8, out_metrics: ?*[5]f32) f64 {
+        return self.measure_text_fn(utf8.ptr, @intCast(utf8.len), font_size, family.ptr, if (out_metrics) |p| p else null);
+    }
+
     pub fn create(self: *const Api, descriptor: *const SurfaceDescriptor) Error!OwnedSurface {
         var raw: ?*OpaqueSurface = null;
         try expectOk(self.create_fn(descriptor, &raw));
@@ -702,7 +706,7 @@ pub const OwnedSurface = struct {
     }
 
     pub fn measureText(self: *OwnedSurface, utf8: []const u8, font_size: f64, family: [:0]const u8, out_metrics: ?*[5]f32) f64 {
-        return self.api.measure_text_fn(utf8.ptr, @intCast(utf8.len), font_size, family.ptr, if (out_metrics) |p| p else null);
+        return self.api.measureText(utf8, font_size, family, out_metrics);
     }
 };
 

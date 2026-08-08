@@ -176,6 +176,12 @@ pub fn actualDriver(self: *const Provider) Driver {
     return self.actual_driver;
 }
 
+pub fn measureText(self: *const Provider, text: []const u8, font_size: f64, family: [:0]const u8, out_metrics: ?*[5]f32) ?f64 {
+    const api = &(self.api orelse return null);
+    const advance = api.measureText(text, font_size, family, out_metrics);
+    return if (advance >= 0) advance else null;
+}
+
 fn getEnvironment(allocator: std.mem.Allocator, name: []const u8) !?[]u8 {
     return std.process.getEnvVarOwned(allocator, name) catch |err| switch (err) {
         error.EnvironmentVariableNotFound, error.InvalidWtf8 => null,

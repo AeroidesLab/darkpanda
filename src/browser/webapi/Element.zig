@@ -26,6 +26,7 @@ const reflect = @import("../reflect.zig");
 
 const CSS = @import("CSS.zig");
 const DOMException = @import("DOMException.zig");
+const DOMMatrixReadOnly = @import("DOMMatrixReadOnly.zig");
 const Node = @import("Node.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
 const TrustedTypes = @import("TrustedTypes.zig");
@@ -1385,8 +1386,12 @@ pub fn getBoundingClientRectForVisible(self: *Element, frame: *Frame) DOMRect {
     var y = calculateDocumentPosition(self.asNode());
     const dims = self.getElementDimensions(frame);
 
-    // Use sibling position for x coordinate to ensure siblings have different x values
-    var x = calculateSiblingPosition(self.asNode());
+    var x: f64 = 0;
+    if (frame._style_manager.resolvedAuthoredPropertyValue(
+        self,
+        comptime .wrap("margin-left"),
+        false,
+    )) |margin_left| x = CSS.parseDimension(margin_left) orelse x;
     const position = self.positionStyle(frame);
     const fixed_or_absolute = std.mem.eql(u8, position, "fixed") or
         std.mem.eql(u8, position, "absolute");
@@ -1398,7 +1403,7 @@ pub fn getBoundingClientRectForVisible(self: *Element, frame: *Frame) DOMRect {
             false,
         )) |left| {
             if (CSS.parseDimension(left)) |offset| {
-                if (fixed_or_absolute) x = offset else x += offset;
+                x += offset;
             }
         }
         if (frame._style_manager.resolvedAuthoredPropertyValue(
@@ -1412,12 +1417,19 @@ pub fn getBoundingClientRectForVisible(self: *Element, frame: *Frame) DOMRect {
         }
     }
 
-    return .{
+    var rect = DOMRect{
         ._x = x,
         ._y = y,
         ._width = dims.width,
         ._height = dims.height,
     };
+    if (frame._style_manager.resolvedAuthoredPropertyValue(
+        self,
+        comptime .wrap("transform"),
+        false,
+    )) |transform| applyTransform(&rect, transform);
+    quantizeLayoutRect(&rect);
+    return rect;
 }
 
 pub fn getClientRects(self: *Element, frame: *Frame) ![]DOMRect {
@@ -1492,7 +1504,22 @@ pub fn getOffsetLeft(self: *Element, frame: *Frame) f64 {
     if (!self.checkVisibilityCached(null, frame)) {
         return 0.0;
     }
-    return calculateSiblingPosition(self.asNode());
+    var x: f64 = 0;
+    if (frame._style_manager.resolvedAuthoredPropertyValue(
+        self,
+        comptime .wrap("margin-left"),
+        false,
+    )) |margin_left| x = CSS.parseDimension(margin_left) orelse x;
+    if (frame._style_manager.resolvedAuthoredPropertyValue(
+        self,
+        comptime .wrap("left"),
+        false,
+    )) |left| {
+        if (!std.mem.eql(u8, self.positionStyle(frame), "static")) {
+            x += CSS.parseDimension(left) orelse 0;
+        }
+    }
+    return x;
 }
 
 pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
@@ -1714,28 +1741,55 @@ fn countSubtreeNodes(node: *Node) f64 {
     return count;
 }
 
-// Calculates horizontal position using the same approach as y,
-// just scaled differently for visual distinction
-fn calculateSiblingPosition(node: *Node) f64 {
-    var position: f64 = 0.0;
-    var current = node;
+fn applyTransform(rect: *DOMRect, value: []const u8) void {
+    var matrix = DOMMatrixReadOnly.identity();
+    var is_2d = true;
+    DOMMatrixReadOnly.parseTransformList(value, &matrix, &is_2d) catch return;
 
-    // Walk up to root, counting preceding nodes (same as y)
-    while (current.parentNode()) |parent| {
-        // Count all previous siblings and their descendants
-        var sibling = parent.firstChild();
-        while (sibling) |s| {
-            if (s == current) break;
-            position += countSubtreeNodes(s);
-            sibling = s.nextSibling();
-        }
-
-        // Count the parent itself
-        position += 1.0;
-        current = parent;
+    const origin_x = rect._width / 2;
+    const origin_y = rect._height / 2;
+    const corners = [4][2]f64{
+        .{ 0, 0 },
+        .{ rect._width, 0 },
+        .{ 0, rect._height },
+        .{ rect._width, rect._height },
+    };
+    var min_x = std.math.inf(f64);
+    var min_y = std.math.inf(f64);
+    var max_x = -std.math.inf(f64);
+    var max_y = -std.math.inf(f64);
+    for (corners) |corner| {
+        const local_x = corner[0] - origin_x;
+        const local_y = corner[1] - origin_y;
+        const w = matrix[3] * local_x + matrix[7] * local_y + matrix[15];
+        if (w == 0) return;
+        const x = rect._x + origin_x +
+            (matrix[0] * local_x + matrix[4] * local_y + matrix[12]) / w;
+        const y = rect._y + origin_y +
+            (matrix[1] * local_x + matrix[5] * local_y + matrix[13]) / w;
+        min_x = @min(min_x, x);
+        min_y = @min(min_y, y);
+        max_x = @max(max_x, x);
+        max_y = @max(max_y, y);
     }
+    rect.* = .{
+        ._x = min_x,
+        ._y = min_y,
+        ._width = max_x - min_x,
+        ._height = max_y - min_y,
+    };
+}
 
-    return position * 5.0; // 5px per node
+fn quantizeLayoutRect(rect: *DOMRect) void {
+    rect._x = blinkLayoutFloat(rect._x);
+    rect._y = blinkLayoutFloat(rect._y);
+    rect._width = blinkLayoutFloat(rect._width);
+    rect._height = blinkLayoutFloat(rect._height);
+}
+
+fn blinkLayoutFloat(value: f64) f64 {
+    const value32: f32 = @floatCast(value);
+    return @floatCast(value32);
 }
 
 pub fn getElementsByTagName(self: *Element, tag_name: []const u8, frame: *Frame) !Node.GetElementsByTagNameResult {

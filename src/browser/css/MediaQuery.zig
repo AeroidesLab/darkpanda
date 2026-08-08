@@ -25,6 +25,8 @@
 //!   - Media types: `all`, `screen`, `print`, `speech`, `tv`
 //!   - Features: `width` / `min-width` / `max-width`,
 //!               `height` / `min-height` / `max-height`,
+//!               `device-width` / `device-height` variants,
+//!               `resolution` / `min-resolution` / `max-resolution`,
 //!               `orientation` (portrait | landscape).
 //!   - Length values: `<int>px`, `<int>em` (1em = 16px), `<int>rem`,
 //!     and bare `0`.
@@ -40,6 +42,8 @@
 const std = @import("std");
 
 const Viewport = @import("../Viewport.zig");
+
+const max_ident_len = 32;
 
 /// Returns true if `query` matches the given viewport. Comma-separated
 /// queries are evaluated independently and combined with OR.
@@ -195,11 +199,11 @@ fn matchesSingle(query: []const u8, viewport: Viewport) bool {
         }
 
         const len = i - start;
-        if (len < 2 or len > 16) {
+        if (len < 2 or len > max_ident_len) {
             return false;
         }
 
-        var word_buf: [16]u8 = undefined;
+        var word_buf: [max_ident_len]u8 = undefined;
         const word = std.ascii.lowerString(&word_buf, query[start..i]);
 
         saw_token = true;
@@ -273,11 +277,11 @@ fn evalFeature(text: []const u8, viewport: Viewport) bool {
 }
 
 fn evalNameValue(name: []const u8, value: []const u8, viewport: Viewport) bool {
-    if (name.len > 16) {
+    if (name.len > max_ident_len) {
         return false;
     }
 
-    var buf: [16]u8 = undefined;
+    var buf: [max_ident_len]u8 = undefined;
     const lname = std.ascii.lowerString(&buf, name);
     if (std.mem.eql(u8, lname, "min-width")) {
         const px = parseLengthPx(value) orelse return false;
@@ -303,6 +307,44 @@ fn evalNameValue(name: []const u8, value: []const u8, viewport: Viewport) bool {
         const px = parseLengthPx(value) orelse return false;
         return viewport.height == px;
     }
+    const device_width = viewport.device_width orelse viewport.width;
+    if (std.mem.eql(u8, lname, "min-device-width")) {
+        const px = parseLengthPx(value) orelse return false;
+        return device_width >= px;
+    }
+    if (std.mem.eql(u8, lname, "max-device-width")) {
+        const px = parseLengthPx(value) orelse return false;
+        return device_width <= px;
+    }
+    if (std.mem.eql(u8, lname, "device-width")) {
+        const px = parseLengthPx(value) orelse return false;
+        return device_width == px;
+    }
+    const device_height = viewport.device_height orelse viewport.height;
+    if (std.mem.eql(u8, lname, "min-device-height")) {
+        const px = parseLengthPx(value) orelse return false;
+        return device_height >= px;
+    }
+    if (std.mem.eql(u8, lname, "max-device-height")) {
+        const px = parseLengthPx(value) orelse return false;
+        return device_height <= px;
+    }
+    if (std.mem.eql(u8, lname, "device-height")) {
+        const px = parseLengthPx(value) orelse return false;
+        return device_height == px;
+    }
+    if (std.mem.eql(u8, lname, "min-resolution")) {
+        const dppx = parseResolutionDppx(value) orelse return false;
+        return viewport.resolution_dppx >= dppx;
+    }
+    if (std.mem.eql(u8, lname, "max-resolution")) {
+        const dppx = parseResolutionDppx(value) orelse return false;
+        return viewport.resolution_dppx <= dppx;
+    }
+    if (std.mem.eql(u8, lname, "resolution")) {
+        const dppx = parseResolutionDppx(value) orelse return false;
+        return viewport.resolution_dppx == dppx;
+    }
     if (std.mem.eql(u8, lname, "orientation")) {
         if (std.ascii.eqlIgnoreCase(value, "landscape")) return viewport.width >= viewport.height;
         if (std.ascii.eqlIgnoreCase(value, "portrait")) return viewport.height > viewport.width;
@@ -312,14 +354,17 @@ fn evalNameValue(name: []const u8, value: []const u8, viewport: Viewport) bool {
 }
 
 fn evalBoolean(name: []const u8, viewport: Viewport) bool {
-    if (name.len > 16) {
+    if (name.len > max_ident_len) {
         return false;
     }
-    var buf: [16]u8 = undefined;
+    var buf: [max_ident_len]u8 = undefined;
     const lname = std.ascii.lowerString(&buf, name);
 
     if (std.mem.eql(u8, lname, "width")) return viewport.width > 0;
     if (std.mem.eql(u8, lname, "height")) return viewport.height > 0;
+    if (std.mem.eql(u8, lname, "device-width")) return (viewport.device_width orelse viewport.width) > 0;
+    if (std.mem.eql(u8, lname, "device-height")) return (viewport.device_height orelse viewport.height) > 0;
+    if (std.mem.eql(u8, lname, "resolution")) return viewport.resolution_dppx > 0;
     if (std.mem.eql(u8, lname, "orientation")) return true;
     return false;
 }
@@ -350,6 +395,25 @@ fn parseLengthPx(value: []const u8) ?u32 {
     // as an unparseable length so the query fails closed per MQ4.
     if (std.ascii.eqlIgnoreCase(unit, "em")) return std.math.mul(u32, num, 16) catch null;
     if (std.ascii.eqlIgnoreCase(unit, "rem")) return std.math.mul(u32, num, 16) catch null;
+    return null;
+}
+
+fn parseResolutionDppx(value: []const u8) ?f64 {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0 or trimmed[0] == '-') return null;
+
+    var i: usize = 0;
+    if (trimmed[i] == '+') i += 1;
+    const num_start = i;
+    while (i < trimmed.len and (std.ascii.isDigit(trimmed[i]) or trimmed[i] == '.')) i += 1;
+    if (i == num_start) return null;
+
+    const number = std.fmt.parseFloat(f64, trimmed[num_start..i]) catch return null;
+    if (!std.math.isFinite(number) or number < 0) return null;
+    const unit = std.mem.trim(u8, trimmed[i..], &std.ascii.whitespace);
+    if (std.ascii.eqlIgnoreCase(unit, "dppx")) return number;
+    if (std.ascii.eqlIgnoreCase(unit, "dpi")) return number / 96;
+    if (std.ascii.eqlIgnoreCase(unit, "dpcm")) return number * 2.54 / 96;
     return null;
 }
 
@@ -408,6 +472,22 @@ test "MediaQuery: min-height / max-height / height" {
     try testing.expect(!matches("(max-height: 1079px)", v));
     try testing.expect(matches("(height: 1080px)", v));
     try testing.expect(!matches("(height: 1081px)", v));
+}
+
+test "MediaQuery: device dimensions and resolution are independent of viewport" {
+    const v: Viewport = .{
+        .width = 1280,
+        .height = 720,
+        .device_width = 1920,
+        .device_height = 1080,
+        .resolution_dppx = 1.25,
+    };
+    try testing.expect(matches("(device-width: 1920px) and (device-height: 1080px)", v));
+    try testing.expect(!matches("(device-width: 1280px)", v));
+    try testing.expect(matches("(resolution: 1.25dppx)", v));
+    try testing.expect(matches("(resolution: 120dpi)", v));
+    try testing.expect(matches("(min-resolution: 1dppx)", v));
+    try testing.expect(!matches("(max-resolution: 1dppx)", v));
 }
 
 test "MediaQuery: orientation" {
