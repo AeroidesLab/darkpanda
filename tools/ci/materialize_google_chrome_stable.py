@@ -85,18 +85,49 @@ def powershell_json(script: str, path: Path) -> dict[str, Any]:
     return json.loads(result.stdout)
 
 
+def find_signtool() -> Path:
+    """Find the newest x64 Windows SDK signature verifier."""
+
+    program_files = os.environ.get("ProgramFiles(x86)")
+    if not program_files:
+        raise RuntimeError("ProgramFiles(x86) is unavailable")
+    root = Path(program_files) / "Windows Kits" / "10" / "bin"
+    candidates = sorted(
+        root.glob("*/x64/signtool.exe"),
+        key=lambda path: tuple(
+            int(part) for part in path.parent.parent.name.split(".")
+        ),
+        reverse=True,
+    )
+    if not candidates:
+        raise RuntimeError(f"Windows SDK signtool.exe is missing below {root}")
+    return candidates[0]
+
+
+def signtool_evidence(output: str) -> dict[str, str]:
+    """Require signtool's verified signer to be Google LLC."""
+
+    signer = re.search(r"(?mi)^\s*Issued to:\s*(Google LLC)\s*$", output)
+    assert signer is not None, output
+    return {
+        "Status": "Valid",
+        "Subject": signer.group(1),
+        "Verifier": "signtool.exe",
+    }
+
+
 def authenticode(path: Path) -> dict[str, str]:
     """Require a valid Google Authenticode signature."""
 
-    evidence = powershell_json(
-        "$s=Get-AuthenticodeSignature -LiteralPath $env:DARKPANDA_BINARY_PATH;"
-        "@{Status=[string]$s.Status;Subject=$s.SignerCertificate.Subject}"
-        "|ConvertTo-Json -Compress",
-        path,
+    result = subprocess.run(
+        [str(find_signtool()), "verify", "/pa", "/all", "/v", str(path)],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
-    assert evidence.get("Status") == "Valid", evidence
-    assert "Google LLC" in str(evidence.get("Subject")), evidence
-    return {key: str(value) for key, value in evidence.items()}
+    assert result.returncode == 0, result.stdout
+    return signtool_evidence(result.stdout)
 
 
 def version_info(path: Path, product: str, version: str) -> dict[str, str]:

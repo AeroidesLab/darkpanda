@@ -45,6 +45,23 @@ class ChromeStableMaterializationTests(unittest.TestCase):
                     with self.assertRaises(AssertionError):
                         materialize.load_profile(path)
 
+    def test_signtool_evidence_requires_google_signer(self) -> None:
+        output = """
+        Successfully verified: chrome.exe
+        Signing Certificate Chain:
+            Issued to: Google LLC
+        """
+        self.assertEqual(
+            materialize.signtool_evidence(output),
+            {
+                "Status": "Valid",
+                "Subject": "Google LLC",
+                "Verifier": "signtool.exe",
+            },
+        )
+        with self.assertRaises(AssertionError):
+            materialize.signtool_evidence("Issued to: Example Corp")
+
 
 if __name__ == "__main__":
     unittest.main()
