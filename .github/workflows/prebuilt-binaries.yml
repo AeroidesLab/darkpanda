@@ -2543,7 +2543,7 @@ jobs:
             --wreq $env:WREQ_LIBRARY `
             --out fingerprint-evidence/darkpanda-creepjs.json
 
-      - name: Enforce TLS, HTTP/2, header-order, and CreepJS parity
+      - name: Enforce TLS, HTTP/2, header-order, and CreepJS compatibility
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'

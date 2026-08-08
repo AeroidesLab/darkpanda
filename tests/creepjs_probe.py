@@ -30,13 +30,79 @@ MINIMUM_SECTIONS = {
     "windowFeatures",
     "workerScope",
 }
-ENGINE_HASH_SECTIONS = (
+STRICT_HASH_SECTIONS = (
+    "capturedErrors",
     "consoleErrors",
-    "features",
-    "htmlElementVersion",
+    "intl",
+    "lies",
     "maths",
-    "windowFeatures",
+    "resistance",
+    "timezone",
+    "trash",
 )
+EXACT_FEATURE_FIELDS = (
+    "version",
+    "versionRange",
+    "cssVersion",
+    "windowVersion",
+    "jsVersion",
+    "cssFeatures",
+)
+REQUIRED_WINDOW_FEATURES = {
+    "!BarcodeDetector",
+    "!CanvasFilter",
+    "!SharedArrayBuffer",
+    "AbstractRange",
+    "AggregateError",
+    "CookieChangeEvent",
+    "CookieStore",
+    "EventCounts",
+    "FinalizationRegistry",
+    "NavigatorUAData",
+    "ReadableStreamDefaultController",
+    "SubmitEvent",
+    "ViewTransition",
+    "WeakRef",
+    "WritableStreamDefaultController",
+}
+REQUIRED_JS_FEATURES = {
+    "!Atomics.wake",
+    "!Document.registerElement",
+    "!Element.createShadowRoot",
+    "!Element.getDestinationInsertionPoints",
+    "!Element.onbeforexrselect",
+    "!Error.cause",
+    "Array.at",
+    "Array.findLast",
+    "Array.findLastIndex",
+    "Array.toReversed",
+    "Array.toSorted",
+    "Array.toSpliced",
+    "Array.with",
+    "Atomics.waitAsync",
+    "Document.replaceChildren",
+    "Document.startViewTransition",
+    "Element.ariaAtomic",
+    "Element.ariaLive",
+    "Element.getAnimations",
+    "Element.replaceChildren",
+    "Intl.DisplayNames",
+    "Intl.Segmenter",
+    "Intl.supportedValuesOf",
+    "JSON.isRawJSON",
+    "JSON.rawJSON",
+    "Object.hasOwn",
+    "Promise.allSettled",
+    "Promise.any",
+    "RegExp.hasIndices",
+    "RegExp.unicodeSets",
+    "String.at",
+    "String.isWellFormed",
+    "String.replaceAll",
+    "String.toWellFormed",
+    "WebAssembly.Exception",
+    "WebAssembly.Tag",
+}
 
 
 SNAPSHOT_EXPRESSION = r"""
@@ -201,7 +267,9 @@ def darkpanda_probe(library: str, wreq: str, timeout: float) -> dict[str, Any]:
             )
 
 
-def compare_reports(chrome: dict[str, Any], darkpanda: dict[str, Any]) -> None:
+def compare_reports(
+    chrome: dict[str, Any], darkpanda: dict[str, Any]
+) -> dict[str, int]:
     """Require CreepJS coverage and bot-signal parity with Stable Chrome."""
 
     assert chrome.get("ready") is True, chrome
@@ -239,12 +307,44 @@ def compare_reports(chrome: dict[str, Any], darkpanda: dict[str, Any]) -> None:
             "chrome": chrome["headless"][signal],
             "darkpanda": darkpanda["headless"][signal],
         }
-    for section in ENGINE_HASH_SECTIONS:
+    for section in STRICT_HASH_SECTIONS:
         assert darkpanda["hashes"][section] == chrome["hashes"][section], {
             "section": section,
             "chrome": chrome["hashes"][section],
             "darkpanda": darkpanda["hashes"][section],
         }
+    chrome_features = chrome.get("features") or {}
+    darkpanda_features = darkpanda.get("features") or {}
+    for field in EXACT_FEATURE_FIELDS:
+        assert darkpanda_features.get(field) == chrome_features.get(field), {
+            "featureField": field,
+            "chrome": chrome_features.get(field),
+            "darkpanda": darkpanda_features.get(field),
+        }
+    chrome_window = set(chrome_features.get("windowFeatures") or [])
+    darkpanda_window = set(darkpanda_features.get("windowFeatures") or [])
+    chrome_js = set(chrome_features.get("jsFeatures") or [])
+    darkpanda_js = set(darkpanda_features.get("jsFeatures") or [])
+    assert REQUIRED_WINDOW_FEATURES <= darkpanda_window, {
+        "missingRequiredWindowFeatures": sorted(
+            REQUIRED_WINDOW_FEATURES - darkpanda_window
+        )
+    }
+    assert REQUIRED_JS_FEATURES <= darkpanda_js, {
+        "missingRequiredJsFeatures": sorted(REQUIRED_JS_FEATURES - darkpanda_js)
+    }
+    assert darkpanda_window <= chrome_window, {
+        "nonChromeWindowFeatures": sorted(darkpanda_window - chrome_window)
+    }
+    assert darkpanda_js <= chrome_js, {
+        "nonChromeJsFeatures": sorted(darkpanda_js - chrome_js)
+    }
+    return {
+        "chromeWindowFeatures": len(chrome_window),
+        "darkpandaWindowFeatures": len(darkpanda_window),
+        "chromeJsFeatures": len(chrome_js),
+        "darkpandaJsFeatures": len(darkpanda_js),
+    }
 
 
 def main() -> None:
@@ -273,8 +373,9 @@ def main() -> None:
     else:
         chrome_report = json.loads(args.chrome.read_text(encoding="utf-8"))
         darkpanda_report = json.loads(args.darkpanda.read_text(encoding="utf-8"))
-        compare_reports(chrome_report, darkpanda_report)
-        print("CreepJS Google Chrome Stable/DarkPanda parity: PASS")
+        coverage = compare_reports(chrome_report, darkpanda_report)
+        print(json.dumps(coverage, separators=(",", ":")))
+        print("CreepJS Chrome 149 bot-signal and feature coverage: PASS")
         return
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
