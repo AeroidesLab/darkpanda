@@ -227,6 +227,57 @@ class StableChromeCaptureTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 capture_tool.google_chrome_version(product)
 
+    def test_windows_materialization_is_bound_to_the_binary(self) -> None:
+        version_info = {
+            "ProductName": "Google Chrome",
+            "ProductVersion": "149.0.7827.201",
+            "FileDescription": "Google Chrome",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "Chrome-bin" / "chrome.exe"
+            binary.parent.mkdir()
+            binary.write_bytes(b"signed chrome fixture")
+            report = root / "materialization.json"
+            report.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "darkpanda-google-chrome-stable-materialization/v1"
+                        ),
+                        "version": version_info["ProductVersion"],
+                        "platform": "win64",
+                        "chrome": {
+                            "path": "Chrome-bin/chrome.exe",
+                            "sha256": capture_tool.sha256(binary),
+                            "signature": {
+                                "Status": "Valid",
+                                "Subject": "Google LLC",
+                                "Verifier": "signtool.exe",
+                            },
+                            "versionInfo": version_info,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                capture_tool.windows_materialization(
+                    binary.resolve(), report, version_info
+                ),
+                {
+                    "kind": "authenticode",
+                    "Status": "Valid",
+                    "Subject": "Google LLC",
+                    "Verifier": "signtool.exe",
+                },
+            )
+            binary.write_bytes(b"tampered")
+            with self.assertRaises(AssertionError):
+                capture_tool.windows_materialization(
+                    binary.resolve(), report, version_info
+                )
+
     def test_capture_phase_requires_real_psk_evidence(self) -> None:
         capture_tool.validate_phase(capture(resumed=False), "cold")
         capture_tool.validate_phase(capture(resumed=True), "resumed")

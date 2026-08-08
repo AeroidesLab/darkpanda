@@ -109,6 +109,11 @@ SNAPSHOT_EXPRESSION = r"""
       jsFeatures: fp.features?.jsFeatures,
     },
     capturedErrors: fp.capturedErrors,
+    webgl: {
+      parameters: fp.canvasWebgl?.parameters,
+      gpu: fp.canvasWebgl?.gpu,
+      trash: fp.trash?.trashBin,
+    },
     hashes,
   });
 })()

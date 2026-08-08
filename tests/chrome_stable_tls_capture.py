@@ -137,6 +137,34 @@ def parse_codesign(output: str) -> dict[str, str]:
     }
 
 
+def windows_materialization(
+    binary: Path, report_path: Path, version_info: dict[str, str]
+) -> dict[str, Any]:
+    """Bind a Chrome binary to the materializer's signtool evidence."""
+
+    resolved_report = report_path.resolve(strict=True)
+    report = json.loads(resolved_report.read_text(encoding="utf-8"))
+    chrome = report.get("chrome") or {}
+    signature = chrome.get("signature") or {}
+    expected_binary = (
+        resolved_report.parent / Path(chrome.get("path") or "")
+    ).resolve()
+    assert report.get("schema") == (
+        "darkpanda-google-chrome-stable-materialization/v1"
+    ), report
+    assert report.get("platform") == "win64", report
+    assert expected_binary == binary, {"expected": expected_binary, "actual": binary}
+    assert report.get("version") == version_info["ProductVersion"], report
+    assert chrome.get("versionInfo") == version_info, report
+    assert chrome.get("sha256") == sha256(binary), report
+    assert signature == {
+        "Status": "Valid",
+        "Subject": "Google LLC",
+        "Verifier": "signtool.exe",
+    }, signature
+    return {"kind": "authenticode", **signature}
+
+
 def platform_provenance(binary: Path) -> dict[str, Any]:
     """Verify the Stable installation with the host package/signing system."""
 
@@ -149,27 +177,6 @@ def platform_provenance(binary: Path) -> dict[str, Any]:
             stderr=subprocess.PIPE,
         )
         return {"kind": "codesign", **parse_codesign(result.stderr)}
-
-    if os.name == "nt":
-        environment = dict(os.environ, DARKPANDA_CHROME_BINARY=str(binary))
-        script = (
-            "$s=Get-AuthenticodeSignature -LiteralPath "
-            "$env:DARKPANDA_CHROME_BINARY;"
-            "@{Status=[string]$s.Status;Subject=$s.SignerCertificate.Subject}"
-            "|ConvertTo-Json -Compress"
-        )
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", script],
-            check=True,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=environment,
-        )
-        evidence = json.loads(result.stdout)
-        assert evidence.get("Status") == "Valid", evidence
-        assert "Google LLC" in str(evidence.get("Subject")), evidence
-        return {"kind": "authenticode", **evidence}
 
     for package_tool, command in (
         (
@@ -191,23 +198,32 @@ def platform_provenance(binary: Path) -> dict[str, Any]:
     raise AssertionError("Google Chrome Stable package provenance is unavailable")
 
 
-def binary_evidence(binary: Path) -> dict[str, Any]:
+def binary_evidence(
+    binary: Path, materialization: Path | None = None
+) -> dict[str, Any]:
     """Return verified executable provenance."""
 
     resolved = binary.expanduser().resolve(strict=True)
     if os.name == "nt":
         version_info = windows_version_info(resolved)
         version = version_info["ProductVersion"]
+        assert materialization is not None, (
+            "Windows Chrome requires the verified materialization report"
+        )
+        provenance = windows_materialization(
+            resolved, materialization, version_info
+        )
     else:
         version_info = None
         version = google_chrome_version(command_output([str(resolved), "--version"]))
+        provenance = platform_provenance(resolved)
     return {
         "product": "Google Chrome Stable",
         "version": version,
         "path": str(resolved),
         "sha256": sha256(resolved),
         "versionInfo": version_info,
-        "provenance": platform_provenance(resolved),
+        "provenance": provenance,
     }
 
 
@@ -362,12 +378,13 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--chrome-binary", required=True, type=Path)
+    parser.add_argument("--materialization", type=Path)
     parser.add_argument("--endpoint", required=True)
     parser.add_argument("--phase", required=True, choices=("cold", "resumed"))
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
 
-    binary = binary_evidence(args.chrome_binary)
+    binary = binary_evidence(args.chrome_binary, args.materialization)
     if args.phase == "resumed":
         flush_socket_pools(args.endpoint)
     devtools, peet = capture_peet(args.endpoint)

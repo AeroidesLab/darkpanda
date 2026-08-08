@@ -2251,6 +2251,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m venv fingerprint-venv
           $python = Join-Path $env:GITHUB_WORKSPACE 'fingerprint-venv/Scripts/python.exe'
           $wheel = Get-ChildItem -LiteralPath python-result -Recurse -Filter '*.whl'
@@ -2290,6 +2291,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           & $env:FINGERPRINT_PYTHON `
             browser/tools/ci/materialize_google_chrome_stable.py `
             --profile browser/tools/ci/chromium-profile.json `
@@ -2300,6 +2302,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           New-Item -ItemType Directory -Force fingerprint-evidence | Out-Null
           $chrome = Join-Path $env:GITHUB_WORKSPACE 'chrome-oracle/Chrome-bin/chrome.exe'
           $profile = Join-Path $env:GITHUB_WORKSPACE 'chrome-oracle-profile'
@@ -2328,6 +2331,7 @@ jobs:
             & $env:FINGERPRINT_PYTHON `
               browser/tests/chrome_stable_tls_capture.py `
               --chrome-binary $chrome `
+              --materialization chrome-oracle/materialization.json `
               --endpoint 'http://127.0.0.1:9222' `
               --phase cold `
               --out fingerprint-evidence/chrome-cold.json
@@ -2354,6 +2358,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           & $env:FINGERPRINT_PYTHON browser/tests/tls_fingerprint_compare.py `
             --chrome-cold fingerprint-evidence/chrome-cold.json `
             --wreq-cold fingerprint-evidence/wreq-cold.json `
@@ -2387,6 +2392,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           if ($env:SOURCE_RUN_ID -notmatch '^\d+$') {
             throw "Invalid source run id: $env:SOURCE_RUN_ID"
           }
@@ -2434,6 +2440,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m venv fingerprint-venv
           $python = Join-Path $env:GITHUB_WORKSPACE 'fingerprint-venv/Scripts/python.exe'
           $wheel = Get-ChildItem -LiteralPath python-result -Recurse -Filter '*.whl'
@@ -2473,6 +2480,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           & $env:FINGERPRINT_PYTHON `
             browser/tools/ci/materialize_google_chrome_stable.py `
             --profile browser/tools/ci/chromium-profile.json `
@@ -2483,6 +2491,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           New-Item -ItemType Directory -Force fingerprint-evidence | Out-Null
           $chrome = Join-Path $env:GITHUB_WORKSPACE 'chrome-oracle/Chrome-bin/chrome.exe'
           $profile = Join-Path $env:GITHUB_WORKSPACE 'chrome-oracle-profile'
@@ -2511,6 +2520,7 @@ jobs:
             & $env:FINGERPRINT_PYTHON `
               browser/tests/chrome_stable_tls_capture.py `
               --chrome-binary $chrome `
+              --materialization chrome-oracle/materialization.json `
               --endpoint 'http://127.0.0.1:9222' `
               --phase cold `
               --out fingerprint-evidence/chrome-cold.json
@@ -2537,6 +2547,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           & $env:FINGERPRINT_PYTHON browser/tests/tls_fingerprint_compare.py `
             --chrome-cold fingerprint-evidence/chrome-cold.json `
             --wreq-cold fingerprint-evidence/wreq-cold.json `
