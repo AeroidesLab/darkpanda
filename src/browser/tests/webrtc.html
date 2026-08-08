@@ -1,0 +1,83 @@
+<!doctype html>
+<script src="testing.js"></script>
+
+<script id="webidl_surface" type="module">
+testing.expectEqual([
+  "function", "function", "function", "function", "function",
+  0, 0, 1, 1, true, true, true, true, true,
+], [
+  typeof RTCPeerConnection,
+  typeof RTCDataChannel,
+  typeof RTCIceCandidate,
+  typeof RTCSessionDescription,
+  typeof RTCPeerConnectionIceEvent,
+  RTCPeerConnection.length,
+  RTCIceCandidate.length,
+  RTCSessionDescription.length,
+  RTCPeerConnection.prototype.createDataChannel.length,
+  new RTCIceCandidate().candidate === "",
+  new RTCSessionDescription({ type: "offer" }).sdp === "",
+  "currentLocalDescription" in RTCPeerConnection.prototype,
+  "bufferedAmountLowThreshold" in RTCDataChannel.prototype,
+  typeof RTCPeerConnection.prototype.getStats === "function",
+]);
+</script>
+
+<script id="tun_data_channel_round_trip" type="module">
+const state = await testing.async();
+const offerer = new RTCPeerConnection();
+const answerer = new RTCPeerConnection();
+const channel = offerer.createDataChannel("chat", { protocol: "json" });
+let remoteOpenedResolve;
+const remoteOpened = new Promise((resolve) => remoteOpenedResolve = resolve);
+const received = new Promise((resolve, reject) => {
+  const timeout = setTimeout(() => reject(new Error("WebRTC data channel timeout")), 4000);
+  answerer.ondatachannel = ({ channel: remote }) => {
+    remote.binaryType = "arraybuffer";
+    remote.onopen = () => remoteOpenedResolve(true);
+    remote.onmessage = ({ data }) => remote.send(data === "ping" ? "pong" : data);
+  };
+  channel.onmessage = ({ data }) => {
+    clearTimeout(timeout);
+    resolve(data);
+  };
+});
+
+const gathered = (pc) => pc.iceGatheringState === "complete" ? Promise.resolve() :
+  new Promise((resolve) => pc.onicegatheringstatechange = () => {
+    if (pc.iceGatheringState === "complete") resolve();
+  });
+
+await offerer.setLocalDescription(await offerer.createOffer());
+await gathered(offerer);
+await answerer.setRemoteDescription(offerer.localDescription);
+await answerer.setLocalDescription(await answerer.createAnswer());
+await gathered(answerer);
+await offerer.setRemoteDescription(answerer.localDescription);
+if (channel.readyState !== "open") await new Promise((resolve) => channel.onopen = resolve);
+channel.send("ping");
+const result = await received;
+channel.binaryType = "arraybuffer";
+const binary = new Promise((resolve) => channel.onmessage = ({ data }) => resolve(data));
+channel.send(new Uint8Array([7, 149]));
+const binaryResult = new Uint8Array(await binary)[1];
+if (answerer.connectionState !== "connected") {
+  await new Promise((resolve) => answerer.onconnectionstatechange = () => {
+    if (answerer.connectionState === "connected") resolve();
+  });
+}
+state.resolve([
+  channel.label,
+  channel.protocol,
+  result,
+  binaryResult,
+  channel.readyState,
+  answerer.connectionState,
+  await remoteOpened,
+]);
+offerer.close();
+answerer.close();
+await state.done((output) => testing.expectEqual([
+  "chat", "json", "pong", 149, "open", "connected", true,
+], output));
+</script>

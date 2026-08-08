@@ -87,17 +87,23 @@ pub fn build(b: *Build) !void {
         "boringssl_dist",
         "Absolute path to the BoringSSL component dist/<target> directory",
     );
+    const webrtc_dist = componentDistOption(
+        b,
+        "webrtc_dist",
+        "Absolute path to the WebRTC component dist/<target> directory",
+    );
     // Keep formatting and option discovery usable without materialized native
     // components. Every compile/install/run/test entry below depends on this
-    // gate, so a real build can never silently omit one of the four dist sets.
+    // gate, so a real build can never silently omit one of the five dist sets.
     const component_dist_gate: ?*Build.Step = if (canvas_dist != null and
         html5ever_dist != null and
         wreq_dist != null and
-        boringssl_dist != null)
+        boringssl_dist != null and
+        webrtc_dist != null)
         null
     else
         &b.addFail(
-            "DarkPanda native builds require absolute -Dcanvas_dist, -Dhtml5ever_dist, -Dwreq_dist, and -Dboringssl_dist paths",
+            "DarkPanda native builds require absolute -Dcanvas_dist, -Dhtml5ever_dist, -Dwreq_dist, -Dboringssl_dist, and -Dwebrtc_dist paths",
         ).step;
 
     const canvas_artifact = if (canvas_dist) |dist|
@@ -106,6 +112,10 @@ pub fn build(b: *Build) !void {
         null;
     const wreq_artifact = if (wreq_dist) |dist|
         installRuntimeDist(b, dist, wreqLibraryName(target.result.os.tag))
+    else
+        null;
+    const webrtc_artifact = if (webrtc_dist) |dist|
+        installRuntimeDist(b, dist, webrtcLibraryName(target.result.os.tag))
     else
         null;
     const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
@@ -183,6 +193,7 @@ pub fn build(b: *Build) !void {
             try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
             linkWebCryptoDist(b, mod, boringssl_dist.?);
             html5ever_artifact = linkHtml5EverDist(b, mod, html5ever_dist.?);
+            linkWebRtcDist(b, mod, webrtc_dist.?);
         }
 
         if (target.result.os.tag == .windows) {
@@ -268,6 +279,9 @@ pub fn build(b: *Build) !void {
         if (html5ever_artifact) |artifact| {
             b.getInstallStep().dependOn(&artifact.install.step);
         }
+        if (webrtc_artifact) |artifact| {
+            b.getInstallStep().dependOn(&artifact.install.step);
+        }
 
         const exe_check = b.addLibrary(.{
             .name = "darkpanda_exe_check",
@@ -285,6 +299,7 @@ pub fn build(b: *Build) !void {
             canvas_artifact,
             wreq_artifact,
             html5ever_artifact,
+            webrtc_artifact,
         );
         if (b.args) |args| {
             run_cmd.addArgs(args);
@@ -302,6 +317,7 @@ pub fn build(b: *Build) !void {
             canvas_artifact,
             wreq_artifact,
             html5ever_artifact,
+            webrtc_artifact,
         );
         version_info_run.addArg("version");
         version_info_step.dependOn(&version_info_run.step);
@@ -365,6 +381,7 @@ pub fn build(b: *Build) !void {
         }
         if (wreq_artifact) |artifact| ffi_step.dependOn(&artifact.install.step);
         if (html5ever_artifact) |artifact| ffi_step.dependOn(&artifact.install.step);
+        if (webrtc_artifact) |artifact| ffi_step.dependOn(&artifact.install.step);
 
         // Compile-only coverage for the C ABI root is part of `zig build check`.
         // A static library avoids requiring a runnable/new V8 DLL at this step.
@@ -400,6 +417,7 @@ pub fn build(b: *Build) !void {
         }
         if (wreq_artifact) |artifact| extras_step.dependOn(&artifact.install.step);
         if (html5ever_artifact) |artifact| extras_step.dependOn(&artifact.install.step);
+        if (webrtc_artifact) |artifact| extras_step.dependOn(&artifact.install.step);
 
         const exe_check = b.addLibrary(.{
             .name = "snapshot_creator_check",
@@ -417,6 +435,7 @@ pub fn build(b: *Build) !void {
             canvas_artifact,
             wreq_artifact,
             html5ever_artifact,
+            webrtc_artifact,
         );
         if (b.args) |args| {
             run_cmd.addArgs(args);
@@ -441,6 +460,7 @@ pub fn build(b: *Build) !void {
             canvas_artifact,
             wreq_artifact,
             html5ever_artifact,
+            webrtc_artifact,
         );
         const test_compile_step = b.step("test-compile", "Compile unit tests without running them");
         test_compile_step.dependOn(&tests.step);
@@ -502,11 +522,13 @@ fn configureRuntimeRun(
     canvas: ?CanvasDistArtifact,
     wreq: ?RuntimeDistArtifact,
     html5ever: ?Html5EverArtifact,
+    webrtc: ?RuntimeDistArtifact,
 ) void {
     if (component_dist_gate) |gate| run.step.dependOn(gate);
     if (canvas) |artifact| run.step.dependOn(&artifact.runtime.install.step);
     if (wreq) |artifact| run.step.dependOn(&artifact.install.step);
     if (html5ever) |artifact| run.step.dependOn(&artifact.install.step);
+    if (webrtc) |artifact| run.step.dependOn(&artifact.install.step);
 
     run.setEnvironmentVariable(
         "DARKPANDA_WREQ_LIBRARY",
@@ -515,6 +537,10 @@ fn configureRuntimeRun(
     run.setEnvironmentVariable(
         "DARKPANDA_CANVAS_BACKEND_LIBRARY",
         b.getInstallPath(.bin, canvasLibraryName(os)),
+    );
+    run.setEnvironmentVariable(
+        "DARKPANDA_WEBRTC_LIBRARY",
+        b.getInstallPath(.bin, webrtcLibraryName(os)),
     );
     run.setEnvironmentVariable("DARKPANDA_CANVAS_DRIVER", "dynamic");
     run.setEnvironmentVariable("DARKPANDA_CANVAS_BACKEND_FALLBACK", "disabled");
@@ -540,6 +566,14 @@ fn wreqLibraryName(os_tag: std.Target.Os.Tag) []const u8 {
         .windows => "wreq.dll",
         .macos => "libwreq.dylib",
         else => "libwreq.so",
+    };
+}
+
+fn webrtcLibraryName(os_tag: std.Target.Os.Tag) []const u8 {
+    return switch (os_tag) {
+        .windows => "webrtc.dll",
+        .macos => "libwebrtc.dylib",
+        else => "libwebrtc.so",
     };
 }
 
@@ -694,6 +728,21 @@ fn linkWebCryptoDist(b: *Build, mod: *Build.Module, dist: []const u8) void {
         mod.linkSystemLibrary("crypt32", .{});
         mod.linkSystemLibrary("dbghelp", .{});
         mod.linkSystemLibrary("winmm", .{});
+    }
+}
+
+fn linkWebRtcDist(b: *Build, mod: *Build.Module, dist: []const u8) void {
+    const target = mod.resolved_target.?.result;
+    if (target.os.tag == .windows) {
+        mod.addObjectFile(distFile(b, dist, "lib", "webrtc.dll.lib"));
+        mod.linkSystemLibrary("ws2_32", .{});
+        mod.linkSystemLibrary("iphlpapi", .{});
+    } else {
+        mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ dist, "bin" }) });
+        mod.linkSystemLibrary("webrtc", .{
+            .preferred_link_mode = .dynamic,
+            .search_strategy = .no_fallback,
+        });
     }
 }
 

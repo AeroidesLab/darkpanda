@@ -39,7 +39,7 @@ than a claim of full Blink, GPU, process-isolation, or WPT parity.
 - `wreq.dll` / `libwreq.so` 使用 wreq、wreq-util 与 btls/BoringSSL。
 - CPU Chrome-Skia Canvas ABI v5 动态后端，软件 fallback 默认关闭。
 - HTTP 响应缓存、Cookie、IndexedDB 和页面状态均为内存型；不写磁盘浏览器缓存。
-- 主仓库 Actions 固定四个组件提交，并验证每个标准 dist 的构建、测试和 SHA-256
+- 主仓库 Actions 固定五个组件提交，并验证每个标准 dist 的构建、测试和 SHA-256
   元数据。
 
 ## Runtime artifact set
@@ -53,8 +53,9 @@ than a claim of full Blink, GPU, process-isolation, or WPT parity.
 | HTTP/TLS | `wreq.dll` | `libwreq.so` | `libwreq.dylib` |
 | CPU Canvas | `canvas.dll` | `libcanvas.so` | `libcanvas.dylib` |
 | HTML parser | `html5ever.dll` | `libhtml5ever.so` | `libhtml5ever.dylib` |
+| WebRTC DataChannel | `webrtc.dll` | `libwebrtc.so` | `libwebrtc.dylib` |
 
-主库相对自己的模块目录加载 wreq、Canvas 和 HTML parser，而不是相对
+主库相对自己的模块目录加载 wreq、Canvas、HTML parser 和 WebRTC，而不是相对
 `python.exe` 或宿主程序目录加载。部署或打包时不要单独复制其中一个文件。
 
 ## GitHub Actions 预构建 / Prebuilt releases
@@ -71,7 +72,7 @@ Windows/Linux/macOS 验收入口。阶段 1–4 在四个原生 runner 上构建
 显式设置 `publish_release=true` 时，四平台聚合门通过后会创建或更新对应
 `v1.0.0-ci.<run-number>` 预发行版。
 
-每次运行开始时，工作流固定 `canvas`、`html5ever`、`wreq` 和 `boringssl` 的
+每次运行开始时，工作流固定 `canvas`、`html5ever`、`wreq`、`boringssl` 和 `webrtc` 的
 精确提交。各组件以同一套 Chromium M149 profile 和 DarkPanda 根目录固定的 `DEPS`
 工具链构建，并输出标准 `dist/<target>/`；浏览器仓库只消费这些 dist，不进入组件
 源码目录编译 Cargo/CMake 项目。
@@ -82,7 +83,7 @@ Actions 在组装浏览器前验证每个 dist 的 `metadata/build-info.json`、
 只由 [`AeroidesLab/py-darkpanda`](https://github.com/AeroidesLab/py-darkpanda)
 的 PyO3 wheel 提供，不再发布主仓库的 ctypes 包装层。
 发布硬门会启动 CLI，并在安装目录和重新解压后的干净环境中加载
-`darkpanda`、`wreq`、Canvas ABI v5 和 HTML5ever 四个动态库。完整 Canvas 像素与
+`darkpanda`、`wreq`、Canvas ABI v5、HTML5ever 和 WebRTC 五个动态库。完整 Canvas 像素与
 software fallback 测试仍会运行并保留报告，但暂不阻断四平台预发行版。
 
 ## Python API
@@ -110,8 +111,8 @@ with Browser(
 
 ## 构建模型 / Build model
 
-`canvas`、`html5ever`、`wreq` 和 `boringssl` 各自在独立仓库提供源码和统一构建
-入口，实际构建只由 DarkPanda 主仓库 Actions 发起。四个组件共享 DarkPanda 根目录
+`canvas`、`html5ever`、`wreq`、`boringssl` 和 `webrtc` 各自在独立仓库提供源码和统一构建
+入口，实际构建只由 DarkPanda 主仓库 Actions 发起。五个组件共享 DarkPanda 根目录
 固定的 Chromium M149 profile、`DEPS` 工具链和统一接口：
 
 ```text
@@ -136,7 +137,7 @@ dist/<target>/
   metadata/SHA256SUMS
 ```
 
-浏览器构建只接受四个绝对 dist 路径，不再拥有或调用组件 Cargo/CMake 构建：
+浏览器构建只接受五个绝对 dist 路径，不再拥有或调用组件 Cargo/CMake 构建：
 
 ```bash
 zig build install \
@@ -144,16 +145,17 @@ zig build install \
   -Dhtml5ever_dist=/absolute/dist/target \
   -Dwreq_dist=/absolute/dist/target \
   -Dboringssl_dist=/absolute/dist/target \
+  -Dwebrtc_dist=/absolute/dist/target \
   -Dprebuilt_v8_path=/absolute/path/to/v8/archive
 ```
 
-安装结果将 Canvas、HTML5ever 和 wreq 动态库放在 DarkPanda 模块相邻的 `bin/`
+安装结果将 Canvas、HTML5ever、wreq 和 WebRTC 动态库放在 DarkPanda 模块相邻的 `bin/`
 目录；Canvas 的公共头是 `include/canvas.h`。BoringSSL M149 的 `crypto` 静态库
 已包含 fipsmodule objects，因此浏览器只链接 `crypto.lib` 或 `libcrypto.a`。
 
 本地可用 `make fmt`、`make check`、`make test`、`make install` 和
 `make test-runner-report`。除格式与独立 test-runner 检查外，目标都要求设置
-`CANVAS_DIST`、`HTML5EVER_DIST`、`WREQ_DIST` 和 `BORINGSSL_DIST`；正式产物以主
+`CANVAS_DIST`、`HTML5EVER_DIST`、`WREQ_DIST`、`BORINGSSL_DIST` 和 `WEBRTC_DIST`；正式产物以主
 仓库 Actions 的固定提交、元数据校验和跨平台测试结果为准。
 
 ## Acceptance boundary

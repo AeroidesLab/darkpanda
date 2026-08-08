@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 
-COMPONENTS = ("canvas", "html5ever", "wreq", "boringssl")
+COMPONENTS = ("canvas", "html5ever", "wreq", "boringssl", "webrtc")
 TARGETS = (
     "windows-x86_64",
     "linux-x86_64",
@@ -23,6 +23,7 @@ SUITES = {
     "html5ever": ("cargo-test", "c-abi-consumer"),
     "wreq": ("cargo-test", "c-abi-consumer"),
     "boringssl": ("crypto-archive-contract", "c-abi-consumer", "ctest"),
+    "webrtc": ("rust-check", "c-abi-smoke", "peer-data-channel-smoke"),
 }
 LIBRARIES = {
     ("canvas", "windows-x86_64"): "bin/canvas.dll",
@@ -41,6 +42,10 @@ LIBRARIES = {
     ("boringssl", "linux-x86_64"): "lib/libcrypto.a",
     ("boringssl", "macos-x86_64"): "lib/libcrypto.a",
     ("boringssl", "macos-aarch64"): "lib/libcrypto.a",
+    ("webrtc", "windows-x86_64"): "bin/webrtc.dll",
+    ("webrtc", "linux-x86_64"): "bin/libwebrtc.so",
+    ("webrtc", "macos-x86_64"): "bin/libwebrtc.dylib",
+    ("webrtc", "macos-aarch64"): "bin/libwebrtc.dylib",
 }
 CONSUMER_FILES = {
     ("canvas", "windows-x86_64"): ("include/canvas.h", "lib/canvas.lib"),
@@ -59,6 +64,10 @@ CONSUMER_FILES = {
     ("boringssl", "linux-x86_64"): ("include/openssl/sha.h",),
     ("boringssl", "macos-x86_64"): ("include/openssl/sha.h",),
     ("boringssl", "macos-aarch64"): ("include/openssl/sha.h",),
+    ("webrtc", "windows-x86_64"): ("include/darkpanda_webrtc.h", "lib/webrtc.dll.lib"),
+    ("webrtc", "linux-x86_64"): ("include/darkpanda_webrtc.h",),
+    ("webrtc", "macos-x86_64"): ("include/darkpanda_webrtc.h",),
+    ("webrtc", "macos-aarch64"): ("include/darkpanda_webrtc.h",),
 }
 
 
@@ -184,7 +193,7 @@ class AggregateComponentReportsTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         summary = json.loads((self.root / "summary.json").read_text())
         self.assertEqual(summary["status"], "passed")
-        self.assertEqual(summary["passed"], 16)
+        self.assertEqual(summary["passed"], 20)
 
     def test_failure_still_writes_diagnostic_summary(self) -> None:
         report = next(

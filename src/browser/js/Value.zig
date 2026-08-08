@@ -1153,6 +1153,7 @@ const CloneDelegate = struct {
     }
 
     fn uncloneableHostObjectMessage(local: *const js.Local, object: ?*const v8.Object) ?[]const u8 {
+        @setEvalBranchQuota(2000);
         const handle = object orelse return null;
         if (v8.v8__Object__InternalFieldCount(handle) == 0) return null;
         const tao_ptr = v8.v8__Object__GetAlignedPointerFromInternalField(handle, 0) orelse return null;

@@ -25,6 +25,7 @@ const Platform = @import("browser/js/Platform.zig");
 const Storage = @import("storage/Storage.zig");
 const Network = @import("network/Network.zig");
 const wreq = @import("sys/wreq_transport.zig");
+const webrtc = @import("sys/webrtc.zig");
 const Watchdog = @import("Watchdog.zig");
 const FingerprintProfile = @import("FingerprintProfile.zig");
 const CanvasBackendProvider = @import("browser/canvas_backend/Provider.zig");
@@ -43,6 +44,7 @@ pub const InitOptions = struct {
     /// Complete, strict schema-v2 profile supplied by an embedder. App owns
     /// the parsed graph; the caller may release the JSON after init returns.
     fingerprint_profile_json: ?[]const u8 = null,
+    webrtc_backend_path: ?[]const u8 = null,
 };
 
 network: Network,
@@ -119,6 +121,10 @@ pub fn initWithOptions(allocator: Allocator, config: *const Config, options: Ini
         .tls_verify = config.tlsVerifyHost(),
         .dns_nameservers = config.wreqDnsNameservers() orelse "",
     });
+
+    if (config.core.webrtc_tun_bind_address) |bind_address| {
+        try webrtc.preflight(allocator, options.webrtc_backend_path, bind_address);
+    }
 
     if (options.canvas_backend_options) |canvas_options| {
         var canvas_preflight = try CanvasBackendProvider.init(allocator, canvas_options);
@@ -199,6 +205,7 @@ pub fn deinit(self: *App) void {
     self.storage.deinit(allocator);
     if (self.fingerprint_profile) |*profile| profile.deinit();
     if (self.canvas_backend_library_path) |path| allocator.free(path);
+    if (self.config.webRtcTunBindAddress() != null) webrtc.dpw_cleanup();
 
     allocator.destroy(self);
 }

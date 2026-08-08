@@ -37,6 +37,7 @@ def main() -> None:
     parser.add_argument("--wreq", required=True, type=absolute_file)
     parser.add_argument("--canvas", required=True, type=absolute_file)
     parser.add_argument("--html5ever", required=True, type=absolute_file)
+    parser.add_argument("--webrtc", required=True, type=absolute_file)
     args = parser.parse_args()
 
     ffi_abi, ffi_version = exported_identity(
@@ -53,6 +54,9 @@ def main() -> None:
         "cs_canvas_backend_version",
     )
     html5ever_library = ctypes.CDLL(str(args.html5ever))
+    webrtc_abi, webrtc_version = exported_identity(
+        args.webrtc, "dpw_abi_version", "dpw_version"
+    )
 
     if (
         ffi_abi < 1
@@ -61,12 +65,15 @@ def main() -> None:
         or not wreq_version.strip()
         or canvas_abi != 5
         or not canvas_version.strip()
+        or webrtc_abi != 1
+        or not webrtc_version.strip()
     ):
         raise AssertionError(
             "invalid runtime library identity: "
             f"ffi={ffi_abi}/{ffi_version!r}, "
             f"wreq={wreq_abi}/{wreq_version!r}, "
             f"canvas={canvas_abi}/{canvas_version!r}"
+            f", webrtc={webrtc_abi}/{webrtc_version!r}"
         )
 
     paths = {
@@ -74,6 +81,7 @@ def main() -> None:
         "wreq": str(args.wreq),
         "canvas": str(args.canvas),
         "html5ever": str(args.html5ever),
+        "webrtc": str(args.webrtc),
     }
     print(
         json.dumps(
@@ -86,6 +94,8 @@ def main() -> None:
                 "wreqVersion": wreq_version,
                 "canvasAbiVersion": canvas_abi,
                 "canvasVersion": canvas_version,
+                "webrtcAbiVersion": webrtc_abi,
+                "webrtcVersion": webrtc_version,
                 "loadedLibraries": list(paths.values()),
                 "paths": paths,
             },

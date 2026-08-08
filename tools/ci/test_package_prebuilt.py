@@ -307,19 +307,21 @@ class PackagePrebuiltContractTest(unittest.TestCase):
                 "wreq": "libwreq.so",
                 "canvas": "libcanvas.so",
                 "html5ever": "libhtml5ever.so",
+                "webrtc": "libwebrtc.so",
             }.items()
         }
         runtime = {
             "schema": "darkpanda-runtime-load-attestation/v1",
             "status": "PASS",
             "canvasAbiVersion": 5,
+            "webrtcAbiVersion": 1,
         }
 
         proof = package_prebuilt.portable_runtime_proof(
             runtime,
             paths,
             root,
-            ("ffi", "wreq", "canvas", "html5ever"),
+            ("ffi", "wreq", "canvas", "html5ever", "webrtc"),
         )
 
         self.assertEqual(

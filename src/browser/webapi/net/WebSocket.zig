@@ -506,13 +506,13 @@ fn isValidProtocol(protocol: []const u8) bool {
 }
 
 /// WebSocket send() accepts string, Blob, ArrayBuffer, or TypedArray
-const SendData = union(enum) {
+pub const SendData = union(enum) {
     blob: *Blob,
     js_val: js.Value,
 };
 
 /// Union for extracting bytes from ArrayBuffer/TypedArray
-const BinaryData = union(enum) {
+pub const BinaryData = union(enum) {
     int8: []i8,
     uint8: []u8,
     int16: []i16,
@@ -524,7 +524,7 @@ const BinaryData = union(enum) {
     float32: []f32,
     float64: []f64,
 
-    fn asBuffer(self: BinaryData) []u8 {
+    pub fn asBuffer(self: BinaryData) []u8 {
         return switch (self) {
             .int8 => |b| @as([*]u8, @ptrCast(b.ptr))[0..b.len],
             .uint8 => |b| b,

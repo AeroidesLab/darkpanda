@@ -64,6 +64,9 @@ pub const Runtime = struct {
     canvas_backend_path: ?[]u8 = null,
     canvas_driver: abi.CanvasDriver = .environment,
     canvas_fallback: abi.CanvasFallback = .disabled,
+    webrtc_backend_path: ?[]u8 = null,
+    webrtc_tun_bind_address: ?[]u8 = null,
+    webrtc_mode: abi.WebRtcMode = .disabled,
     client_profile: lp.ClientProfile.Id = lp.ClientProfile.target_default,
     navigation_timeout_ms: u32 = 30_000,
 
@@ -78,6 +81,9 @@ pub const Runtime = struct {
         canvas_backend_path: ?[]const u8,
         canvas_driver: abi.CanvasDriver,
         canvas_fallback: abi.CanvasFallback,
+        webrtc_backend_path: ?[]const u8,
+        webrtc_tun_bind_address: ?[]const u8,
+        webrtc_mode: abi.WebRtcMode,
         navigation_timeout_ms: u32,
     ) !*Runtime {
         if (process_runtime) |self| {
@@ -87,10 +93,13 @@ pub const Runtime = struct {
                 !optionalSlicesEqual(self.timezone, timezone) or
                 !optionalSlicesEqual(self.wreq_dns_nameservers, wreq_dns_nameservers) or
                 !optionalSlicesEqual(self.canvas_backend_path, canvas_backend_path) or
+                !optionalSlicesEqual(self.webrtc_backend_path, webrtc_backend_path) or
+                !optionalSlicesEqual(self.webrtc_tun_bind_address, webrtc_tun_bind_address) or
                 !optionalDigestsEqual(self.fingerprint_profile_digest, fingerprint_profile_digest) or
                 self.client_profile != client_profile or
                 self.canvas_driver != canvas_driver or
-                self.canvas_fallback != canvas_fallback)
+                self.canvas_fallback != canvas_fallback or
+                self.webrtc_mode != webrtc_mode)
             {
                 return error.RuntimeOptionsMismatch;
             }
@@ -106,6 +115,7 @@ pub const Runtime = struct {
             .fingerprint_profile_digest = fingerprint_profile_digest,
             .canvas_driver = canvas_driver,
             .canvas_fallback = canvas_fallback,
+            .webrtc_mode = webrtc_mode,
         };
 
         if (wreq_transport_path) |path| {
@@ -132,6 +142,14 @@ pub const Runtime = struct {
             self.canvas_backend_path = try allocator.dupe(u8, path);
         }
         errdefer if (self.canvas_backend_path) |path| allocator.free(path);
+        if (webrtc_backend_path) |path| {
+            self.webrtc_backend_path = try allocator.dupe(u8, path);
+        }
+        errdefer if (self.webrtc_backend_path) |path| allocator.free(path);
+        if (webrtc_tun_bind_address) |address| {
+            self.webrtc_tun_bind_address = try allocator.dupe(u8, address);
+        }
+        errdefer if (self.webrtc_tun_bind_address) |address| allocator.free(address);
 
         self.thread = try std.Thread.spawn(.{}, workerMain, .{self});
 
@@ -163,6 +181,8 @@ pub const Runtime = struct {
         if (self.fingerprint_profile_json) |json| allocator.free(json);
         if (self.wreq_dns_nameservers) |endpoints| allocator.free(endpoints);
         if (self.canvas_backend_path) |path| allocator.free(path);
+        if (self.webrtc_backend_path) |path| allocator.free(path);
+        if (self.webrtc_tun_bind_address) |address| allocator.free(address);
         allocator.destroy(self);
     }
 
@@ -370,6 +390,10 @@ const WorkerContext = struct {
             .timezone = runtime.timezone,
             .client_profile = runtime.client_profile,
             .wreq_dns_nameservers = runtime.wreq_dns_nameservers,
+            .webrtc_tun_bind_address = switch (runtime.webrtc_mode) {
+                .disabled => null,
+                .tun_bound => runtime.webrtc_tun_bind_address,
+            },
         });
         errdefer config.deinit(allocator);
 
@@ -392,6 +416,7 @@ const WorkerContext = struct {
             .wreq_transport_path = runtime.wreq_transport_path,
             .fingerprint_profile_json = runtime.fingerprint_profile_json,
             .canvas_backend_options = canvas_backend_options,
+            .webrtc_backend_path = runtime.webrtc_backend_path,
         });
         errdefer app.deinit();
 

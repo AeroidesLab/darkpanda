@@ -615,6 +615,7 @@ test "tests:beforeAll" {
         .client_profile = @import("ClientProfile.zig").target_default,
         .user_agent_suffix = "internal-tester",
         .ws_max_concurrent = 50,
+        .webrtc_tun_bind_address = "127.0.0.1",
     });
 
     test_app = try App.init(test_allocator, &test_config);

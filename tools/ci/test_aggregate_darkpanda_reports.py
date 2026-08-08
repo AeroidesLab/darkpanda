@@ -21,7 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 from tools.ci import aggregate_darkpanda_reports
 
 
-COMPONENTS = ("canvas", "html5ever", "wreq", "boringssl")
+COMPONENTS = ("canvas", "html5ever", "wreq", "boringssl", "webrtc")
 PROFILE_SHA = "a" * 64
 TOOLCHAIN_MANIFEST_SHA = "b" * 64
 V8_VERSION = "14.9.207.35"
@@ -135,18 +135,21 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                 "wreq": "bin/wreq.dll",
                 "canvas": "bin/canvas.dll",
                 "html5ever": "bin/html5ever.dll",
+                "webrtc": "bin/webrtc.dll",
             },
             "linux": {
                 "ffi": "bin/libdarkpanda.so",
                 "wreq": "bin/libwreq.so",
                 "canvas": "bin/libcanvas.so",
                 "html5ever": "bin/libhtml5ever.so",
+                "webrtc": "bin/libwebrtc.so",
             },
             "macos": {
                 "ffi": "bin/libdarkpanda.dylib",
                 "wreq": "bin/libwreq.dylib",
                 "canvas": "bin/libcanvas.dylib",
                 "html5ever": "bin/libhtml5ever.dylib",
+                "webrtc": "bin/libwebrtc.dylib",
             },
         }[str(target["platform"])]
         loaded_libraries = list(packaged_paths.values())
@@ -170,6 +173,7 @@ class AggregateDarkPandaReportsTest(unittest.TestCase):
                     "schema": "darkpanda-runtime-load-attestation/v1",
                     "status": "PASS",
                     "canvasAbiVersion": 5,
+                    "webrtcAbiVersion": 1,
                     "loadedLibraries": loaded_libraries,
                     "paths": packaged_paths,
                 },

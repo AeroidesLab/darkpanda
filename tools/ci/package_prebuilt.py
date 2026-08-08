@@ -32,6 +32,7 @@ RUNTIME_NAMES = {
         "wreq.dll",
         "canvas.dll",
         "html5ever.dll",
+        "webrtc.dll",
         "msvcp140.dll",
         "vcruntime140.dll",
         "vcruntime140_1.dll",
@@ -42,6 +43,7 @@ RUNTIME_NAMES = {
         "libwreq.so",
         "libcanvas.so",
         "libhtml5ever.so",
+        "libwebrtc.so",
     ),
     "macos": (
         "darkpanda",
@@ -49,9 +51,10 @@ RUNTIME_NAMES = {
         "libwreq.dylib",
         "libcanvas.dylib",
         "libhtml5ever.dylib",
+        "libwebrtc.dylib",
     ),
 }
-COMPONENT_NAMES = ("canvas", "html5ever", "wreq", "boringssl")
+COMPONENT_NAMES = ("canvas", "html5ever", "wreq", "boringssl", "webrtc")
 PACKAGE_TARGETS = {
     "windows": {
         "x86_64-windows-msvc": "windows-x86_64",
@@ -219,7 +222,7 @@ def validate_windows_dependency_contract(
         name
         for name in external
         if name.startswith(("msvcp", "vcruntime", "concrt"))
-        or name.startswith(("darkpanda", "wreq", "canvas", "html5ever"))
+        or name.startswith(("darkpanda", "wreq", "canvas", "html5ever", "webrtc"))
     ]
     if missing_bundled:
         raise SystemExit(
@@ -778,6 +781,7 @@ def runtime_paths(platform: str, root: Path) -> dict[str, Path]:
             "wreq": "wreq.dll",
             "canvas": "canvas.dll",
             "html5ever": "html5ever.dll",
+            "webrtc": "webrtc.dll",
         },
         "linux": {
             "cli": "darkpanda",
@@ -785,6 +789,7 @@ def runtime_paths(platform: str, root: Path) -> dict[str, Path]:
             "wreq": "libwreq.so",
             "canvas": "libcanvas.so",
             "html5ever": "libhtml5ever.so",
+            "webrtc": "libwebrtc.so",
         },
         "macos": {
             "cli": "darkpanda",
@@ -792,6 +797,7 @@ def runtime_paths(platform: str, root: Path) -> dict[str, Path]:
             "wreq": "libwreq.dylib",
             "canvas": "libcanvas.dylib",
             "html5ever": "libhtml5ever.dylib",
+            "webrtc": "libwebrtc.dylib",
         },
     }[platform]
     result = {name: root / "bin" / filename for name, filename in names.items()}
@@ -905,7 +911,7 @@ def attest_runtime_archive(
             if not version:
                 raise ValueError("archive CLI version command returned no output")
 
-            closure_names = ("ffi", "wreq", "canvas", "html5ever")
+            closure_names = ("ffi", "wreq", "canvas", "html5ever", "webrtc")
             subprocess.run(
                 [
                     sys.executable,
@@ -936,6 +942,8 @@ def attest_runtime_archive(
                     str(paths["canvas"]),
                     "--html5ever",
                     str(paths["html5ever"]),
+                    "--webrtc",
+                    str(paths["webrtc"]),
                 ],
                 check=True,
                 cwd=extracted_root / "bin",
@@ -951,6 +959,7 @@ def attest_runtime_archive(
                 != "darkpanda-runtime-load-attestation/v1"
                 or runtime.get("status") != "PASS"
                 or runtime.get("canvasAbiVersion") != 5
+                or runtime.get("webrtcAbiVersion") != 1
             ):
                 raise ValueError(
                     "archive runtime attestation did not prove the runtime load contract"

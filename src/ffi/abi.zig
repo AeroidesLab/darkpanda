@@ -29,6 +29,11 @@ pub const CanvasFallback = enum(u32) {
     software = 1,
 };
 
+pub const WebRtcMode = enum(u32) {
+    disabled = 0,
+    tun_bound = 1,
+};
+
 pub const Status = enum(i32) {
     ok = 0,
     invalid_argument = 1,
@@ -100,6 +105,13 @@ pub const RuntimeOptions = extern struct {
     /// New sized callers default to the packaged dynamic Canvas ABI v5 backend.
     canvas_driver: u32 = @intFromEnum(CanvasDriver.dynamic),
     canvas_fallback: u32 = @intFromEnum(CanvasFallback.disabled),
+    /// Optional backend path used for ABI attestation. Empty uses the linked,
+    /// packaged sibling library.
+    webrtc_backend_path: Slice = .{},
+    /// Required numeric address owned by the TUN interface when enabled.
+    webrtc_tun_bind_address: Slice = .{},
+    webrtc_mode: u32 = @intFromEnum(WebRtcMode.disabled),
+    webrtc_reserved: u32 = 0,
 };
 
 /// Size of the original ABI-v1 RuntimeOptions prefix.  The unsized
@@ -199,7 +211,7 @@ fn assertAbiLayout() void {
     if (@offsetOf(Error, "code") != 0) @compileError("Error.code ABI offset changed");
     if (@offsetOf(Error, "message") != (if (pointer_64) 8 else 4)) @compileError("Error.message ABI offset changed");
 
-    if (@sizeOf(RuntimeOptions) != (if (pointer_64) 152 else 104)) @compileError("RuntimeOptions ABI size changed");
+    if (@sizeOf(RuntimeOptions) != (if (pointer_64) 192 else 128)) @compileError("RuntimeOptions ABI size changed");
     if (@offsetOf(RuntimeOptions, "abi_version") != 0) @compileError("RuntimeOptions.abi_version ABI offset changed");
     if (@offsetOf(RuntimeOptions, "struct_size") != 4) @compileError("RuntimeOptions.struct_size ABI offset changed");
     if (@offsetOf(RuntimeOptions, "wreq_transport_path") != 8) @compileError("RuntimeOptions.wreq_transport_path ABI offset changed");
@@ -214,6 +226,9 @@ fn assertAbiLayout() void {
     if (@offsetOf(RuntimeOptions, "canvas_backend_path") != (if (pointer_64) 128 else 88)) @compileError("RuntimeOptions.canvas_backend_path ABI offset changed");
     if (@offsetOf(RuntimeOptions, "canvas_driver") != (if (pointer_64) 144 else 96)) @compileError("RuntimeOptions.canvas_driver ABI offset changed");
     if (@offsetOf(RuntimeOptions, "canvas_fallback") != (if (pointer_64) 148 else 100)) @compileError("RuntimeOptions.canvas_fallback ABI offset changed");
+    if (@offsetOf(RuntimeOptions, "webrtc_backend_path") != (if (pointer_64) 152 else 104)) @compileError("RuntimeOptions.webrtc_backend_path ABI offset changed");
+    if (@offsetOf(RuntimeOptions, "webrtc_tun_bind_address") != (if (pointer_64) 168 else 112)) @compileError("RuntimeOptions.webrtc_tun_bind_address ABI offset changed");
+    if (@offsetOf(RuntimeOptions, "webrtc_mode") != (if (pointer_64) 184 else 120)) @compileError("RuntimeOptions.webrtc_mode ABI offset changed");
 
     if (@sizeOf(NavigationOptions) != 32) @compileError("NavigationOptions ABI size changed");
     if (@offsetOf(NavigationOptions, "timeout_ms") != 8) @compileError("NavigationOptions.timeout_ms ABI offset changed");
@@ -269,6 +284,18 @@ test "sized RuntimeOptions initializer exposes the current tail" {
     try std.testing.expectEqual(@as(usize, 0), options.wreq_dns_nameservers.len);
     try std.testing.expectEqual(CanvasDriver.dynamic, @as(CanvasDriver, @enumFromInt(options.canvas_driver)));
     try std.testing.expectEqual(CanvasFallback.disabled, @as(CanvasFallback, @enumFromInt(options.canvas_fallback)));
+    try std.testing.expectEqual(WebRtcMode.disabled, @as(WebRtcMode, @enumFromInt(options.webrtc_mode)));
+}
+
+test "pre-WebRTC RuntimeOptions remains a valid disabled prefix" {
+    const previous_size = @offsetOf(RuntimeOptions, "webrtc_backend_path");
+    var storage: [previous_size + 16]u8 align(@alignOf(RuntimeOptions)) =
+        [_]u8{0xa5} ** (previous_size + 16);
+    try std.testing.expect(initRuntimeOptions(storage[0..].ptr, previous_size));
+
+    const prefix: *const RuntimeOptions = @ptrCast(@alignCast(storage[0..].ptr));
+    try std.testing.expectEqual(@as(u32, @intCast(previous_size)), prefix.struct_size);
+    try std.testing.expectEqualSlices(u8, &([_]u8{0xa5} ** 16), storage[previous_size..]);
 }
 
 test "pre-Canvas 128-byte RuntimeOptions remains a valid sized prefix" {

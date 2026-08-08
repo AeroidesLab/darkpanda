@@ -44,6 +44,7 @@ jobs:
       html5ever_revision: ${{ steps.resolve.outputs.html5ever_revision }}
       wreq_revision: ${{ steps.resolve.outputs.wreq_revision }}
       boringssl_revision: ${{ steps.resolve.outputs.boringssl_revision }}
+      webrtc_revision: ${{ steps.resolve.outputs.webrtc_revision }}
       py_darkpanda_revision: ${{ steps.resolve.outputs.py_darkpanda_revision }}
       chrome_version: ${{ steps.resolve.outputs.chrome_version }}
       chromium_revision: ${{ steps.resolve.outputs.chromium_revision }}
@@ -110,6 +111,17 @@ jobs:
           path: components/boringssl
           persist-credentials: false
 
+      - name: Check out latest WebRTC source
+        id: checkout_webrtc
+        uses: actions/checkout@v4
+        with:
+          repository: AeroidesLab/webrtc
+          ref: main
+          token: ${{ secrets.SOURCE_READ_TOKEN || secrets.CANVAS_READ_TOKEN }}
+          fetch-depth: 1
+          path: components/webrtc
+          persist-credentials: false
+
       - name: Check out latest PyO3 binding source
         id: checkout_py_darkpanda
         uses: actions/checkout@v4
@@ -139,6 +151,7 @@ jobs:
           html5ever_revision=$(git -C components/html5ever rev-parse HEAD)
           wreq_revision=$(git -C components/wreq rev-parse HEAD)
           boringssl_revision=$(git -C components/boringssl rev-parse HEAD)
+          webrtc_revision=$(git -C components/webrtc rev-parse HEAD)
           py_darkpanda_revision=$(git -C components/py-darkpanda rev-parse HEAD)
           chrome_version=$(jq -r .google_chrome_stable.version "$profile")
           chromium_revision=$(jq -r .chromium_revision "$profile")
@@ -158,6 +171,7 @@ jobs:
             "$html5ever_revision" \
             "$wreq_revision" \
             "$boringssl_revision" \
+            "$webrtc_revision" \
             "$py_darkpanda_revision" \
             "$chromium_revision" \
             "$skia_revision" \
@@ -191,6 +205,7 @@ jobs:
             echo "html5ever_revision=$html5ever_revision"
             echo "wreq_revision=$wreq_revision"
             echo "boringssl_revision=$boringssl_revision"
+            echo "webrtc_revision=$webrtc_revision"
             echo "py_darkpanda_revision=$py_darkpanda_revision"
             echo "chrome_version=$chrome_version"
             echo "chromium_revision=$chromium_revision"
@@ -213,6 +228,7 @@ jobs:
             --arg html5ever "$html5ever_revision" \
             --arg wreq "$wreq_revision" \
             --arg boringssl "$boringssl_revision" \
+            --arg webrtc "$webrtc_revision" \
             --arg py_darkpanda "$py_darkpanda_revision" \
             --arg chrome "$chrome_version" \
             --arg chromium "$chromium_revision" \
@@ -284,6 +300,10 @@ jobs:
                 boringssl: {
                   repository: "AeroidesLab/boringssl",
                   revision: $boringssl
+                },
+                webrtc: {
+                  repository: "AeroidesLab/webrtc",
+                  revision: $webrtc
                 }
               }
             }' > resolved-inputs.json
@@ -317,6 +337,7 @@ jobs:
           html5ever='${{ steps.checkout_html5ever.outcome }}'
           wreq='${{ steps.checkout_wreq.outcome }}'
           boringssl='${{ steps.checkout_boringssl.outcome }}'
+          webrtc='${{ steps.checkout_webrtc.outcome }}'
           py_darkpanda='${{ steps.checkout_py_darkpanda.outcome }}'
           resolve='${{ steps.resolve.outcome }}'
           contracts='${{ steps.contract_tests.outcome }}'
@@ -329,6 +350,7 @@ jobs:
                 $html5ever == success &&
                 $wreq == success &&
                 $boringssl == success &&
+                $webrtc == success &&
                 $py_darkpanda == success &&
                 $resolve == success &&
                 $contracts == success ]]; then
@@ -343,6 +365,7 @@ jobs:
               --arg html5ever "$html5ever" \
               --arg wreq "$wreq" \
               --arg boringssl "$boringssl" \
+              --arg webrtc "$webrtc" \
               --arg py_darkpanda "$py_darkpanda" \
               --arg resolve "$resolve" \
               --arg contracts "$contracts" \
@@ -357,6 +380,7 @@ jobs:
                   html5everCheckout: $html5ever,
                    wreqCheckout: $wreq,
                    boringsslCheckout: $boringssl,
+                   webrtcCheckout: $webrtc,
                    pyDarkpandaCheckout: $py_darkpanda,
                   resolve: $resolve,
                   contractTests: $contracts
@@ -368,6 +392,7 @@ jobs:
                     html5everCheckout: $html5ever,
                      wreqCheckout: $wreq,
                      boringsslCheckout: $boringssl,
+                     webrtcCheckout: $webrtc,
                      pyDarkpandaCheckout: $py_darkpanda,
                     resolve: $resolve,
                     contractTests: $contracts
@@ -405,6 +430,7 @@ jobs:
             echo "- HTML5ever: \`${{ steps.resolve.outputs.html5ever_revision }}\`"
             echo "- wreq: \`${{ steps.resolve.outputs.wreq_revision }}\`"
             echo "- BoringSSL: \`${{ steps.resolve.outputs.boringssl_revision }}\`"
+            echo "- WebRTC: \`${{ steps.resolve.outputs.webrtc_revision }}\`"
             echo "- py-darkpanda: \`${{ steps.resolve.outputs.py_darkpanda_revision }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -837,6 +863,34 @@ jobs:
             runner: ubuntu-24.04
             python: python3
             jobs: 4
+          - component: webrtc
+            repository: AeroidesLab/webrtc
+            revision: ${{ needs.prepare.outputs.webrtc_revision }}
+            id: windows-x86_64
+            runner: windows-2022
+            python: python
+            jobs: 4
+          - component: webrtc
+            repository: AeroidesLab/webrtc
+            revision: ${{ needs.prepare.outputs.webrtc_revision }}
+            id: macos-x86_64
+            runner: macos-15-intel
+            python: python3
+            jobs: 2
+          - component: webrtc
+            repository: AeroidesLab/webrtc
+            revision: ${{ needs.prepare.outputs.webrtc_revision }}
+            id: macos-aarch64
+            runner: macos-15
+            python: python3
+            jobs: 2
+          - component: webrtc
+            repository: AeroidesLab/webrtc
+            revision: ${{ needs.prepare.outputs.webrtc_revision }}
+            id: linux-x86_64
+            runner: ubuntu-24.04
+            python: python3
+            jobs: 4
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out the resolved component source
@@ -846,6 +900,7 @@ jobs:
           ref: ${{ matrix.revision }}
           token: ${{ secrets.SOURCE_READ_TOKEN || secrets.CANVAS_READ_TOKEN }}
           fetch-depth: 1
+          submodules: false
           path: component
           persist-credentials: false
 
@@ -1306,7 +1361,7 @@ jobs:
           path: zig-v8-fork
           persist-credentials: false
 
-      - name: Download and merge all four native component dists
+      - name: Download and merge all five native component dists
         id: download_components
         uses: actions/download-artifact@v4
         with:
@@ -1417,9 +1472,10 @@ jobs:
             [html5ever]='${{ needs.prepare.outputs.html5ever_revision }}'
             [wreq]='${{ needs.prepare.outputs.wreq_revision }}'
             [boringssl]='${{ needs.prepare.outputs.boringssl_revision }}'
+            [webrtc]='${{ needs.prepare.outputs.webrtc_revision }}'
           )
           toolchain_manifest_sha=
-          for component in canvas html5ever wreq boringssl; do
+          for component in canvas html5ever wreq boringssl webrtc; do
             dist="component-downloads/component-dist/$component/${{ matrix.id }}"
             info="$dist/metadata/build-info.json"
             tests="$dist/metadata/test-results.json"
@@ -1453,7 +1509,7 @@ jobs:
               [[ -d $path ]] && printf '%s\n' "${path##*/}"
             done | sort
           )
-          test "${component_dirs[*]}" = 'boringssl canvas html5ever wreq'
+          test "${component_dirs[*]}" = 'boringssl canvas html5ever webrtc wreq'
 
           source_revision=$(git -C browser rev-parse HEAD)
           source_epoch=$(git -C browser show -s --format=%ct HEAD)
@@ -1477,6 +1533,7 @@ jobs:
             HTML5EVER_DIST = (Resolve-Path 'component-downloads/component-dist/html5ever/${{ matrix.id }}').Path
             WREQ_DIST = (Resolve-Path 'component-downloads/component-dist/wreq/${{ matrix.id }}').Path
             BORINGSSL_DIST = (Resolve-Path 'component-downloads/component-dist/boringssl/${{ matrix.id }}').Path
+            WEBRTC_DIST = (Resolve-Path 'component-downloads/component-dist/webrtc/${{ matrix.id }}').Path
             DARKPANDA_INSTALL_ROOT = (Join-Path $env:RUNNER_TEMP 'darkpanda-install-${{ matrix.id }}')
             DARKPANDA_CACHE_DIR = (Join-Path $env:RUNNER_TEMP 'darkpanda-zig-cache-${{ matrix.id }}')
             DARKPANDA_GLOBAL_CACHE_DIR = (Join-Path $env:RUNNER_TEMP 'darkpanda-zig-global-${{ matrix.id }}')
@@ -1497,6 +1554,7 @@ jobs:
             echo "HTML5EVER_DIST=$GITHUB_WORKSPACE/component-downloads/component-dist/html5ever/${{ matrix.id }}"
             echo "WREQ_DIST=$GITHUB_WORKSPACE/component-downloads/component-dist/wreq/${{ matrix.id }}"
             echo "BORINGSSL_DIST=$GITHUB_WORKSPACE/component-downloads/component-dist/boringssl/${{ matrix.id }}"
+            echo "WEBRTC_DIST=$GITHUB_WORKSPACE/component-downloads/component-dist/webrtc/${{ matrix.id }}"
             echo "DARKPANDA_INSTALL_ROOT=$RUNNER_TEMP/darkpanda-install-${{ matrix.id }}"
             echo "DARKPANDA_CACHE_DIR=$RUNNER_TEMP/darkpanda-zig-cache-${{ matrix.id }}"
             echo "DARKPANDA_GLOBAL_CACHE_DIR=$RUNNER_TEMP/darkpanda-zig-global-${{ matrix.id }}"
@@ -1715,6 +1773,7 @@ jobs:
               "-Dhtml5ever_dist=$env:HTML5EVER_DIST" `
               "-Dwreq_dist=$env:WREQ_DIST" `
               "-Dboringssl_dist=$env:BORINGSSL_DIST" `
+              "-Dwebrtc_dist=$env:WEBRTC_DIST" `
               "-Dversion=$env:DARKPANDA_BUILD_VERSION" `
               -p $env:DARKPANDA_INSTALL_ROOT `
               --cache-dir $env:DARKPANDA_CACHE_DIR `
@@ -1745,6 +1804,7 @@ jobs:
               -Dhtml5ever_dist="$HTML5EVER_DIST" \
               -Dwreq_dist="$WREQ_DIST" \
               -Dboringssl_dist="$BORINGSSL_DIST" \
+              -Dwebrtc_dist="$WEBRTC_DIST" \
               -Dversion="$DARKPANDA_BUILD_VERSION" \
               -p "$DARKPANDA_INSTALL_ROOT" \
               --cache-dir "$DARKPANDA_CACHE_DIR" \
@@ -1819,6 +1879,7 @@ jobs:
             --html5ever-dist $env:HTML5EVER_DIST `
             --wreq-dist $env:WREQ_DIST `
             --boringssl-dist $env:BORINGSSL_DIST `
+            --webrtc-dist $env:WEBRTC_DIST `
             --platform '${{ matrix.platform }}' `
             --target '${{ matrix.zig_target }}' `
             --version $env:DARKPANDA_BUILD_VERSION `
@@ -1857,6 +1918,7 @@ jobs:
             --html5ever-dist "$HTML5EVER_DIST" \
             --wreq-dist "$WREQ_DIST" \
             --boringssl-dist "$BORINGSSL_DIST" \
+            --webrtc-dist "$WEBRTC_DIST" \
             --platform '${{ matrix.platform }}' \
             --target '${{ matrix.zig_target }}' \
             --version "$DARKPANDA_BUILD_VERSION" \
@@ -1962,6 +2024,7 @@ jobs:
             --arg html5ever '${{ needs.prepare.outputs.html5ever_revision }}' \
             --arg wreq '${{ needs.prepare.outputs.wreq_revision }}' \
             --arg boringssl '${{ needs.prepare.outputs.boringssl_revision }}' \
+            --arg webrtc '${{ needs.prepare.outputs.webrtc_revision }}' \
             --arg v8_version "$V8_VERSION" \
             --arg v8_revision "$V8_REVISION" \
             --arg zig_v8 "$ZIG_V8_SOURCE_REVISION" \
@@ -1987,7 +2050,8 @@ jobs:
                 canvas: $canvas,
                 html5ever: $html5ever,
                 wreq: $wreq,
-                boringssl: $boringssl
+                boringssl: $boringssl,
+                webrtc: $webrtc
               },
               v8Version: $v8_version,
               v8Revision: $v8_revision,

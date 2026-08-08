@@ -16,7 +16,7 @@ from typing import BinaryIO, Callable
 
 SCHEMA = "darkpanda-platform-result/v2"
 SUMMARY_SCHEMA = "darkpanda-prebuilt-aggregate/v1"
-COMPONENTS = ("canvas", "html5ever", "wreq", "boringssl")
+COMPONENTS = ("canvas", "html5ever", "wreq", "boringssl", "webrtc")
 LINUX_OS_NEEDED = frozenset(
     {
         "ld-linux-x86-64.so.2",
@@ -40,6 +40,7 @@ TARGETS = {
             "wreq.dll",
             "canvas.dll",
             "html5ever.dll",
+            "webrtc.dll",
             "msvcp140.dll",
             "vcruntime140.dll",
             "vcruntime140_1.dll",
@@ -55,6 +56,7 @@ TARGETS = {
             "libwreq.so",
             "libcanvas.so",
             "libhtml5ever.so",
+            "libwebrtc.so",
         ),
     },
     "macos-x86_64": {
@@ -67,6 +69,7 @@ TARGETS = {
             "libwreq.dylib",
             "libcanvas.dylib",
             "libhtml5ever.dylib",
+            "libwebrtc.dylib",
         ),
     },
     "macos-aarch64": {
@@ -79,6 +82,7 @@ TARGETS = {
             "libwreq.dylib",
             "libcanvas.dylib",
             "libhtml5ever.dylib",
+            "libwebrtc.dylib",
         ),
     },
 }
@@ -517,18 +521,21 @@ def validate_packaged_runtime_attestation(
             "wreq": "bin/wreq.dll",
             "canvas": "bin/canvas.dll",
             "html5ever": "bin/html5ever.dll",
+            "webrtc": "bin/webrtc.dll",
         },
         "linux": {
             "ffi": "bin/libdarkpanda.so",
             "wreq": "bin/libwreq.so",
             "canvas": "bin/libcanvas.so",
             "html5ever": "bin/libhtml5ever.so",
+            "webrtc": "bin/libwebrtc.so",
         },
         "macos": {
             "ffi": "bin/libdarkpanda.dylib",
             "wreq": "bin/libwreq.dylib",
             "canvas": "bin/libcanvas.dylib",
             "html5ever": "bin/libhtml5ever.dylib",
+            "webrtc": "bin/libwebrtc.dylib",
         },
     }[str(target["platform"])]
     loaded_libraries = {
@@ -537,18 +544,21 @@ def validate_packaged_runtime_attestation(
             "bin/wreq.dll",
             "bin/canvas.dll",
             "bin/html5ever.dll",
+            "bin/webrtc.dll",
         ],
         "linux": [
             "bin/libdarkpanda.so",
             "bin/libwreq.so",
             "bin/libcanvas.so",
             "bin/libhtml5ever.so",
+            "bin/libwebrtc.so",
         ],
         "macos": [
             "bin/libdarkpanda.dylib",
             "bin/libwreq.dylib",
             "bin/libcanvas.dylib",
             "bin/libhtml5ever.dylib",
+            "bin/libwebrtc.dylib",
         ],
     }[str(target["platform"])]
     runtime = report.get("runtime")
@@ -572,6 +582,7 @@ def validate_packaged_runtime_attestation(
         or runtime.get("schema") != "darkpanda-runtime-load-attestation/v1"
         or runtime.get("status") != "PASS"
         or runtime.get("canvasAbiVersion") != 5
+        or runtime.get("webrtcAbiVersion") != 1
         or runtime.get("loadedLibraries") != loaded_libraries
         or runtime.get("paths") != runtime_names
     ):
@@ -634,7 +645,7 @@ def validate_package(
             raise ValueError("BUILD-INFO.json runtime closure is incomplete or out of order")
         packaged_components = dependencies.get("components")
         if not isinstance(packaged_components, dict) or set(packaged_components) != set(COMPONENTS):
-            raise ValueError("BUILD-INFO.json does not contain all four components")
+            raise ValueError("BUILD-INFO.json does not contain all five components")
 
         component_manifest_sha: str | None = None
         for component in COMPONENTS:

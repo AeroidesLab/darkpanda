@@ -25,6 +25,8 @@
     \\          HTTP/navigation timeout in milliseconds. Defaults to 5000.
     \\  --proxy <URL>
     \\          HTTP(S) proxy used by the browser transport. Defaults to direct.
+    \\  --webrtc-tun-address <IP>
+    \\          Enable WebRTC data channels and bind every ICE socket to this numeric TUN address.
     ,
     .version =
     \\usage: {0s} version

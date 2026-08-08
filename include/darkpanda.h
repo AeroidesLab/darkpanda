@@ -95,6 +95,13 @@ typedef struct dp_runtime_options {
     dp_slice canvas_backend_path;
     uint32_t canvas_driver;
     uint32_t canvas_fallback;
+    /* Optional absolute path used to attest the packaged WebRTC ABI. */
+    dp_slice webrtc_backend_path;
+    /* Required numeric TUN-interface address when WebRTC is enabled. */
+    dp_slice webrtc_tun_bind_address;
+    /* 0 = disabled, 1 = TUN-bound data channels. */
+    uint32_t webrtc_mode;
+    uint32_t webrtc_reserved;
 } dp_runtime_options;
 
 typedef struct dp_navigation_options {

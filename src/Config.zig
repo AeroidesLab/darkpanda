@@ -38,7 +38,7 @@ const Config = @This();
 
 /// Browser/embedder configuration intentionally kept out of the standalone
 /// command line. FFI and tests construct this type directly; the public CLI is
-/// limited to the five serve parameters below.
+/// limited to the serve parameters below.
 pub const CoreOptions = struct {
     proxy_bearer_token: ?[:0]const u8 = null,
     proxy: ?[:0]const u8 = null,
@@ -66,6 +66,9 @@ pub const CoreOptions = struct {
     v8_flags_unsafe: ?[]const u8 = null,
     v8_max_heap_mb: ?u32 = null,
     watchdog_ms: ?u32 = null,
+    /// Numeric address owned by the configured TUN interface. Null disables
+    /// WebRTC; a value is preflighted and then enforced by every ICE socket.
+    webrtc_tun_bind_address: ?[]const u8 = null,
 };
 
 /// The standalone executable is only a CDP server. Keep its command surface
@@ -77,6 +80,7 @@ pub const ServeOptions = struct {
     profile: ClientProfile.Id = ClientProfile.target_default,
     timeout: ?u31 = null,
     proxy: ?[:0]const u8 = null,
+    webrtc_tun_bind_address: ?[]const u8 = null,
 };
 
 pub const RunMode = enum { help, serve, version };
@@ -105,6 +109,7 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
             core.client_profile = opts.profile;
             core.http_timeout = opts.timeout orelse core.http_timeout;
             core.proxy = opts.proxy;
+            core.webrtc_tun_bind_address = opts.webrtc_tun_bind_address;
         },
         else => {},
     }
@@ -182,6 +187,10 @@ pub fn httpProxy(self: *const Config) ?[:0]const u8 {
 
 pub fn wreqDnsNameservers(self: *const Config) ?[]const u8 {
     return self.core.wreq_dns_nameservers;
+}
+
+pub fn webRtcTunBindAddress(self: *const Config) ?[]const u8 {
+    return self.core.webrtc_tun_bind_address;
 }
 
 pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
@@ -486,6 +495,8 @@ pub fn parseArgs(allocator: Allocator) !Config {
             opts.timeout = std.fmt.parseInt(u31, value, 10) catch return error.InvalidArgument;
         } else if (std.mem.eql(u8, name, "--proxy")) {
             opts.proxy = try allocator.dupeZ(u8, value);
+        } else if (std.mem.eql(u8, name, "--webrtc-tun-address")) {
+            opts.webrtc_tun_bind_address = try allocator.dupe(u8, value);
         } else {
             return error.UnknownOption;
         }

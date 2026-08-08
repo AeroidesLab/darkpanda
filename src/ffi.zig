@@ -286,6 +286,61 @@ pub export fn dp_runtime_create(
         },
     }
 
+    const webrtc_path_field_end: u32 = @intCast(
+        @offsetOf(abi.RuntimeOptions, "webrtc_backend_path") + @sizeOf(abi.Slice),
+    );
+    const webrtc_path_view: abi.Slice = if (options.struct_size >= webrtc_path_field_end)
+        options.webrtc_backend_path
+    else
+        .{};
+    const webrtc_path_bytes = webrtc_path_view.bytes() orelse {
+        return fail(out_error, .invalid_argument, "webrtc_backend_path has a null pointer with non-zero length");
+    };
+    if (std.mem.indexOfScalar(u8, webrtc_path_bytes, 0) != null or
+        !std.unicode.utf8ValidateSlice(webrtc_path_bytes))
+    {
+        return fail(out_error, .invalid_argument, "webrtc_backend_path must be valid UTF-8 without NUL");
+    }
+    if (webrtc_path_bytes.len > 0 and !std.fs.path.isAbsolute(webrtc_path_bytes)) {
+        return fail(out_error, .invalid_argument, "webrtc_backend_path must be absolute");
+    }
+
+    const webrtc_bind_field_end: u32 = @intCast(
+        @offsetOf(abi.RuntimeOptions, "webrtc_tun_bind_address") + @sizeOf(abi.Slice),
+    );
+    const webrtc_bind_view: abi.Slice = if (options.struct_size >= webrtc_bind_field_end)
+        options.webrtc_tun_bind_address
+    else
+        .{};
+    const webrtc_bind_bytes = webrtc_bind_view.bytes() orelse {
+        return fail(out_error, .invalid_argument, "webrtc_tun_bind_address has a null pointer with non-zero length");
+    };
+    if (std.mem.indexOfScalar(u8, webrtc_bind_bytes, 0) != null or
+        !std.unicode.utf8ValidateSlice(webrtc_bind_bytes))
+    {
+        return fail(out_error, .invalid_argument, "webrtc_tun_bind_address must be valid UTF-8 without NUL");
+    }
+    const webrtc_mode_field_end: u32 = @intCast(
+        @offsetOf(abi.RuntimeOptions, "webrtc_mode") + @sizeOf(u32),
+    );
+    const webrtc_mode = if (options.struct_size >= webrtc_mode_field_end)
+        std.meta.intToEnum(abi.WebRtcMode, options.webrtc_mode) catch
+            return fail(out_error, .invalid_argument, "unknown webrtc_mode; expected 0 or 1")
+    else
+        abi.WebRtcMode.disabled;
+    switch (webrtc_mode) {
+        .disabled => {
+            if (webrtc_path_bytes.len != 0 or webrtc_bind_bytes.len != 0) {
+                return fail(out_error, .invalid_argument, "WebRTC path/address require webrtc_mode tun_bound");
+            }
+        },
+        .tun_bound => {
+            if (webrtc_bind_bytes.len == 0) {
+                return fail(out_error, .invalid_argument, "webrtc_tun_bind_address is required in tun_bound mode");
+            }
+        },
+    }
+
     // Strict parsing happens before reserveRuntime and before wreq/V8 startup.
     // A rejected custom profile therefore cannot mutate either the logical
     // handle registry or the cached physical runtime.
@@ -335,6 +390,9 @@ pub export fn dp_runtime_create(
         if (canvas_path_bytes.len == 0) null else canvas_path_bytes,
         canvas_driver,
         canvas_fallback,
+        if (webrtc_path_bytes.len == 0) null else webrtc_path_bytes,
+        if (webrtc_bind_bytes.len == 0) null else webrtc_bind_bytes,
+        webrtc_mode,
         options.navigation_timeout_ms,
     ) catch |err| {
         runtime_mod.cancelRuntimeReservation();

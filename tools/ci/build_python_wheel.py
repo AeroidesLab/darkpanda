@@ -29,6 +29,7 @@ TARGETS = {
             "wreq.dll",
             "canvas.dll",
             "html5ever.dll",
+            "webrtc.dll",
             "msvcp140.dll",
             "vcruntime140.dll",
             "vcruntime140_1.dll",
@@ -43,6 +44,7 @@ TARGETS = {
             "libwreq.so",
             "libcanvas.so",
             "libhtml5ever.so",
+            "libwebrtc.so",
         ),
     },
     "macos-x86_64": {
@@ -54,6 +56,7 @@ TARGETS = {
             "libwreq.dylib",
             "libcanvas.dylib",
             "libhtml5ever.dylib",
+            "libwebrtc.dylib",
         ),
     },
     "macos-aarch64": {
@@ -65,6 +68,7 @@ TARGETS = {
             "libwreq.dylib",
             "libcanvas.dylib",
             "libhtml5ever.dylib",
+            "libwebrtc.dylib",
         ),
     },
 }

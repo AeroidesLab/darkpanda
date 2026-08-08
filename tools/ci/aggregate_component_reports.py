@@ -12,7 +12,7 @@ import sys
 from typing import Any
 
 
-COMPONENTS = ("canvas", "html5ever", "wreq", "boringssl")
+COMPONENTS = ("canvas", "html5ever", "wreq", "boringssl", "webrtc")
 TARGETS = (
     "windows-x86_64",
     "linux-x86_64",
@@ -24,6 +24,7 @@ REQUIRED_TEST_FRAGMENTS = {
     "html5ever": ("cargo", "abi"),
     "wreq": ("cargo", "abi"),
     "boringssl": ("archive-contract", "abi", "ctest"),
+    "webrtc": ("rust-check", "abi", "peer-data-channel"),
 }
 REQUIRED_LIBRARIES = {
     ("canvas", "windows-x86_64"): "bin/canvas.dll",
@@ -42,6 +43,10 @@ REQUIRED_LIBRARIES = {
     ("boringssl", "linux-x86_64"): "lib/libcrypto.a",
     ("boringssl", "macos-x86_64"): "lib/libcrypto.a",
     ("boringssl", "macos-aarch64"): "lib/libcrypto.a",
+    ("webrtc", "windows-x86_64"): "bin/webrtc.dll",
+    ("webrtc", "linux-x86_64"): "bin/libwebrtc.so",
+    ("webrtc", "macos-x86_64"): "bin/libwebrtc.dylib",
+    ("webrtc", "macos-aarch64"): "bin/libwebrtc.dylib",
 }
 REQUIRED_CONSUMER_FILES = {
     ("canvas", "windows-x86_64"): ("include/canvas.h", "lib/canvas.lib"),
@@ -60,6 +65,10 @@ REQUIRED_CONSUMER_FILES = {
     ("boringssl", "linux-x86_64"): ("include/openssl/sha.h",),
     ("boringssl", "macos-x86_64"): ("include/openssl/sha.h",),
     ("boringssl", "macos-aarch64"): ("include/openssl/sha.h",),
+    ("webrtc", "windows-x86_64"): ("include/darkpanda_webrtc.h", "lib/webrtc.dll.lib"),
+    ("webrtc", "linux-x86_64"): ("include/darkpanda_webrtc.h",),
+    ("webrtc", "macos-x86_64"): ("include/darkpanda_webrtc.h",),
+    ("webrtc", "macos-aarch64"): ("include/darkpanda_webrtc.h",),
 }
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
